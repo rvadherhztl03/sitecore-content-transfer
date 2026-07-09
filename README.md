@@ -25,7 +25,14 @@ Sitecore Content Transfer Pro provides three core workflows from a single fullsc
 - **Demo Mode** — Run full end-to-end simulations with mocked API responses, no real credentials required
 - **Dark / Light Theme** — Toggle between themes from the dashboard header
 - **Real-time Execution Console** — Live log output with timestamped info, success, warning, and error messages
-- **Configurable Merge Strategies** — `OverrideExistingItem`, `KeepExistingItem`, `LatestWin`, `OverrideExistingTree`
+- **Configurable Merge Strategies** — Choose how conflicts are resolved when a content item already exists on the target:
+
+  | Strategy | Behaviour |
+  |---|---|
+  | `OverrideExistingItem` | Replaces only the single target item with the source version, leaving its descendants untouched |
+  | `KeepExistingItem` | Skips the item entirely if it already exists on the target — source version is ignored |
+  | `LatestWin` | Compares last-modified timestamps and keeps whichever version (source or target) is newer |
+  | `OverrideExistingTree` | Replaces the target item **and all its descendants** with the source versions |
 - **Configurable Scopes** — `SingleItem` or `ItemAndDescendants` per path
 - **Multiple Content Paths** — Queue multiple item paths in a single migration run
 
