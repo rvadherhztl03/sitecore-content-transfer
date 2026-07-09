@@ -1,8 +1,10 @@
+// src/app/pages-contextpanel-extension/page.tsx
 "use client";
 
 import { useState, useEffect } from "react";
 import type { ApplicationContext, PagesContext } from "@sitecore-marketplace-sdk/client";
 import { useMarketplaceClient } from "@/src/utils/hooks/useMarketplaceClient";
+import MigrationDashboard from "@/src/components/MigrationDashboard";
 
 function PagesContextPanel() {
   const { client, error, isInitialized } = useMarketplaceClient();
@@ -34,37 +36,57 @@ function PagesContextPanel() {
     }
   }, [client, error, isInitialized]);
 
+  const activePagePath = pagesContext?.pageInfo?.path;
+
   return (
-    <div style={{ padding: "1rem", border: "1px solid #ccc", borderRadius: "8px", maxWidth: "600px", margin: "2rem auto" }}>
-      {isInitialized && pagesContext ? (
-        <>
-          <h1>Welcome to {appContext?.name}</h1>
-          <p>This is a pages context panel extension.</p>
-          
-          <div className="application-context">
-            <h3>Application Context:</h3>
-            <ul className="context-details">
-              <li><strong>Name:</strong> {appContext?.name}</li>
-              <li><strong>ID:</strong> {appContext?.id}</li>
-              <li><strong>Icon URL:</strong> {appContext?.iconUrl}</li>
-              <li><strong>Installation ID:</strong> {appContext?.installationId}</li>
-              <li><strong>State:</strong> {appContext?.state}</li>
-              <li><strong>Type:</strong> {appContext?.type}</li>
-              <li><strong>URL:</strong> {appContext?.url}</li>
-            </ul>
+    <div style={{ padding: "20px", minHeight: "100vh" }}>
+      {/* Context info banner */}
+      <div style={{ 
+        backgroundColor: "rgba(0, 242, 254, 0.05)",
+        border: "1px solid rgba(0, 242, 254, 0.15)",
+        borderRadius: "8px",
+        padding: "15px 20px",
+        marginBottom: "20px",
+        fontSize: "0.9rem"
+      }}>
+        <h3 style={{ color: "var(--primary)", fontSize: "1rem", marginBottom: "8px" }}>
+          🎯 Context-Aware Migration Panel
+        </h3>
+        {activePagePath ? (
+          <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+            <div>
+              Active Page: <strong style={{ color: "#fff" }}>{pagesContext?.pageInfo?.name}</strong>
+            </div>
+            <div>
+              Sitecore Path: <code style={{ color: "var(--secondary)", backgroundColor: "rgba(0,0,0,0.3)", padding: "2px 6px", borderRadius: "4px", fontSize: "0.8rem" }}>{activePagePath}</code>
+            </div>
+            <div>
+              Language: <span style={{ color: "#fff" }}>{pagesContext?.pageInfo?.language}</span>
+            </div>
           </div>
-          <div className="pages-context">
-            <h3>Pages Context:</h3>
-            <ul className="context-details">
-              <li><strong>Page ID:</strong> {pagesContext.pageInfo?.id}</li>
-              <li><strong>Title:</strong> {pagesContext.pageInfo?.name}</li>
-              <li><strong>Language:</strong> {pagesContext.pageInfo?.language}</li>
-              <li><strong>Path:</strong> {pagesContext.pageInfo?.path}</li>
-            </ul>
+        ) : (
+          <div style={{ color: "var(--text-muted)", fontStyle: "italic" }}>
+            No page context selected in Pages Editor. Select a page to pre-populate migration path.
           </div>
-        </>
-      ) : (
-        <p>No page context available yet.</p>
+        )}
+      </div>
+
+      <MigrationDashboard 
+        initialItemPath={activePagePath} 
+        title="Sitecore Content Transfer (Context Panel)" 
+      />
+
+      {error && (
+        <div style={{ 
+          marginTop: "20px", 
+          padding: "15px", 
+          backgroundColor: "var(--error-bg)", 
+          border: "1px solid var(--error)", 
+          borderRadius: "8px", 
+          color: "var(--error)" 
+        }}>
+          <strong>Marketplace SDK Error:</strong> {String(error)}
+        </div>
       )}
     </div>
   );
