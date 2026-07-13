@@ -587,12 +587,20 @@ export default function MigrationDashboard({ initialItemPath, title = "Sitecore 
 								<div>
 									<h3 className='font-semibold text-sm text-zinc-900 font-bold'>Content Trees Sync Settings</h3>
 								</div>
-								<button
-									onClick={handleAddTree}
-									className='flex items-center gap-1.5 px-2.5 py-1.5 border border-[#ECE6E1] hover:bg-zinc-50 rounded-xl text-xs font-semibold transition-all duration-150'
-								>
-									+ Add Path
-								</button>
+								<div className='flex gap-2'>
+									<button
+										onClick={() => setDataTrees([])}
+										className='flex items-center gap-1.5 px-2.5 py-1.5 border border-red-200 text-red-600 hover:bg-red-50 rounded-xl text-xs font-semibold transition-all duration-150'
+									>
+										Clear All
+									</button>
+									<button
+										onClick={handleAddTree}
+										className='flex items-center gap-1.5 px-2.5 py-1.5 border border-[#ECE6E1] hover:bg-zinc-50 rounded-xl text-xs font-semibold transition-all duration-150'
+									>
+										+ Add Path
+									</button>
+								</div>
 							</div>
 
 							{/* Explorer component wrapper */}
