@@ -90,7 +90,13 @@ export default function MigrationDashboard({ initialItemPath, title = "Sitecore 
 	const [demoMode, setDemoMode] = useState(false);
 
 	// Content Paths State
-	const [dataTrees, setDataTrees] = useState<DataTree[]>([]);
+	const [dataTrees, setDataTrees] = useState<DataTree[]>([
+		{
+			ItemPath: "/sitecore/content/Home",
+			Scope: "ItemAndDescendants",
+			MergeStrategy: "OverrideExistingTree",
+		},
+	]);
 
 	// Sync with prop changes if pages-contextpanel updates the current path
 	useEffect(() => {
@@ -379,6 +385,65 @@ export default function MigrationDashboard({ initialItemPath, title = "Sitecore 
 		}
 	};
 
+	const resolveDataTrees = async (trees: DataTree[]): Promise<DataTree[]> => {
+		const resolved: DataTree[] = [];
+		for (const tree of trees) {
+			if (tree.Scope === "ItemAndChildren") {
+				addLog(`Resolving children for path '${tree.ItemPath}' to handle 'ItemAndChildren' scope...`, "info");
+				try {
+					const res = await fetch("/api/migrate/children", {
+						method: "POST",
+						headers: { "Content-Type": "application/json" },
+						body: JSON.stringify({
+							sourceHost,
+							sourceClientId: demoMode ? "demo-client-id" : sourceClientId,
+							sourceClientSecret: demoMode ? "demo-client-secret" : sourceClientSecret,
+							sourceAuthority: demoMode ? "https://auth-demo.sitecorecloud.io" : sourceAuthority,
+							sourceAudience: demoMode ? "https://api.sitecorecloud.io" : sourceAudience,
+							parentId: tree.ItemPath,
+						}),
+					});
+
+					if (res.ok) {
+						const children = await res.json();
+						resolved.push({
+							ItemPath: tree.ItemPath,
+							Scope: "SingleItem",
+							MergeStrategy: tree.MergeStrategy,
+						});
+						if (Array.isArray(children)) {
+							children.forEach((child: any) => {
+								resolved.push({
+									ItemPath: child.path,
+									Scope: "SingleItem",
+									MergeStrategy: tree.MergeStrategy,
+								});
+							});
+							addLog(`Successfully expanded '${tree.ItemPath}' to parent and ${children.length} children.`, "success");
+						}
+					} else {
+						addLog(`Failed to resolve children for '${tree.ItemPath}'. Defaulting to SingleItem.`, "warning");
+						resolved.push({
+							ItemPath: tree.ItemPath,
+							Scope: "SingleItem",
+							MergeStrategy: tree.MergeStrategy,
+						});
+					}
+				} catch (e) {
+					addLog(`Network error resolving children for '${tree.ItemPath}'. Defaulting to SingleItem.`, "warning");
+					resolved.push({
+						ItemPath: tree.ItemPath,
+						Scope: "SingleItem",
+						MergeStrategy: tree.MergeStrategy,
+					});
+				}
+			} else {
+				resolved.push(tree);
+			}
+		}
+		return resolved;
+	};
+
 	const triggerMigration = async () => {
 		setShouldScrollToBottom(true);
 		setIsMigrating(true);
@@ -387,6 +452,8 @@ export default function MigrationDashboard({ initialItemPath, title = "Sitecore 
 		setSteps(migrationSteps.map((s) => ({ ...s, status: "pending" })));
 
 		const transferId = generateGuid();
+
+		const resolvedDataTrees = await resolveDataTrees(dataTrees);
 
 		const config = {
 			sourceHost,
@@ -399,7 +466,7 @@ export default function MigrationDashboard({ initialItemPath, title = "Sitecore 
 			targetClientSecret: demoMode ? "demo-client-secret" : targetClientSecret,
 			targetAuthority: demoMode ? "https://auth-demo.sitecorecloud.io" : targetAuthority,
 			targetAudience: demoMode ? "https://api.sitecorecloud.io" : targetAudience,
-			dataTrees,
+			dataTrees: resolvedDataTrees,
 			database,
 			transferId,
 			demoMode,
@@ -439,6 +506,8 @@ export default function MigrationDashboard({ initialItemPath, title = "Sitecore 
 
 		const transferId = generateGuid();
 
+		const resolvedDataTrees = await resolveDataTrees(dataTrees);
+
 		const config = {
 			sourceHost,
 			sourceClientId: demoMode ? "demo-client-id" : sourceClientId,
@@ -450,7 +519,7 @@ export default function MigrationDashboard({ initialItemPath, title = "Sitecore 
 			targetClientSecret: "",
 			targetAuthority: "",
 			targetAudience: "",
-			dataTrees,
+			dataTrees: resolvedDataTrees,
 			database,
 			transferId,
 			demoMode,
@@ -777,7 +846,6 @@ export default function MigrationDashboard({ initialItemPath, title = "Sitecore 
 																	<option value='OverrideExistingTree'>OverrideExistingTree</option>
 																	<option value='OverrideExistingItem'>OverrideExistingItem</option>
 																	<option value='KeepExistingItem'>KeepExistingItem</option>
-																	<option value='LatestWin'>LatestWin</option>
 																</select>
 															</td>
 															<td className='px-3 py-2 text-center'>

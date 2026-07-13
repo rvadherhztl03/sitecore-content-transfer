@@ -2,7 +2,7 @@
 
 export interface DataTree {
   ItemPath: string;
-  Scope: 'SingleItem' | 'ItemAndDescendants';
+  Scope: 'SingleItem' | 'ItemAndChildren' | 'ItemAndDescendants';
   MergeStrategy: 'OverrideExistingItem' | 'KeepExistingItem' | 'LatestWin' | 'OverrideExistingTree';
 }
 
