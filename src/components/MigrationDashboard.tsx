@@ -385,52 +385,66 @@ export default function MigrationDashboard({ initialItemPath, title = "Sitecore 
 		}
 	};
 
+	const fetchAllDescendants = async (parentPath: string): Promise<string[]> => {
+		const descendants: string[] = [];
+		const queue: string[] = [parentPath];
+
+		while (queue.length > 0) {
+			const current = queue.shift()!;
+			try {
+				const res = await fetch("/api/migrate/children", {
+					method: "POST",
+					headers: { "Content-Type": "application/json" },
+					body: JSON.stringify({
+						sourceHost,
+						sourceClientId: demoMode ? "demo-client-id" : sourceClientId,
+						sourceClientSecret: demoMode ? "demo-client-secret" : sourceClientSecret,
+						sourceAuthority: demoMode ? "https://auth-demo.sitecorecloud.io" : sourceAuthority,
+						sourceAudience: demoMode ? "https://api.sitecorecloud.io" : sourceAudience,
+						parentId: current,
+					}),
+				});
+
+				if (res.ok) {
+					const children = await res.json();
+					if (Array.isArray(children)) {
+						children.forEach((child: any) => {
+							descendants.push(child.path);
+							if (child.hasChildren) {
+								queue.push(child.path);
+							}
+						});
+					}
+				}
+			} catch (e) {
+				console.error("Error fetching children for ", current, e);
+			}
+		}
+		return descendants;
+	};
+
 	const resolveDataTrees = async (trees: DataTree[]): Promise<DataTree[]> => {
 		const resolved: DataTree[] = [];
 		for (const tree of trees) {
 			if (tree.Scope === "ItemAndChildren") {
-				addLog(`Resolving children for path '${tree.ItemPath}' to handle 'ItemAndChildren' scope...`, "info");
+				addLog(`Resolving recursive descendants for path '${tree.ItemPath}' to handle 'ItemAndChildren' scope...`, "info");
 				try {
-					const res = await fetch("/api/migrate/children", {
-						method: "POST",
-						headers: { "Content-Type": "application/json" },
-						body: JSON.stringify({
-							sourceHost,
-							sourceClientId: demoMode ? "demo-client-id" : sourceClientId,
-							sourceClientSecret: demoMode ? "demo-client-secret" : sourceClientSecret,
-							sourceAuthority: demoMode ? "https://auth-demo.sitecorecloud.io" : sourceAuthority,
-							sourceAudience: demoMode ? "https://api.sitecorecloud.io" : sourceAudience,
-							parentId: tree.ItemPath,
-						}),
+					const descendants = await fetchAllDescendants(tree.ItemPath);
+					resolved.push({
+						ItemPath: tree.ItemPath,
+						Scope: "SingleItem",
+						MergeStrategy: tree.MergeStrategy,
 					});
-
-					if (res.ok) {
-						const children = await res.json();
+					descendants.forEach((path) => {
 						resolved.push({
-							ItemPath: tree.ItemPath,
+							ItemPath: path,
 							Scope: "SingleItem",
 							MergeStrategy: tree.MergeStrategy,
 						});
-						if (Array.isArray(children)) {
-							children.forEach((child: any) => {
-								resolved.push({
-									ItemPath: child.path,
-									Scope: "SingleItem",
-									MergeStrategy: tree.MergeStrategy,
-								});
-							});
-							addLog(`Successfully expanded '${tree.ItemPath}' to parent and ${children.length} children.`, "success");
-						}
-					} else {
-						addLog(`Failed to resolve children for '${tree.ItemPath}'. Defaulting to SingleItem.`, "warning");
-						resolved.push({
-							ItemPath: tree.ItemPath,
-							Scope: "SingleItem",
-							MergeStrategy: tree.MergeStrategy,
-						});
-					}
+					});
+					addLog(`Successfully expanded '${tree.ItemPath}' to parent and ${descendants.length} recursive descendants.`, "success");
 				} catch (e) {
-					addLog(`Network error resolving children for '${tree.ItemPath}'. Defaulting to SingleItem.`, "warning");
+					addLog(`Error resolving recursive descendants for '${tree.ItemPath}'. Defaulting to SingleItem.`, "warning");
 					resolved.push({
 						ItemPath: tree.ItemPath,
 						Scope: "SingleItem",
@@ -846,6 +860,7 @@ export default function MigrationDashboard({ initialItemPath, title = "Sitecore 
 																	<option value='OverrideExistingTree'>OverrideExistingTree</option>
 																	<option value='OverrideExistingItem'>OverrideExistingItem</option>
 																	<option value='KeepExistingItem'>KeepExistingItem</option>
+																	<option value='LatestWin'>LatestWin</option>
 																</select>
 															</td>
 															<td className='px-3 py-2 text-center'>
