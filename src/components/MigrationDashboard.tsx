@@ -630,74 +630,71 @@ export default function MigrationDashboard({ initialItemPath, title = "Sitecore 
 							>
 								Download Package
 							</button>
-							{sourceHost && (
-								<div className='overflow-x-auto  border border-[#ECE6E1] rounded-2xl max-h-60 overflow-y-auto'>
-									<table className='w-full border-collapse text-left text-xs'>
-										<thead>
-											<tr className='bg-zinc-50 border-b border-[#ECE6E1] sticky top-0 z-10'>
-												<th className='px-3 py-2 font-semibold text-zinc-400 uppercase tracking-wider'>Item/Asset Path</th>
-												<th className='px-3 py-2 font-semibold text-zinc-400 uppercase tracking-wider'>Ingestion Scope</th>
-												<th className='px-3 py-2 font-semibold text-zinc-400 uppercase tracking-wider'>Merge Strategy</th>
-												<th className='px-3 py-2 font-semibold text-zinc-400 uppercase tracking-wider w-8'></th>
+							<div className='overflow-x-auto  border border-[#ECE6E1] rounded-2xl max-h-60 overflow-y-auto'>
+								<table className='w-full border-collapse text-left text-xs'>
+									<thead>
+										<tr className='bg-zinc-50 border-b border-[#ECE6E1] sticky top-0 z-10'>
+											<th className='px-3 py-2 font-semibold text-zinc-400 uppercase tracking-wider'>Item/Asset Path</th>
+											<th className='px-3 py-2 font-semibold text-zinc-400 uppercase tracking-wider'>Ingestion Scope</th>
+											<th className='px-3 py-2 font-semibold text-zinc-400 uppercase tracking-wider'>Merge Strategy</th>
+											<th className='px-3 py-2 font-semibold text-zinc-400 uppercase tracking-wider w-8'></th>
+										</tr>
+									</thead>
+									<tbody className='divide-y divide-[#ECE6E1]'>
+										{dataTrees.length === 0 ? (
+											<tr>
+												<td colSpan={4} className='px-3 py-4 text-center text-zinc-400 italic'>
+													No active path nodes configured. Use tree explorer above or click "Add Node" button to initialize queue.
+												</td>
 											</tr>
-										</thead>
-										<tbody className='divide-y divide-[#ECE6E1]'>
-											{dataTrees.length === 0 ? (
-												<tr>
-													<td colSpan={4} className='px-3 py-4 text-center text-zinc-400 italic'>
-														No active path nodes configured. Use tree explorer above or click "Add Node" button to initialize queue.
+										) : (
+											dataTrees.map((tree, idx) => (
+												<tr key={idx} className='hover:bg-zinc-50/50'>
+													<td className='px-3 py-2'>
+														<input
+															type='text'
+															value={tree.ItemPath}
+															onChange={(e) => handleTreeChange(idx, "ItemPath", e.target.value)}
+															className='w-full px-2 py-1 bg-zinc-50/50 border border-[#ECE6E1] rounded-lg text-xs focus:outline-none'
+														/>
+													</td>
+													<td className='px-3 py-2'>
+														<select
+															value={tree.Scope}
+															onChange={(e) => handleTreeChange(idx, "Scope", e.target.value)}
+															className='w-full px-2 py-1 bg-zinc-50/50 border border-[#ECE6E1] rounded-lg text-xs focus:outline-none'
+														>
+															<option value='SingleItem'>SingleItem</option>
+															<option value='ItemAndChildren'>ItemAndChildren</option>
+															<option value='ItemAndDescendants'>ItemAndDescendants</option>
+														</select>
+													</td>
+													<td className='px-3 py-2'>
+														<select
+															value={tree.MergeStrategy}
+															onChange={(e) => handleTreeChange(idx, "MergeStrategy", e.target.value)}
+															className='w-full px-2 py-1 bg-zinc-50/50 border border-[#ECE6E1] rounded-lg text-xs focus:outline-none'
+														>
+															<option value='OverrideExistingTree'>OverrideExistingTree</option>
+															<option value='OverrideExistingItem'>OverrideExistingItem</option>
+															<option value='KeepExistingItem'>KeepExistingItem</option>
+														</select>
+													</td>
+													<td className='px-3 py-2 text-center'>
+														<button
+															onClick={() => handleRemoveTree(idx)}
+															className='w-6 h-6 rounded flex items-center justify-center hover:bg-red-50 text-red-500 hover:border hover:border-red-200 transition-all duration-150 text-sm font-bold'
+															aria-label='×'
+														>
+															×
+														</button>
 													</td>
 												</tr>
-											) : (
-												dataTrees.map((tree, idx) => (
-													<tr key={idx} className='hover:bg-zinc-50/50'>
-														<td className='px-3 py-2'>
-															<input
-																type='text'
-																value={tree.ItemPath}
-																onChange={(e) => handleTreeChange(idx, "ItemPath", e.target.value)}
-																className='w-full px-2 py-1 bg-zinc-50/50 border border-[#ECE6E1] rounded-lg text-xs focus:outline-none'
-															/>
-														</td>
-														<td className='px-3 py-2'>
-															<select
-																value={tree.Scope}
-																onChange={(e) => handleTreeChange(idx, "Scope", e.target.value)}
-																className='w-full px-2 py-1 bg-zinc-50/50 border border-[#ECE6E1] rounded-lg text-xs focus:outline-none'
-															>
-																<option value='SingleItem'>SingleItem</option>
-																<option value='ItemAndChildren'>ItemAndChildren</option>
-																<option value='ItemAndDescendants'>ItemAndDescendants</option>
-															</select>
-														</td>
-														<td className='px-3 py-2'>
-															<select
-																value={tree.MergeStrategy}
-																onChange={(e) => handleTreeChange(idx, "MergeStrategy", e.target.value)}
-																className='w-full px-2 py-1 bg-zinc-50/50 border border-[#ECE6E1] rounded-lg text-xs focus:outline-none'
-															>
-																<option value='Undefined'>Undefined</option>
-																<option value='OverrideExistingTree'>OverrideExistingTree</option>
-																<option value='MergeAddOnly'>MergeAddOnly</option>
-																<option value='MergeDoNotRemove'>MergeDoNotRemove</option>
-															</select>
-														</td>
-														<td className='px-3 py-2 text-center'>
-															<button
-																onClick={() => handleRemoveTree(idx)}
-																className='w-6 h-6 rounded flex items-center justify-center hover:bg-red-50 text-red-500 hover:border hover:border-red-200 transition-all duration-150 text-sm font-bold'
-																aria-label='×'
-															>
-																×
-															</button>
-														</td>
-													</tr>
-												))
-											)}
-										</tbody>
-									</table>
-								</div>
-							)}
+											))
+										)}
+									</tbody>
+								</table>
+							</div>
 						</div>
 
 						{/* Column 2: Connection Credentials */}
