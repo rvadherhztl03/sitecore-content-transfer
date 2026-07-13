@@ -90,13 +90,7 @@ export default function MigrationDashboard({ initialItemPath, title = "Sitecore 
 	const [demoMode, setDemoMode] = useState(false);
 
 	// Content Paths State
-	const [dataTrees, setDataTrees] = useState<DataTree[]>([
-		{
-			ItemPath: "/sitecore/content/Home",
-			Scope: "ItemAndDescendants",
-			MergeStrategy: "OverrideExistingTree",
-		},
-	]);
+	const [dataTrees, setDataTrees] = useState<DataTree[]>([]);
 
 	// Sync with prop changes if pages-contextpanel updates the current path
 	useEffect(() => {
@@ -192,6 +186,7 @@ export default function MigrationDashboard({ initialItemPath, title = "Sitecore 
 		try {
 			addLog(`Reading uploaded package: ${file.name}...`, "info");
 			const parsed = await analyzeLocalPackage(file);
+      console.log("@@parsed", parsed);
 			setParsedPackagePaths(parsed.paths);
 			setVerifiedItems(parsed.verifiedItems);
 			addLog(`Package scanned successfully. Found ${parsed.paths.length} items.`, "success");
@@ -217,28 +212,106 @@ export default function MigrationDashboard({ initialItemPath, title = "Sitecore 
 					try {
 						const buffer = e.target?.result as ArrayBuffer;
 						const zip = await JSZip.loadAsync(buffer);
-						const projectFile = zip.file("project.json");
+						const paths: string[] = [];
+						const verifiedItems: any[] = [];
+
+						// Find any .json file anywhere in the zip
+						let projectFile = null;
+						let projectKey = "";
+						const jsonKey = Object.keys(zip.files).find((key) => key.endsWith(".json"));
+						if (jsonKey) {
+							projectFile = zip.file(jsonKey);
+							projectKey = jsonKey;
+						}
+
 						if (projectFile) {
 							const metadataText = await projectFile.async("text");
 							const metadata = JSON.parse(metadataText);
-							const paths: string[] = [];
-							const verifiedItems: any[] = [];
-							if (metadata.items && Array.isArray(metadata.items)) {
-								metadata.items.forEach((item: any) => {
-									if (item.path) {
-										paths.push(item.path);
+							let itemArray: any[] = [];
+							if (Array.isArray(metadata)) {
+								itemArray = metadata;
+							} else if (metadata.items && Array.isArray(metadata.items)) {
+								itemArray = metadata.items;
+							} else if (metadata.dataTrees && Array.isArray(metadata.dataTrees)) {
+								itemArray = metadata.dataTrees;
+							} else if (metadata && typeof metadata === "object") {
+								const arrayKey = Object.keys(metadata).find((key) => Array.isArray(metadata[key]));
+								if (arrayKey) {
+									itemArray = metadata[arrayKey];
+								}
+							}
+
+							if (itemArray.length > 0) {
+								itemArray.forEach((item: any) => {
+									const itemPath = item.path || item.ItemPath;
+									if (itemPath) {
+										paths.push(itemPath);
 										verifiedItems.push({
-											path: item.path,
-											id: item.id || generateGuid(),
-											scope: item.scope || "ItemAndDescendants",
-											mergeStrategy: item.mergeStrategy || "OverrideExistingTree",
+											path: itemPath,
+											id: item.id || item.ItemId || generateGuid(),
+											scope: item.scope || item.Scope || "ItemAndDescendants",
+											mergeStrategy: item.mergeStrategy || item.MergeStrategy || "OverrideExistingTree",
 										});
 									}
 								});
 							}
 							return resolve({ paths, verifiedItems });
 						}
-						reject(new Error("Missing project.json in zip package."));
+
+						// Fallback 1: Deep search and scan package.raif content inside ZIP
+						let binaryFile = zip.file("package.raif");
+						if (!binaryFile) {
+							const binaryKey = Object.keys(zip.files).find((key) => key.endsWith("package.raif"));
+							if (binaryKey) {
+								binaryFile = zip.file(binaryKey);
+							}
+						}
+
+						if (binaryFile) {
+							const text = await binaryFile.async("text");
+							const pathRegex = /\/sitecore\/content\/[a-zA-Z0-9_/:-]+/g;
+							const extractedPaths = Array.from(new Set(text.match(pathRegex) || []));
+							extractedPaths.forEach((p) => {
+								paths.push(p);
+								verifiedItems.push({
+									path: p,
+									id: generateGuid(),
+									scope: "ItemAndDescendants",
+									mergeStrategy: "OverrideExistingTree",
+								});
+							});
+						}
+
+						// Fallback 2: Reconstruct paths from .yml / .item file paths in ZIP
+						if (paths.length === 0) {
+							zip.forEach((relativePath) => {
+								if (relativePath.endsWith(".yml") || relativePath.endsWith(".item")) {
+									const parts = relativePath.split("/");
+									const sitecoreIndex = parts.indexOf("sitecore");
+									if (sitecoreIndex !== -1) {
+										const itemPathParts = parts.slice(sitecoreIndex);
+										const lastPart = itemPathParts[itemPathParts.length - 1];
+										itemPathParts[itemPathParts.length - 1] = lastPart.substring(0, lastPart.lastIndexOf("."));
+										const itemPath = "/" + itemPathParts.join("/");
+										if (!paths.includes(itemPath)) {
+											paths.push(itemPath);
+											verifiedItems.push({
+												path: itemPath,
+												id: generateGuid(),
+												scope: "ItemAndDescendants",
+												mergeStrategy: "OverrideExistingTree",
+											});
+										}
+									}
+								}
+							});
+						}
+
+						if (paths.length > 0) {
+							return resolve({ paths, verifiedItems });
+						}
+
+						reject(new Error("Missing project.json in zip package and no content items found."));
 					} catch (err) {
 						reject(err);
 					}
@@ -271,17 +344,35 @@ export default function MigrationDashboard({ initialItemPath, title = "Sitecore 
 	const filterZipPackage = async (fileBuffer: ArrayBuffer, selectedPaths: string[]): Promise<ArrayBuffer> => {
 		try {
 			const zip = await JSZip.loadAsync(fileBuffer);
-			const projectFile = zip.file("project.json");
+			
+			// Find any .json file anywhere in the zip
+			let projectFile = null;
+			let projectKey = "";
+			const jsonKey = Object.keys(zip.files).find((k) => k.endsWith(".json"));
+			if (jsonKey) {
+				projectFile = zip.file(jsonKey);
+				projectKey = jsonKey;
+			}
+
 			if (!projectFile) return fileBuffer;
 
 			const metadataText = await projectFile.async("text");
-			const metadata = JSON.parse(metadataText);
+			let metadata = JSON.parse(metadataText);
 
-			if (metadata.items && Array.isArray(metadata.items)) {
-				metadata.items = metadata.items.filter((item: any) => selectedPaths.includes(item.path));
+			if (Array.isArray(metadata)) {
+				metadata = metadata.filter((item: any) => selectedPaths.includes(item.path || item.ItemPath));
+			} else if (metadata.items && Array.isArray(metadata.items)) {
+				metadata.items = metadata.items.filter((item: any) => selectedPaths.includes(item.path || item.ItemPath));
+			} else if (metadata.dataTrees && Array.isArray(metadata.dataTrees)) {
+				metadata.dataTrees = metadata.dataTrees.filter((item: any) => selectedPaths.includes(item.path || item.ItemPath));
+			} else if (metadata && typeof metadata === "object") {
+				const arrayKey = Object.keys(metadata).find((key) => Array.isArray(metadata[key]));
+				if (arrayKey) {
+					metadata[arrayKey] = metadata[arrayKey].filter((item: any) => selectedPaths.includes(item.path || item.ItemPath));
+				}
 			}
 
-			zip.file("project.json", JSON.stringify(metadata, null, 2));
+			zip.file(projectKey, JSON.stringify(metadata, null, 2));
 			return await zip.generateAsync({ type: "arraybuffer" });
 		} catch (e) {
 			return fileBuffer;
@@ -571,18 +662,17 @@ export default function MigrationDashboard({ initialItemPath, title = "Sitecore 
 					<div className='grid grid-cols-1 lg:grid-cols-[1fr_400px_300px] gap-8'>
 						{/* Column 1: Content Trees Sync Settings */}
 						<div
-							className={`bg-white rounded-2xl border  border-[#ECE6E1]  shadow-[0_4px_20px_-4px_rgba(0,0,0,0.03)] p-6 space-y-6 transition-all duration-200 ${!sourceHost ? "opacity-40 pointer-events-none select-none relative" : ""}`}
+							className={`bg-white rounded-2xl border  border-[#ECE6E1]  shadow-[0_4px_20px_-4px_rgba(0,0,0,0.03)] p-6 space-y-6 transition-all duration-200 ${(!sourceHost || !sourceClientId || !sourceClientSecret) ? "opacity-40 pointer-events-none select-none relative" : ""}`}
 						>
-							{!sourceHost && (
+							{(!sourceHost || !sourceClientId || !sourceClientSecret) && (
 								<div className='absolute inset-0 bg-[#FAEBD7] rounded-2xl z-10 flex flex-col items-center justify-center p-6 text-center'>
 									<Database className='w-8 h-8 mb-2 animate-pulse' />
 									<h4 className='text-xs font-bold text-black uppercase tracking-wider mb-1'>Configuration Locked</h4>
 									<p className='text-[0.65rem] text-black max-w-[200px]'>
-										Provide a Source Environment URL in connection credentials to search and map tree nodes.
+										Provide a Source Environment URL, Client ID, and Client Secret in connection credentials to search and map tree nodes.
 									</p>
 								</div>
 							)}
-
 							<div className='flex justify-between items-center border-b border-zinc-100 pb-4'>
 								<div>
 									<h3 className='font-semibold text-sm text-zinc-900 font-bold'>Content Trees Sync Settings</h3>
@@ -602,7 +692,6 @@ export default function MigrationDashboard({ initialItemPath, title = "Sitecore 
 									</button>
 								</div>
 							</div>
-
 							{/* Explorer component wrapper */}
 							<div className='space-y-4'>
 								<ContentTreeExplorer
@@ -627,82 +716,86 @@ export default function MigrationDashboard({ initialItemPath, title = "Sitecore 
 									}}
 									isMigrating={isMigrating}
 									demoMode={demoMode}
+									onAuthError={() => setShowAuthErrorModal(true)}
 								/>
 							</div>
-
-							{/* Active path config nodes table */}
-							<button
-								onClick={triggerDownloadPackage}
-								disabled={isMigrating}
-								className='flex-1 py-3 ml-auto px-3 border border-[#ECE6E1] hover:bg-zinc-50 text-zinc-800 font-medium text-xs rounded-xl flex items-center justify-center gap-2 disabled:bg-zinc-100 disabled:text-zinc-400 disabled:cursor-not-allowed transition-all duration-150'
-							>
-								Download Package
-							</button>
-							<div className='overflow-x-auto  border border-[#ECE6E1] rounded-2xl max-h-60 overflow-y-auto'>
-								<table className='w-full border-collapse text-left text-xs'>
-									<thead>
-										<tr className='bg-zinc-50 border-b border-[#ECE6E1] sticky top-0 z-10'>
-											<th className='px-3 py-2 font-semibold text-zinc-400 uppercase tracking-wider'>Item/Asset Path</th>
-											<th className='px-3 py-2 font-semibold text-zinc-400 uppercase tracking-wider'>Ingestion Scope</th>
-											<th className='px-3 py-2 font-semibold text-zinc-400 uppercase tracking-wider'>Merge Strategy</th>
-											<th className='px-3 py-2 font-semibold text-zinc-400 uppercase tracking-wider w-8'></th>
-										</tr>
-									</thead>
-									<tbody className='divide-y divide-[#ECE6E1]'>
-										{dataTrees.length === 0 ? (
-											<tr>
-												<td colSpan={4} className='px-3 py-4 text-center text-zinc-400 italic'>
-													No active path nodes configured. Use tree explorer above or click "Add Node" button to initialize queue.
-												</td>
-											</tr>
-										) : (
-											dataTrees.map((tree, idx) => (
-												<tr key={idx} className='hover:bg-zinc-50/50'>
-													<td className='px-3 py-2'>
-														<input
-															type='text'
-															value={tree.ItemPath}
-															onChange={(e) => handleTreeChange(idx, "ItemPath", e.target.value)}
-															className='w-full px-2 py-1 bg-zinc-50/50 border border-[#ECE6E1] rounded-lg text-xs focus:outline-none'
-														/>
-													</td>
-													<td className='px-3 py-2'>
-														<select
-															value={tree.Scope}
-															onChange={(e) => handleTreeChange(idx, "Scope", e.target.value)}
-															className='w-full px-2 py-1 bg-zinc-50/50 border border-[#ECE6E1] rounded-lg text-xs focus:outline-none'
-														>
-															<option value='SingleItem'>SingleItem</option>
-															<option value='ItemAndChildren'>ItemAndChildren</option>
-															<option value='ItemAndDescendants'>ItemAndDescendants</option>
-														</select>
-													</td>
-													<td className='px-3 py-2'>
-														<select
-															value={tree.MergeStrategy}
-															onChange={(e) => handleTreeChange(idx, "MergeStrategy", e.target.value)}
-															className='w-full px-2 py-1 bg-zinc-50/50 border border-[#ECE6E1] rounded-lg text-xs focus:outline-none'
-														>
-															<option value='OverrideExistingTree'>OverrideExistingTree</option>
-															<option value='OverrideExistingItem'>OverrideExistingItem</option>
-															<option value='KeepExistingItem'>KeepExistingItem</option>
-														</select>
-													</td>
-													<td className='px-3 py-2 text-center'>
-														<button
-															onClick={() => handleRemoveTree(idx)}
-															className='w-6 h-6 rounded flex items-center justify-center hover:bg-red-50 text-red-500 hover:border hover:border-red-200 transition-all duration-150 text-sm font-bold'
-															aria-label='×'
-														>
-															×
-														</button>
-													</td>
+              {(sourceHost && sourceClientId && sourceClientSecret) && (
+                <>
+									{/* Active path config nodes table */}
+									<button
+										onClick={triggerDownloadPackage}
+										disabled={isMigrating}
+										className='flex-1 py-3 ml-auto px-3 border border-[#ECE6E1] hover:bg-zinc-50 text-zinc-800 font-medium text-xs rounded-xl flex items-center justify-center gap-2 disabled:bg-zinc-100 disabled:text-zinc-400 disabled:cursor-not-allowed transition-all duration-150'
+									>
+										Download Package
+									</button>
+									<div className='overflow-x-auto  border border-[#ECE6E1] rounded-2xl max-h-60 overflow-y-auto'>
+										<table className='w-full border-collapse text-left text-xs'>
+											<thead>
+												<tr className='bg-zinc-50 border-b border-[#ECE6E1] sticky top-0 z-10'>
+													<th className='px-3 py-2 font-semibold text-zinc-400 uppercase tracking-wider'>Item/Asset Path</th>
+													<th className='px-3 py-2 font-semibold text-zinc-400 uppercase tracking-wider'>Ingestion Scope</th>
+													<th className='px-3 py-2 font-semibold text-zinc-400 uppercase tracking-wider'>Merge Strategy</th>
+													<th className='px-3 py-2 font-semibold text-zinc-400 uppercase tracking-wider w-8'></th>
 												</tr>
-											))
-										)}
-									</tbody>
-								</table>
-							</div>
+											</thead>
+											<tbody className='divide-y divide-[#ECE6E1]'>
+												{dataTrees.length === 0 ? (
+													<tr>
+														<td colSpan={4} className='px-3 py-4 text-center text-zinc-400 italic'>
+															No active path nodes configured. Use tree explorer above or click "Add Node" button to initialize queue.
+														</td>
+													</tr>
+												) : (
+													dataTrees.map((tree, idx) => (
+														<tr key={idx} className='hover:bg-zinc-50/50'>
+															<td className='px-3 py-2'>
+																<input
+																	type='text'
+																	value={tree.ItemPath}
+																	onChange={(e) => handleTreeChange(idx, "ItemPath", e.target.value)}
+																	className='w-full px-2 py-1 bg-zinc-50/50 border border-[#ECE6E1] rounded-lg text-xs focus:outline-none'
+																/>
+															</td>
+															<td className='px-3 py-2'>
+																<select
+																	value={tree.Scope}
+																	onChange={(e) => handleTreeChange(idx, "Scope", e.target.value)}
+																	className='w-full px-2 py-1 bg-zinc-50/50 border border-[#ECE6E1] rounded-lg text-xs focus:outline-none'
+																>
+																	<option value='SingleItem'>SingleItem</option>
+																	<option value='ItemAndChildren'>ItemAndChildren</option>
+																	<option value='ItemAndDescendants'>ItemAndDescendants</option>
+																</select>
+															</td>
+															<td className='px-3 py-2'>
+																<select
+																	value={tree.MergeStrategy}
+																	onChange={(e) => handleTreeChange(idx, "MergeStrategy", e.target.value)}
+																	className='w-full px-2 py-1 bg-zinc-50/50 border border-[#ECE6E1] rounded-lg text-xs focus:outline-none'
+																>
+																	<option value='OverrideExistingTree'>OverrideExistingTree</option>
+																	<option value='OverrideExistingItem'>OverrideExistingItem</option>
+																	<option value='KeepExistingItem'>KeepExistingItem</option>
+																	<option value='LatestWin'>LatestWin</option>
+																</select>
+															</td>
+															<td className='px-3 py-2 text-center'>
+																<button
+																	onClick={() => handleRemoveTree(idx)}
+																	className='w-6 h-6 rounded flex items-center justify-center hover:bg-red-50 text-red-500 hover:border hover:border-red-200 transition-all duration-150 text-sm font-bold'
+																	aria-label='×'
+																>
+																	×
+																</button>
+															</td>
+														</tr>
+													))
+												)}
+											</tbody>
+										</table>
+									</div>
+                  </>)}
 						</div>
 
 						{/* Column 2: Connection Credentials */}
@@ -1028,9 +1121,7 @@ export default function MigrationDashboard({ initialItemPath, title = "Sitecore 
 						</div>
 						<div className='text-center space-y-2'>
 							<h3 className='font-bold text-base text-zinc-900'>Authentication Failed</h3>
-							<p className='text-xs text-zinc-500 leading-relaxed'>
-								The OAuth Authority rejected the client credentials. Please check your host URL, Client ID, and Client Secret settings and try again.
-							</p>
+							<p className='text-xs text-zinc-500 leading-relaxed'>Entered credentials are not valid! Please add correct ones.</p>
 						</div>
 						<button
 							onClick={() => setShowAuthErrorModal(false)}

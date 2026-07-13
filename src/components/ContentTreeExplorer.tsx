@@ -22,6 +22,7 @@ interface ContentTreeExplorerProps {
   onSelectionChange: (paths: string[]) => void;
   isMigrating: boolean;
   demoMode: boolean;
+  onAuthError?: () => void;
 }
 
 const CLIENT_MOCK_DB: Record<string, { id: string; name: string; path: string; hasChildren: boolean }[]> = {
@@ -73,7 +74,8 @@ export function ContentTreeExplorer({
   selectedPaths,
   onSelectionChange,
   isMigrating,
-  demoMode
+  demoMode,
+  onAuthError
 }: ContentTreeExplorerProps) {
   // Tree Root State
   const [tree, setTree] = useState<TreeNode>({
@@ -165,7 +167,22 @@ export function ContentTreeExplorer({
       });
     } catch (e) {
       console.error("[ContentTreeExplorer] Error expanding node:", e);
-      alert(`Failed to retrieve children from live Sitecore environment: ${e instanceof Error ? e.message : String(e)}`);
+      const errMsg = e instanceof Error ? e.message : String(e);
+      if (
+        errMsg.toLowerCase().includes("auth") || 
+        errMsg.toLowerCase().includes("credential") || 
+        errMsg.toLowerCase().includes("token") || 
+        errMsg.toLowerCase().includes("401") || 
+        errMsg.toLowerCase().includes("unauthorized")
+      ) {
+        if (onAuthError) {
+          onAuthError();
+        } else {
+          alert(`Entered credentials are not valid! Please add correct ones.`);
+        }
+      } else {
+        alert(`Failed to retrieve children from live Sitecore environment: ${errMsg}`);
+      }
     } finally {
       setLoadingNodes(prev => ({ ...prev, [node.path]: false }));
     }
