@@ -61,6 +61,18 @@ export default function MigrationDashboard({ initialItemPath, title = "Sitecore 
 		}
 	};
 
+	// Environment Label Resolver
+	const getEnvLabel = (urlStr: string) => {
+		if (!urlStr) return "";
+		const h = urlStr.toLowerCase();
+		if (h.includes("dev") || h.includes("local") || h.includes("localhost")) return "Dev";
+		if (h.includes("qa") || h.includes("test")) return "QA";
+		if (h.includes("uat")) return "UAT";
+		if (h.includes("stage") || h.includes("staging")) return "UAT";
+		if (h.includes("prod")) return "Prod";
+		return "Live";
+	};
+
 	// Theme State
 	const [darkMode, setDarkMode] = useState(false);
 
@@ -120,6 +132,12 @@ export default function MigrationDashboard({ initialItemPath, title = "Sitecore 
 	const [showVerifyModal, setShowVerifyModal] = useState(false);
 	const [showAuthErrorModal, setShowAuthErrorModal] = useState(false);
 	const [verifiedItems, setVerifiedItems] = useState<{ path: string; id: string; scope?: string; mergeStrategy?: string }[]>([]);
+
+	// Credentials Persistence States
+	const [hasConsent, setHasConsent] = useState(false);
+	const [isSaved, setIsSaved] = useState(false);
+	const [isModified, setIsModified] = useState(false);
+
 	const [progress, setProgress] = useState(0);
 	const selectedImportPathsRef = useRef<string[]>([]);
 	const [logs, setLogs] = useState<LogMessage[]>([]);
@@ -128,6 +146,59 @@ export default function MigrationDashboard({ initialItemPath, title = "Sitecore 
 
 	const consoleEndRef = useRef<HTMLDivElement>(null);
 	const [shouldScrollToBottom, setShouldScrollToBottom] = useState(false);
+
+	// Load credentials on mount
+	useEffect(() => {
+		const saved = localStorage.getItem("sitecore_sync_credentials");
+		if (saved) {
+			try {
+				const creds = JSON.parse(saved);
+				if (creds.sourceHost) setSourceHost(creds.sourceHost);
+				if (creds.sourceClientId) setSourceClientId(creds.sourceClientId);
+				if (creds.sourceClientSecret) setSourceClientSecret(creds.sourceClientSecret);
+				if (creds.sourceAuthority) setSourceAuthority(creds.sourceAuthority);
+				if (creds.sourceAudience) setSourceAudience(creds.sourceAudience);
+
+				if (creds.targetHost) setTargetHost(creds.targetHost);
+				if (creds.targetClientId) setTargetClientId(creds.targetClientId);
+				if (creds.targetClientSecret) setTargetClientSecret(creds.targetClientSecret);
+				if (creds.targetAuthority) setTargetAuthority(creds.targetAuthority);
+				if (creds.targetAudience) setTargetAudience(creds.targetAudience);
+
+				setIsSaved(true);
+				setHasConsent(true);
+			} catch (e) {
+				console.error("Failed to parse saved credentials", e);
+			}
+		}
+	}, []);
+
+	// Change detection logic
+	useEffect(() => {
+		const saved = localStorage.getItem("sitecore_sync_credentials");
+		if (!saved) {
+			setIsModified(false);
+			return;
+		}
+		try {
+			const creds = JSON.parse(saved);
+			const isDifferent =
+				sourceHost !== (creds.sourceHost || "") ||
+				sourceClientId !== (creds.sourceClientId || "") ||
+				sourceClientSecret !== (creds.sourceClientSecret || "") ||
+				sourceAuthority !== (creds.sourceAuthority || "") ||
+				sourceAudience !== (creds.sourceAudience || "") ||
+				targetHost !== (creds.targetHost || "") ||
+				targetClientId !== (creds.targetClientId || "") ||
+				targetClientSecret !== (creds.targetClientSecret || "") ||
+				targetAuthority !== (creds.targetAuthority || "") ||
+				targetAudience !== (creds.targetAudience || "");
+
+			setIsModified(isDifferent);
+		} catch (e) {
+			setIsModified(false);
+		}
+	}, [sourceHost, sourceClientId, sourceClientSecret, sourceAuthority, sourceAudience, targetHost, targetClientId, targetClientSecret, targetAuthority, targetAudience]);
 
 	// Auto scroll logging terminal
 	useEffect(() => {
@@ -169,6 +240,45 @@ export default function MigrationDashboard({ initialItemPath, title = "Sitecore 
 			}),
 		);
 	};
+	const saveCredentials = () => {
+		if (!hasConsent) return;
+		const creds = {
+			sourceHost,
+			sourceClientId,
+			sourceClientSecret,
+			sourceAuthority,
+			sourceAudience,
+			targetHost,
+			targetClientId,
+			targetClientSecret,
+			targetAuthority,
+			targetAudience,
+		};
+		localStorage.setItem("sitecore_sync_credentials", JSON.stringify(creds));
+		setIsSaved(true);
+		setIsModified(false);
+		addLog("Connection credentials saved successfully to LocalStorage. 💾", "success");
+	};
+
+	const updateCredentials = () => {
+		if (!hasConsent) return;
+		const creds = {
+			sourceHost,
+			sourceClientId,
+			sourceClientSecret,
+			sourceAuthority,
+			sourceAudience,
+			targetHost,
+			targetClientId,
+			targetClientSecret,
+			targetAuthority,
+			targetAudience,
+		};
+		localStorage.setItem("sitecore_sync_credentials", JSON.stringify(creds));
+		setIsSaved(true);
+		setIsModified(false);
+		addLog("Connection credentials updated successfully in LocalStorage. 💾", "success");
+	};
 
 	const handlePackageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
 		const file = e.target.files?.[0];
@@ -192,7 +302,7 @@ export default function MigrationDashboard({ initialItemPath, title = "Sitecore 
 		try {
 			addLog(`Reading uploaded package: ${file.name}...`, "info");
 			const parsed = await analyzeLocalPackage(file);
-      console.log("@@parsed", parsed);
+			console.log("@@parsed", parsed);
 			setParsedPackagePaths(parsed.paths);
 			setVerifiedItems(parsed.verifiedItems);
 			addLog(`Package scanned successfully. Found ${parsed.paths.length} items.`, "success");
@@ -350,7 +460,7 @@ export default function MigrationDashboard({ initialItemPath, title = "Sitecore 
 	const filterZipPackage = async (fileBuffer: ArrayBuffer, selectedPaths: string[]): Promise<ArrayBuffer> => {
 		try {
 			const zip = await JSZip.loadAsync(fileBuffer);
-			
+
 			// Find any .json file anywhere in the zip
 			let projectFile = null;
 			let projectKey = "";
@@ -745,7 +855,7 @@ export default function MigrationDashboard({ initialItemPath, title = "Sitecore 
 					<div className='grid grid-cols-1 lg:grid-cols-[1fr_400px_300px] gap-8'>
 						{/* Column 1: Content Trees Sync Settings */}
 						<div
-							className={`bg-white rounded-2xl border  border-[#ECE6E1]  shadow-[0_4px_20px_-4px_rgba(0,0,0,0.03)] p-6 space-y-6 transition-all duration-200 ${(!sourceHost || !sourceClientId || !sourceClientSecret) ? "opacity-40 pointer-events-none select-none relative" : ""}`}
+							className={`bg-white rounded-2xl border  border-[#ECE6E1]  shadow-[0_4px_20px_-4px_rgba(0,0,0,0.03)] p-6 space-y-6 transition-all duration-200 ${!sourceHost || !sourceClientId || !sourceClientSecret ? "opacity-40 pointer-events-none select-none relative" : ""}`}
 						>
 							{(!sourceHost || !sourceClientId || !sourceClientSecret) && (
 								<div className='absolute inset-0 bg-[#FAEBD7] rounded-2xl z-10 flex flex-col items-center justify-center p-6 text-center'>
@@ -802,83 +912,82 @@ export default function MigrationDashboard({ initialItemPath, title = "Sitecore 
 									onAuthError={() => setShowAuthErrorModal(true)}
 								/>
 							</div>
-              {(sourceHost && sourceClientId && sourceClientSecret) && (
-                <>
-									{/* Active path config nodes table */}
-									<button
-										onClick={triggerDownloadPackage}
-										disabled={isMigrating}
-										className='flex-1 py-3 ml-auto px-3 border border-[#ECE6E1] hover:bg-zinc-50 text-zinc-800 font-medium text-xs rounded-xl flex items-center justify-center gap-2 disabled:bg-zinc-100 disabled:text-zinc-400 disabled:cursor-not-allowed transition-all duration-150'
-									>
-										Download Package
-									</button>
-									<div className='overflow-x-auto  border border-[#ECE6E1] rounded-2xl max-h-60 overflow-y-auto'>
-										<table className='w-full border-collapse text-left text-xs'>
-											<thead>
-												<tr className='bg-zinc-50 border-b border-[#ECE6E1] sticky top-0 z-10'>
-													<th className='px-3 py-2 font-semibold text-zinc-400 uppercase tracking-wider'>Item/Asset Path</th>
-													<th className='px-3 py-2 font-semibold text-zinc-400 uppercase tracking-wider'>Ingestion Scope</th>
-													<th className='px-3 py-2 font-semibold text-zinc-400 uppercase tracking-wider'>Merge Strategy</th>
-													<th className='px-3 py-2 font-semibold text-zinc-400 uppercase tracking-wider w-8'></th>
+							<div className='flex flex-col gap-4'>
+								{/* Active path config nodes table */}
+								<button
+									onClick={triggerDownloadPackage}
+									disabled={isMigrating}
+									className='flex-1 py-3 ml-auto px-3 border border-[#ECE6E1] hover:bg-zinc-50 text-zinc-800 font-medium text-xs rounded-xl flex items-center justify-center gap-2 disabled:bg-zinc-100 disabled:text-zinc-400 disabled:cursor-not-allowed transition-all duration-150'
+								>
+									Download Package
+								</button>
+								<div className='overflow-x-auto  border border-[#ECE6E1] rounded-2xl max-h-60 overflow-y-auto'>
+									<table className='w-full border-collapse text-left text-xs'>
+										<thead>
+											<tr className='bg-zinc-50 border-b border-[#ECE6E1] sticky top-0 z-10'>
+												<th className='px-3 py-2 font-semibold text-zinc-400 uppercase tracking-wider'>Item/Asset Path</th>
+												<th className='px-3 py-2 font-semibold text-zinc-400 uppercase tracking-wider'>Ingestion Scope</th>
+												<th className='px-3 py-2 font-semibold text-zinc-400 uppercase tracking-wider'>Merge Strategy</th>
+												<th className='px-3 py-2 font-semibold text-zinc-400 uppercase tracking-wider w-8'></th>
+											</tr>
+										</thead>
+										<tbody className='divide-y divide-[#ECE6E1]'>
+											{dataTrees.length === 0 ? (
+												<tr>
+													<td colSpan={4} className='px-3 py-4 text-center text-zinc-400 italic'>
+														No active path nodes configured. Use tree explorer above or click "Add Node" button to initialize queue.
+													</td>
 												</tr>
-											</thead>
-											<tbody className='divide-y divide-[#ECE6E1]'>
-												{dataTrees.length === 0 ? (
-													<tr>
-														<td colSpan={4} className='px-3 py-4 text-center text-zinc-400 italic'>
-															No active path nodes configured. Use tree explorer above or click "Add Node" button to initialize queue.
+											) : (
+												dataTrees.map((tree, idx) => (
+													<tr key={idx} className='hover:bg-zinc-50/50'>
+														<td className='px-3 py-2'>
+															<input
+																type='text'
+																value={tree.ItemPath}
+																onChange={(e) => handleTreeChange(idx, "ItemPath", e.target.value)}
+																className='w-full px-2 py-1 bg-zinc-50/50 border border-[#ECE6E1] rounded-lg text-xs focus:outline-none'
+															/>
+														</td>
+														<td className='px-3 py-2'>
+															<select
+																value={tree.Scope}
+																onChange={(e) => handleTreeChange(idx, "Scope", e.target.value)}
+																className='w-full px-2 py-1 bg-zinc-50/50 border border-[#ECE6E1] rounded-lg text-xs focus:outline-none'
+															>
+																<option value='SingleItem'>SingleItem</option>
+																<option value='ItemAndChildren'>ItemAndChildren</option>
+																<option value='ItemAndDescendants'>ItemAndDescendants</option>
+															</select>
+														</td>
+														<td className='px-3 py-2'>
+															<select
+																value={tree.MergeStrategy}
+																onChange={(e) => handleTreeChange(idx, "MergeStrategy", e.target.value)}
+																className='w-full px-2 py-1 bg-zinc-50/50 border border-[#ECE6E1] rounded-lg text-xs focus:outline-none'
+															>
+																<option value='OverrideExistingTree'>OverrideExistingTree</option>
+																<option value='OverrideExistingItem'>OverrideExistingItem</option>
+																<option value='KeepExistingItem'>KeepExistingItem</option>
+																<option value='LatestWin'>LatestWin</option>
+															</select>
+														</td>
+														<td className='px-3 py-2 text-center'>
+															<button
+																onClick={() => handleRemoveTree(idx)}
+																className='w-6 h-6 rounded flex items-center justify-center hover:bg-red-50 text-red-500 hover:border hover:border-red-200 transition-all duration-150 text-sm font-bold'
+																aria-label='×'
+															>
+																×
+															</button>
 														</td>
 													</tr>
-												) : (
-													dataTrees.map((tree, idx) => (
-														<tr key={idx} className='hover:bg-zinc-50/50'>
-															<td className='px-3 py-2'>
-																<input
-																	type='text'
-																	value={tree.ItemPath}
-																	onChange={(e) => handleTreeChange(idx, "ItemPath", e.target.value)}
-																	className='w-full px-2 py-1 bg-zinc-50/50 border border-[#ECE6E1] rounded-lg text-xs focus:outline-none'
-																/>
-															</td>
-															<td className='px-3 py-2'>
-																<select
-																	value={tree.Scope}
-																	onChange={(e) => handleTreeChange(idx, "Scope", e.target.value)}
-																	className='w-full px-2 py-1 bg-zinc-50/50 border border-[#ECE6E1] rounded-lg text-xs focus:outline-none'
-																>
-																	<option value='SingleItem'>SingleItem</option>
-																	<option value='ItemAndChildren'>ItemAndChildren</option>
-																	<option value='ItemAndDescendants'>ItemAndDescendants</option>
-																</select>
-															</td>
-															<td className='px-3 py-2'>
-																<select
-																	value={tree.MergeStrategy}
-																	onChange={(e) => handleTreeChange(idx, "MergeStrategy", e.target.value)}
-																	className='w-full px-2 py-1 bg-zinc-50/50 border border-[#ECE6E1] rounded-lg text-xs focus:outline-none'
-																>
-																	<option value='OverrideExistingTree'>OverrideExistingTree</option>
-																	<option value='OverrideExistingItem'>OverrideExistingItem</option>
-																	<option value='KeepExistingItem'>KeepExistingItem</option>
-																	<option value='LatestWin'>LatestWin</option>
-																</select>
-															</td>
-															<td className='px-3 py-2 text-center'>
-																<button
-																	onClick={() => handleRemoveTree(idx)}
-																	className='w-6 h-6 rounded flex items-center justify-center hover:bg-red-50 text-red-500 hover:border hover:border-red-200 transition-all duration-150 text-sm font-bold'
-																	aria-label='×'
-																>
-																	×
-																</button>
-															</td>
-														</tr>
-													))
-												)}
-											</tbody>
-										</table>
-									</div>
-                  </>)}
+												))
+											)}
+										</tbody>
+									</table>
+								</div>
+							</div>
 						</div>
 
 						{/* Column 2: Connection Credentials */}
@@ -901,7 +1010,9 @@ export default function MigrationDashboard({ initialItemPath, title = "Sitecore 
 							<div className='space-y-4'>
 								{/* Source Credentials Group */}
 								<div className='space-y-3'>
-									<h4 className='font-medium text-xs text-indigo-600 border-b border-zinc-100 pb-1'>Source CM Env</h4>
+									<h4 className='font-medium text-xs text-indigo-600 border-b border-zinc-100 pb-1'>
+										Source CM Env {getEnvLabel(sourceHost) && `(${getEnvLabel(sourceHost)})`}
+									</h4>
 									<div>
 										<label className='text-[0.65rem] font-bold text-zinc-400 uppercase tracking-wider block mb-1'>Host URL</label>
 										<input
@@ -938,7 +1049,9 @@ export default function MigrationDashboard({ initialItemPath, title = "Sitecore 
 
 								{/* Target Credentials Group */}
 								<div className='space-y-3'>
-									<h4 className='font-medium text-xs text-amber-600 border-b border-zinc-100 pb-1'>Target CM Env</h4>
+									<h4 className='font-medium text-xs text-amber-600 border-b border-zinc-100 pb-1'>
+										Target CM Env {getEnvLabel(targetHost) && `(${getEnvLabel(targetHost)})`}
+									</h4>
 									<div>
 										<label className='text-[0.65rem] font-bold text-zinc-400 uppercase tracking-wider block mb-1'>Host URL</label>
 										<input
@@ -987,10 +1100,65 @@ export default function MigrationDashboard({ initialItemPath, title = "Sitecore 
 										<option value='core'>core</option>
 									</select>
 								</div>
-								<div className='text-[0.65rem] text-zinc-400 flex flex-col justify-end'>
-									<span className='font-bold uppercase tracking-wider block mb-0.5'>Secure Proxy</span>
-									<span className='font-mono text-zinc-500'>/api/migrate/*</span>
+							</div>
+
+							{/* LocalStorage persistence section */}
+							<div className='pt-4 border-t border-zinc-100 space-y-4'>
+								<div className='bg-amber-50/50 border border-amber-200/60 rounded-xl p-3 space-y-2'>
+									<div className='flex items-start gap-2 text-[0.7rem] text-amber-800 leading-normal'>
+										<div className='flex flex-col items-center'>
+											<AlertTriangle className='w-3.5 h-3.5 text-amber-600 shrink-0 mt-0.5' />
+											<span className='font-bold'>Note:</span>
+										</div>
+										<span>
+											Saving credentials stores them as plain text in your browser's LocalStorage. Only check this option on trusted personal devices.
+										</span>
+									</div>
 								</div>
+
+								<label className='flex items-center gap-2 cursor-pointer select-none text-[0.7rem] text-zinc-600 font-medium'>
+									<input
+										type='checkbox'
+										checked={hasConsent}
+										onChange={(e) => {
+											setHasConsent(e.target.checked);
+											if (!e.target.checked) {
+												localStorage.removeItem("sitecore_sync_credentials");
+												setIsSaved(false);
+												setIsModified(false);
+											}
+										}}
+										className='rounded border-zinc-300 text-indigo-600 focus:ring-indigo-500'
+									/>
+									I consent to saving these credentials locally in my browser.
+								</label>
+
+								{!isSaved && (
+									<button
+										onClick={saveCredentials}
+										disabled={!hasConsent}
+										className='w-full py-2 px-3 bg-zinc-900 hover:bg-zinc-800 text-white disabled:bg-zinc-100 disabled:text-zinc-400 disabled:cursor-not-allowed font-bold text-xs rounded-xl transition-all duration-150 shadow-sm flex items-center justify-center gap-2'
+									>
+										Save Credentials
+									</button>
+								)}
+
+								{isSaved && isModified && (
+									<button
+										onClick={updateCredentials}
+										disabled={!hasConsent}
+										className='w-full py-2 px-3 bg-indigo-600 hover:bg-indigo-500 text-white disabled:bg-zinc-100 disabled:text-zinc-400 disabled:cursor-not-allowed font-bold text-xs rounded-xl transition-all duration-150 shadow-sm flex items-center justify-center gap-2'
+									>
+										Update My Credentials
+									</button>
+								)}
+
+								{isSaved && !isModified && (
+									<div className='flex items-center justify-center gap-1.5 py-2 px-3 bg-zinc-50 border border-zinc-100 rounded-xl text-[0.65rem] text-zinc-500 font-bold uppercase tracking-wider'>
+										<span className='w-1.5 h-1.5 rounded-full bg-emerald-500'></span>
+										Credentials saved & active
+									</div>
+								)}
 							</div>
 						</div>
 

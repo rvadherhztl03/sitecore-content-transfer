@@ -176,4 +176,57 @@ describe('MigrationDashboard', () => {
     // Verify custom mocked logs for upload/import appeared
     expect(screen.getByText(/Package imported successfully/)).toBeInTheDocument();
   });
+
+  it('handles LocalStorage credentials persistence lifecycle', async () => {
+    // Setup initial empty localStorage mock
+    const localStorageMock = (() => {
+      let store: Record<string, string> = {};
+      return {
+        getItem: (key: string) => store[key] || null,
+        setItem: (key: string, value: string) => { store[key] = value.toString(); },
+        removeItem: (key: string) => { delete store[key]; },
+        clear: () => { store = {}; }
+      };
+    })();
+    Object.defineProperty(window, 'localStorage', { value: localStorageMock, writable: true });
+
+    render(<MigrationDashboard />);
+
+    // 1. Initial State: Save button is present, disabled initially since consent checkbox is unchecked
+    const saveBtn = screen.getByRole('button', { name: /Save Credentials/ });
+    expect(saveBtn).toBeDisabled();
+
+    // 2. Check consent checkbox to enable the Save button
+    const consentCheckbox = screen.getByLabelText(/I consent to saving these credentials locally/);
+    fireEvent.click(consentCheckbox);
+    expect(saveBtn).not.toBeDisabled();
+
+    // Fill out hosts/credentials
+    const srcHostInput = screen.getByPlaceholderText('https://source-cm-host.com');
+    fireEvent.change(srcHostInput, { target: { value: 'https://src-custom.com' } });
+
+    // 3. Click Save Credentials
+    fireEvent.click(saveBtn);
+
+    // Verify localStorage has been written
+    const stored = JSON.parse(window.localStorage.getItem('sitecore_sync_credentials') || '{}');
+    expect(stored.sourceHost).toBe('https://src-custom.com');
+
+    // Button should be hidden, showing "Credentials saved & active" status message
+    expect(screen.queryByRole('button', { name: /Save Credentials/ })).not.toBeInTheDocument();
+    expect(screen.getByText(/Credentials saved & active/)).toBeInTheDocument();
+
+    // 4. Modify host inputs -> "Update My Credentials" CTA should appear
+    fireEvent.change(srcHostInput, { target: { value: 'https://src-modified.com' } });
+    const updateBtn = screen.getByRole('button', { name: /Update My Credentials/ });
+    expect(updateBtn).toBeInTheDocument();
+
+    // 5. Click Update Credentials
+    fireEvent.click(updateBtn);
+    expect(screen.queryByRole('button', { name: /Update My Credentials/ })).not.toBeInTheDocument();
+    expect(screen.getByText(/Credentials saved & active/)).toBeInTheDocument();
+
+    const storedUpdated = JSON.parse(window.localStorage.getItem('sitecore_sync_credentials') || '{}');
+    expect(storedUpdated.sourceHost).toBe('https://src-modified.com');
+  });
 });
