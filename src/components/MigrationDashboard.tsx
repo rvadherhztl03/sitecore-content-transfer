@@ -858,7 +858,7 @@ export default function MigrationDashboard({ initialItemPath, title = "Sitecore 
 							className={`bg-white rounded-2xl border  border-[#ECE6E1]  shadow-[0_4px_20px_-4px_rgba(0,0,0,0.03)] p-6 space-y-6 transition-all duration-200 ${!sourceHost || !sourceClientId || !sourceClientSecret ? "opacity-40 pointer-events-none select-none relative" : ""}`}
 						>
 							{(!sourceHost || !sourceClientId || !sourceClientSecret) && (
-								<div className='absolute inset-0 bg-[#FAEBD7] rounded-2xl z-10 flex flex-col items-center justify-center p-6 text-center'>
+								<div className='absolute inset-0 bg-[#FAEBD7] rounded-2xl z-[11] flex flex-col items-center justify-center p-6 text-center'>
 									<Database className='w-8 h-8 mb-2 animate-pulse' />
 									<h4 className='text-xs font-bold text-black uppercase tracking-wider mb-1'>Configuration Locked</h4>
 									<p className='text-[0.65rem] text-black max-w-[200px]'>
