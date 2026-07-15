@@ -1116,22 +1116,24 @@ export default function MigrationDashboard({ initialItemPath, title = "Sitecore 
 									</div>
 								</div>
 
-								<label className='flex items-center gap-2 cursor-pointer select-none text-[0.7rem] text-zinc-600 font-medium'>
-									<input
-										type='checkbox'
-										checked={hasConsent}
-										onChange={(e) => {
-											setHasConsent(e.target.checked);
-											if (!e.target.checked) {
-												localStorage.removeItem("sitecore_sync_credentials");
-												setIsSaved(false);
-												setIsModified(false);
-											}
-										}}
-										className='rounded border-zinc-300 text-indigo-600 focus:ring-indigo-500'
-									/>
-									I consent to saving these credentials locally in my browser.
-								</label>
+								{!isSaved && (
+									<label className='flex items-center gap-2 cursor-pointer select-none text-[0.7rem] text-zinc-600 font-medium'>
+										<input
+											type='checkbox'
+											checked={hasConsent}
+											onChange={(e) => {
+												setHasConsent(e.target.checked);
+												if (!e.target.checked) {
+													localStorage.removeItem("sitecore_sync_credentials");
+													setIsSaved(false);
+													setIsModified(false);
+												}
+											}}
+											className='rounded border-zinc-300 text-indigo-600 focus:ring-indigo-500'
+										/>
+										I consent to saving these credentials locally in my browser.
+									</label>
+								)}
 
 								{!isSaved && (
 									<button

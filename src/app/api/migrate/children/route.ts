@@ -48,7 +48,7 @@ export async function POST(request: Request) {
             itemId
             name
             path
-            children {
+            children(first: 1000) {
               nodes {
                 itemId
                 name
