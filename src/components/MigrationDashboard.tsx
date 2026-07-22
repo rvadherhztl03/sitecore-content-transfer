@@ -692,14 +692,14 @@ export default function MigrationDashboard({ initialItemPath, title = "Sitecore 
 			sourceAuthority: "",
 			sourceAudience: "",
 			targetHost,
-			targetClientId: targetClientId,
-			targetClientSecret: targetClientSecret,
-			targetAuthority: targetAuthority,
-			targetAudience: targetAudience,
+			targetClientId: demoMode ? "demo-client-id" : targetClientId,
+			targetClientSecret: demoMode ? "demo-client-secret" : targetClientSecret,
+			targetAuthority: demoMode ? "https://auth-demo.sitecorecloud.io" : targetAuthority,
+			targetAudience: demoMode ? "https://api.sitecorecloud.io" : targetAudience,
 			dataTrees: [],
 			database,
 			transferId,
-			demoMode: true,
+			demoMode,
 		};
 
 		const service = new MigrationService(config, {
