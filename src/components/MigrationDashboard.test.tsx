@@ -248,4 +248,55 @@ describe('MigrationDashboard', () => {
     expect(srcHostInput).toHaveValue('https://target-initial.com');
     expect(tgtHostInput).toHaveValue('https://source-initial.com');
   });
+
+  it('manages connection profiles lifecycle and warns on production target', async () => {
+    // Mock localStorage for profiles
+    let store: Record<string, string> = {};
+    const localStorageMock = {
+      getItem: (key: string) => store[key] || null,
+      setItem: (key: string, value: string) => { store[key] = value.toString(); },
+      removeItem: (key: string) => { delete store[key]; },
+      clear: () => { store = {}; }
+    };
+    Object.defineProperty(window, 'localStorage', { value: localStorageMock, writable: true });
+
+    render(<MigrationDashboard />);
+
+    // 1. Open Profile Manager Modal
+    const profilesBtn = screen.getByRole('button', { name: /Profiles/ });
+    fireEvent.click(profilesBtn);
+
+    // Verify modal is visible
+    expect(screen.getByText('Manage Connection Profiles')).toBeInTheDocument();
+
+    // 2. Create Profile
+    fireEvent.change(screen.getByPlaceholderText('e.g., QA Environment'), { target: { value: 'QA Profile' } });
+    fireEvent.change(screen.getByPlaceholderText('https://xmc-env-cm.sitecorecloud.io'), { target: { value: 'https://xmc-qa-env.sitecorecloud.io' } });
+
+    // Click Add Profile
+    const addProfileBtn = screen.getByRole('button', { name: 'Add Profile' });
+    fireEvent.click(addProfileBtn);
+
+    // Verify profile is listed
+    expect(screen.getAllByText('QA Profile')[0]).toBeInTheDocument();
+
+    // 3. Close Modal
+    const closeBtn = screen.getByRole('button', { name: 'Close Connection Profiles' });
+    fireEvent.click(closeBtn);
+
+    // 4. Verify Quick Load dropdown is now populated on both CM sections
+    const selector = screen.getByRole('combobox', { name: 'Load Source Profile' });
+    const profileId = JSON.parse(store['sitecore_sync_profiles'])[0].id;
+    fireEvent.change(selector, { target: { value: profileId } });
+
+    // Verify Source Host is updated
+    expect(screen.getByPlaceholderText('https://source-cm-host.com')).toHaveValue('https://xmc-qa-env.sitecorecloud.io');
+
+    // 5. Test Production target warning banner
+    const targetHostInput = screen.getByPlaceholderText('https://target-cm-host.com');
+    fireEvent.change(targetHostInput, { target: { value: 'https://xmc-prod-env.sitecorecloud.io' } });
+
+    // Verify production caution warning banner is shown
+    expect(screen.getByText(/Caution: Target Environment is Production!/)).toBeInTheDocument();
+  });
 });

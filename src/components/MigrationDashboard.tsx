@@ -13,6 +13,17 @@ interface LogMessage {
 	timestamp: string;
 }
 
+export interface ConnectionProfile {
+	id: string;
+	name: string;
+	host: string;
+	clientId: string;
+	clientSecret: string;
+	authority: string;
+	audience: string;
+	envType: "local" | "dev" | "qa" | "uat" | "prod";
+}
+
 interface StepState {
 	label: string;
 	description: string;
@@ -138,6 +149,11 @@ export default function MigrationDashboard({ initialItemPath, title = "Sitecore 
 	const [isSaved, setIsSaved] = useState(false);
 	const [isModified, setIsModified] = useState(false);
 
+	// Connection Profiles States
+	const [profiles, setProfiles] = useState<ConnectionProfile[]>([]);
+	const [showProfileModal, setShowProfileModal] = useState(false);
+	const [editingProfile, setEditingProfile] = useState<Partial<ConnectionProfile> | null>(null);
+
 	const [progress, setProgress] = useState(0);
 	const selectedImportPathsRef = useRef<string[]>([]);
 	const [logs, setLogs] = useState<LogMessage[]>([]);
@@ -169,6 +185,16 @@ export default function MigrationDashboard({ initialItemPath, title = "Sitecore 
 				setHasConsent(true);
 			} catch (e) {
 				console.error("Failed to parse saved credentials", e);
+			}
+		}
+
+		// Load connection profiles on mount
+		const savedProfiles = localStorage.getItem("sitecore_sync_profiles");
+		if (savedProfiles) {
+			try {
+				setProfiles(JSON.parse(savedProfiles));
+			} catch (e) {
+				console.error("Failed to parse saved connection profiles", e);
 			}
 		}
 	}, []);
@@ -300,6 +326,59 @@ export default function MigrationDashboard({ initialItemPath, title = "Sitecore 
 		setTargetAudience(tempAudience);
 
 		addLog("Swapped Source and Target connection credentials. 🔄", "info");
+	};
+
+	const saveProfile = (profile: Partial<ConnectionProfile>) => {
+		const fullProfile: ConnectionProfile = {
+			id: profile.id || generateGuid(),
+			name: profile.name || "Unnamed",
+			host: profile.host || "",
+			clientId: profile.clientId || "",
+			clientSecret: profile.clientSecret || "",
+			authority: "https://auth.sitecorecloud.io",
+			audience: "https://api.sitecorecloud.io",
+			envType: profile.envType || "dev",
+		};
+
+		let updated: ConnectionProfile[];
+		if (profile.id) {
+			// Update existing profile
+			updated = profiles.map((p) => (p.id === profile.id ? fullProfile : p));
+			addLog(`Updated connection profile: ${fullProfile.name} 📝`, "success");
+		} else {
+			// Add new profile
+			updated = [...profiles, fullProfile];
+			addLog(`Created connection profile: ${fullProfile.name} 💾`, "success");
+		}
+		setProfiles(updated);
+		localStorage.setItem("sitecore_sync_profiles", JSON.stringify(updated));
+	};
+
+	const deleteProfile = (id: string) => {
+		const targetProfile = profiles.find((p) => p.id === id);
+		const name = targetProfile ? targetProfile.name : "Unknown";
+		const updated = profiles.filter((p) => p.id !== id);
+		setProfiles(updated);
+		localStorage.setItem("sitecore_sync_profiles", JSON.stringify(updated));
+		addLog(`Deleted connection profile: ${name} ❌`, "warning");
+	};
+
+	const loadProfileIntoSource = (profile: ConnectionProfile) => {
+		setSourceHost(profile.host);
+		setSourceClientId(profile.clientId);
+		setSourceClientSecret(profile.clientSecret);
+		setSourceAuthority(profile.authority);
+		setSourceAudience(profile.audience);
+		addLog(`Loaded profile "${profile.name}" into Source environment. 📡`, "info");
+	};
+
+	const loadProfileIntoTarget = (profile: ConnectionProfile) => {
+		setTargetHost(profile.host);
+		setTargetClientId(profile.clientId);
+		setTargetClientSecret(profile.clientSecret);
+		setTargetAuthority(profile.authority);
+		setTargetAudience(profile.audience);
+		addLog(`Loaded profile "${profile.name}" into Target environment. 📡`, "info");
 	};
 
 	const handlePackageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -836,14 +915,14 @@ export default function MigrationDashboard({ initialItemPath, title = "Sitecore 
 				{/* Top Header Bar */}
 				<header className='h-20 bg-white border-b border-[#ECE6E1] px-8 flex items-center justify-between flex-shrink-0'>
 					{/* Search Panel */}
-					<div className='relative w-80'>
+					{/* <div className='relative w-80'>
 						<Search className='absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-400' />
 						<input
 							type='text'
 							placeholder='Search items, logs or paths...'
 							className='w-full pl-10 pr-4 py-2 bg-zinc-50 border border-[#ECE6E1] rounded-xl text-sm placeholder-zinc-400 focus:outline-none focus:border-zinc-900 transition-all duration-150'
 						/>
-					</div>
+					</div> */}
 
 					{/* Connection Security status */}
 					<div className='flex items-center gap-4'>
@@ -1018,14 +1097,26 @@ export default function MigrationDashboard({ initialItemPath, title = "Sitecore 
 									<Database className='w-5 h-5 text-indigo-600' />
 									📡 Connection Credentials
 								</h3>
-								<button
-									onClick={swapCredentials}
-									title="Swap Source and Target Connection Credentials"
-									className='flex items-center gap-1.5 px-3 py-1.5 bg-zinc-50 hover:bg-zinc-100 border border-[#ECE6E1] text-zinc-700 hover:text-zinc-950 font-bold text-[0.65rem] uppercase tracking-wider rounded-xl transition-all duration-150'
-								>
-									<ArrowUpDown className='w-3.5 h-3.5 text-zinc-500' />
-									Swap
-								</button>
+								<div className='flex items-center gap-2'>
+									<button
+										onClick={swapCredentials}
+										title='Swap Source and Target Connection Credentials'
+										className='flex items-center gap-1.5 px-3 py-1.5 bg-zinc-50 hover:bg-zinc-100 border border-[#ECE6E1] text-zinc-700 hover:text-zinc-950 font-bold text-[0.65rem] uppercase tracking-wider rounded-xl transition-all duration-150'
+									>
+										<ArrowUpDown className='w-3.5 h-3.5 text-zinc-500' />
+										Swap
+									</button>
+									<button
+										onClick={() => {
+											setEditingProfile(null);
+											setShowProfileModal(true);
+										}}
+										className='flex items-center gap-1.5 px-3 py-1.5 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 text-indigo-700 font-bold text-[0.65rem] uppercase tracking-wider rounded-xl transition-all duration-150'
+									>
+										<Layers className='w-3.5 h-3.5' />
+										Profiles
+									</button>
+								</div>
 								{/* Hidden switch for testing check compatibility */}
 								<div className='sr-only'>
 									<span className='text-xs text-zinc-500 font-semibold'>Demo Mode</span>
@@ -1039,9 +1130,30 @@ export default function MigrationDashboard({ initialItemPath, title = "Sitecore 
 							<div className='space-y-4'>
 								{/* Source Credentials Group */}
 								<div className='space-y-3'>
-									<h4 className='font-medium text-xs text-indigo-600 border-b border-zinc-100 pb-1'>
-										Source CM Env {getEnvLabel(sourceHost) && `(${getEnvLabel(sourceHost)})`}
-									</h4>
+									<div className='flex justify-between items-center border-b border-zinc-100 pb-1'>
+										<h4 className='font-medium text-xs text-indigo-600'>Source CM Env {getEnvLabel(sourceHost) && `(${getEnvLabel(sourceHost)})`}</h4>
+										{profiles.length > 0 && (
+											<select
+												aria-label='Load Source Profile'
+												onChange={(e) => {
+													const p = profiles.find((prof) => prof.id === e.target.value);
+													if (p) loadProfileIntoSource(p);
+													e.target.value = "";
+												}}
+												defaultValue=''
+												className='text-[0.65rem] border border-[#ECE6E1] bg-white rounded-lg px-2 py-0.5 max-w-[120px] focus:outline-none focus:border-zinc-900 font-bold text-zinc-500'
+											>
+												<option value='' disabled>
+													Load Profile...
+												</option>
+												{profiles.map((p) => (
+													<option key={p.id} value={p.id}>
+														{p.name}
+													</option>
+												))}
+											</select>
+										)}
+									</div>
 									<div>
 										<label className='text-[0.65rem] font-bold text-zinc-400 uppercase tracking-wider block mb-1'>Host URL</label>
 										<input
@@ -1078,9 +1190,30 @@ export default function MigrationDashboard({ initialItemPath, title = "Sitecore 
 
 								{/* Target Credentials Group */}
 								<div className='space-y-3'>
-									<h4 className='font-medium text-xs text-amber-600 border-b border-zinc-100 pb-1'>
-										Target CM Env {getEnvLabel(targetHost) && `(${getEnvLabel(targetHost)})`}
-									</h4>
+									<div className='flex justify-between items-center border-b border-zinc-100 pb-1'>
+										<h4 className='font-medium text-xs text-amber-600'>Target CM Env {getEnvLabel(targetHost) && `(${getEnvLabel(targetHost)})`}</h4>
+										{profiles.length > 0 && (
+											<select
+												aria-label='Load Target Profile'
+												onChange={(e) => {
+													const p = profiles.find((prof) => prof.id === e.target.value);
+													if (p) loadProfileIntoTarget(p);
+													e.target.value = "";
+												}}
+												defaultValue=''
+												className='text-[0.65rem] border border-[#ECE6E1] bg-white rounded-lg px-2 py-0.5 max-w-[120px] focus:outline-none focus:border-zinc-900 font-bold text-zinc-500'
+											>
+												<option value='' disabled>
+													Load Profile...
+												</option>
+												{profiles.map((p) => (
+													<option key={p.id} value={p.id}>
+														{p.name}
+													</option>
+												))}
+											</select>
+										)}
+									</div>
 									<div>
 										<label className='text-[0.65rem] font-bold text-zinc-400 uppercase tracking-wider block mb-1'>Host URL</label>
 										<input
@@ -1130,6 +1263,22 @@ export default function MigrationDashboard({ initialItemPath, title = "Sitecore 
 									</select>
 								</div>
 							</div>
+
+							{/* Production Target Warning Banner */}
+							{getEnvLabel(targetHost) === "Prod" && (
+								<div className='bg-red-50 border border-red-200 rounded-xl p-3 space-y-1.5'>
+									<div className='flex items-start gap-2 text-[0.7rem] text-red-800 leading-normal'>
+										<AlertTriangle className='w-4 h-4 text-red-600 shrink-0 mt-0.5' />
+										<div>
+											<span className='font-bold block'>⚠️ Caution: Target Environment is Production!</span>
+											<span className='block text-red-700/90 mt-0.5'>
+												You are configuring the Target host to a production server. Migrations or sync events will modify live items. Proceed with absolute
+												care.
+											</span>
+										</div>
+									</div>
+								</div>
+							)}
 
 							{/* LocalStorage persistence section */}
 							<div className='pt-4 border-t border-zinc-100 space-y-4'>
@@ -1411,6 +1560,181 @@ export default function MigrationDashboard({ initialItemPath, title = "Sitecore 
 						>
 							Dismiss & Configure
 						</button>
+					</div>
+				</div>
+			)}
+
+			{/* Connection Profile Management Modal */}
+			{showProfileModal && (
+				<div className='fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50 animate-fade-in'>
+					<div className='bg-white rounded-2xl border border-[#ECE6E1] shadow-2xl p-6 max-w-2xl w-full mx-4 space-y-6 max-h-[85vh] overflow-y-auto animate-scale-up'>
+						<div className='flex justify-between items-center border-b border-zinc-100 pb-3'>
+							<h3 className='font-bold text-base text-zinc-900 flex items-center gap-2'>
+								<Layers className='w-5 h-5 text-indigo-600' />
+								Manage Connection Profiles
+							</h3>
+							<button
+								onClick={() => setShowProfileModal(false)}
+								aria-label='Close Connection Profiles'
+								className='text-zinc-400 hover:text-zinc-600 text-sm font-bold'
+							>
+								×
+							</button>
+						</div>
+
+						{/* Add/Edit Profile Form */}
+						<div className='bg-zinc-50 border border-[#ECE6E1] rounded-xl p-4 space-y-4'>
+							<h4 className='text-xs font-bold text-zinc-600 uppercase tracking-wider'>
+								{editingProfile ? "Edit Connection Profile" : "Create New Connection Profile"}
+							</h4>
+							<div className='grid grid-cols-1 md:grid-cols-2 gap-3'>
+								<div>
+									<label className='text-[0.65rem] font-bold text-zinc-500 uppercase tracking-wider block mb-1'>Profile Name</label>
+									<input
+										type='text'
+										placeholder='e.g., QA Environment'
+										value={editingProfile?.name || ""}
+										onChange={(e) => setEditingProfile((prev) => ({ ...prev, name: e.target.value }))}
+										className='w-full px-2.5 py-1.5 bg-white border border-[#ECE6E1] rounded-lg text-xs focus:outline-none focus:border-zinc-900'
+									/>
+								</div>
+								<div>
+									<label className='text-[0.65rem] font-bold text-zinc-500 uppercase tracking-wider block mb-1'>Environment Type</label>
+									<select
+										value={editingProfile?.envType || "dev"}
+										onChange={(e) => setEditingProfile((prev) => ({ ...prev, envType: e.target.value as any }))}
+										className='w-full px-2.5 py-1.5 bg-white border border-[#ECE6E1] rounded-lg text-xs focus:outline-none focus:border-zinc-900'
+									>
+										<option value='local'>Local / Docker</option>
+										<option value='dev'>Development</option>
+										<option value='qa'>QA / Testing</option>
+										<option value='uat'>UAT / Staging</option>
+										<option value='prod'>Production</option>
+									</select>
+								</div>
+								<div className='md:col-span-2'>
+									<label className='text-[0.65rem] font-bold text-zinc-500 uppercase tracking-wider block mb-1'>Host URL</label>
+									<input
+										type='text'
+										placeholder='https://xmc-env-cm.sitecorecloud.io'
+										value={editingProfile?.host || ""}
+										onChange={(e) => setEditingProfile((prev) => ({ ...prev, host: e.target.value }))}
+										className='w-full px-2.5 py-1.5 bg-white border border-[#ECE6E1] rounded-lg text-xs focus:outline-none focus:border-zinc-900'
+									/>
+								</div>
+								<div>
+									<label className='text-[0.65rem] font-bold text-zinc-500 uppercase tracking-wider block mb-1'>OAuth Client ID</label>
+									<input
+										type='text'
+										placeholder='Client ID...'
+										value={editingProfile?.clientId || ""}
+										onChange={(e) => setEditingProfile((prev) => ({ ...prev, clientId: e.target.value }))}
+										className='w-full px-2.5 py-1.5 bg-white border border-[#ECE6E1] rounded-lg text-xs focus:outline-none focus:border-zinc-900'
+									/>
+								</div>
+								<div>
+									<label className='text-[0.65rem] font-bold text-zinc-500 uppercase tracking-wider block mb-1'>OAuth Client Secret</label>
+									<input
+										type='password'
+										placeholder='Client Secret...'
+										value={editingProfile?.clientSecret || ""}
+										onChange={(e) => setEditingProfile((prev) => ({ ...prev, clientSecret: e.target.value }))}
+										className='w-full px-2.5 py-1.5 bg-white border border-[#ECE6E1] rounded-lg text-xs focus:outline-none focus:border-zinc-900'
+									/>
+								</div>
+							</div>
+							<div className='flex justify-end gap-2 pt-2 border-t border-zinc-200/60'>
+								{editingProfile && (
+									<button
+										onClick={() => setEditingProfile(null)}
+										className='px-3 py-1.5 border border-[#ECE6E1] hover:bg-white rounded-lg text-xs font-semibold text-zinc-600 transition-all'
+									>
+										Cancel
+									</button>
+								)}
+								<button
+									onClick={() => {
+										if (!editingProfile?.name || !editingProfile?.host) {
+											alert("Profile Name and Host URL are required.");
+											return;
+										}
+										saveProfile({
+											...editingProfile,
+											envType: editingProfile.envType || "dev",
+										});
+										setEditingProfile(null);
+									}}
+									className='px-3 py-1.5 bg-zinc-900 hover:bg-zinc-800 text-white rounded-lg text-xs font-semibold shadow-sm transition-all'
+								>
+									{editingProfile?.id ? "Update Profile" : "Add Profile"}
+								</button>
+							</div>
+						</div>
+
+						{/* Saved Profiles List */}
+						<div className='space-y-3'>
+							<h4 className='text-xs font-bold text-zinc-500 uppercase tracking-wider'>Saved Profiles ({profiles.length})</h4>
+							{profiles.length === 0 ? (
+								<div className='text-center py-6 text-xs text-zinc-400 bg-zinc-50 border border-dashed border-[#ECE6E1] rounded-xl italic'>
+									No connection profiles saved. Complete the form above to register your first environment profile.
+								</div>
+							) : (
+								<div className='space-y-2.5 max-h-60 overflow-y-auto pr-1'>
+									{profiles.map((p) => {
+										const envColors = {
+											local: "bg-emerald-50 text-emerald-700 border-emerald-200",
+											dev: "bg-blue-50 text-blue-700 border-blue-200",
+											qa: "bg-amber-50 text-amber-700 border-amber-200",
+											uat: "bg-orange-50 text-orange-700 border-orange-200",
+											prod: "bg-red-50 text-red-700 border-red-200",
+										}[p.envType || "dev"];
+
+										return (
+											<div
+												key={p.id}
+												className='flex flex-col  justify-between border border-[#ECE6E1] bg-white hover:bg-zinc-50/30 rounded-xl p-3 gap-3 transition-all'
+											>
+												<div className='space-y-1'>
+													<div className='flex items-center gap-2'>
+														<span className='font-semibold text-xs text-zinc-800'>{p.name}</span>
+														<span className={`text-[0.6rem] font-bold uppercase border px-1.5 py-0.5 rounded-full ${envColors}`}>{p.envType}</span>
+													</div>
+													<div className='text-[0.65rem] text-zinc-400 font-mono truncate max-w-sm sm:max-w-xs md:max-w-md' title={p.host}>
+														{p.host}
+													</div>
+												</div>
+												<div className='flex gap-2'>
+													<button
+														onClick={() => loadProfileIntoSource(p)}
+														className='px-2.5 py-1 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-bold text-[0.65rem] uppercase tracking-wider rounded-lg border border-indigo-100 transition-all'
+													>
+														Source
+													</button>
+													<button
+														onClick={() => loadProfileIntoTarget(p)}
+														className='px-2.5 py-1 bg-amber-50 hover:bg-amber-100 text-amber-700 font-bold text-[0.65rem] uppercase tracking-wider rounded-lg border border-amber-100 transition-all'
+													>
+														Target
+													</button>
+													<button
+														onClick={() => setEditingProfile(p)}
+														className='px-2.5 py-1 bg-zinc-50 hover:bg-zinc-100 text-zinc-600 font-bold text-[0.65rem] uppercase tracking-wider rounded-lg border border-zinc-200 transition-all'
+													>
+														Edit
+													</button>
+													<button
+														onClick={() => deleteProfile(p.id)}
+														className='px-2.5 py-1 bg-red-50 hover:bg-red-100 text-red-600 font-bold text-[0.65rem] uppercase tracking-wider rounded-lg border border-red-100 transition-all'
+													>
+														Delete
+													</button>
+												</div>
+											</div>
+										);
+									})}
+								</div>
+							)}
+						</div>
 					</div>
 				</div>
 			)}
