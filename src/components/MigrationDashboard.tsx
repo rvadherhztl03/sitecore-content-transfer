@@ -5,7 +5,7 @@ import React, { useState, useEffect, useRef } from "react";
 import { MigrationService, DataTree, LogType } from "@/src/utils/migrationService";
 import { ContentTreeExplorer } from "./ContentTreeExplorer";
 import JSZip from "jszip";
-import { Layers, Layers3, Activity, Globe, CheckCircle2, Play, Download, Upload, Moon, Sun, Search, Plus, Database, FileText, AlertTriangle } from "lucide-react";
+import { Layers, Layers3, Activity, Globe, CheckCircle2, Play, Download, Upload, Moon, Sun, Search, Plus, Database, FileText, AlertTriangle, ArrowUpDown } from "lucide-react";
 
 interface LogMessage {
 	text: string;
@@ -278,6 +278,28 @@ export default function MigrationDashboard({ initialItemPath, title = "Sitecore 
 		setIsSaved(true);
 		setIsModified(false);
 		addLog("Connection credentials updated successfully in LocalStorage. 💾", "success");
+	};
+
+	const swapCredentials = () => {
+		const tempHost = sourceHost;
+		const tempClientId = sourceClientId;
+		const tempClientSecret = sourceClientSecret;
+		const tempAuthority = sourceAuthority;
+		const tempAudience = sourceAudience;
+
+		setSourceHost(targetHost);
+		setSourceClientId(targetClientId);
+		setSourceClientSecret(targetClientSecret);
+		setSourceAuthority(targetAuthority);
+		setSourceAudience(targetAudience);
+
+		setTargetHost(tempHost);
+		setTargetClientId(tempClientId);
+		setTargetClientSecret(tempClientSecret);
+		setTargetAuthority(tempAuthority);
+		setTargetAudience(tempAudience);
+
+		addLog("Swapped Source and Target connection credentials. 🔄", "info");
 	};
 
 	const handlePackageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -996,6 +1018,14 @@ export default function MigrationDashboard({ initialItemPath, title = "Sitecore 
 									<Database className='w-5 h-5 text-indigo-600' />
 									📡 Connection Credentials
 								</h3>
+								<button
+									onClick={swapCredentials}
+									title="Swap Source and Target Connection Credentials"
+									className='flex items-center gap-1.5 px-3 py-1.5 bg-zinc-50 hover:bg-zinc-100 border border-[#ECE6E1] text-zinc-700 hover:text-zinc-950 font-bold text-[0.65rem] uppercase tracking-wider rounded-xl transition-all duration-150'
+								>
+									<ArrowUpDown className='w-3.5 h-3.5 text-zinc-500' />
+									Swap
+								</button>
 								{/* Hidden switch for testing check compatibility */}
 								<div className='sr-only'>
 									<span className='text-xs text-zinc-500 font-semibold'>Demo Mode</span>

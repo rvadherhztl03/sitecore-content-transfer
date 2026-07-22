@@ -229,4 +229,23 @@ describe('MigrationDashboard', () => {
     const storedUpdated = JSON.parse(window.localStorage.getItem('sitecore_sync_credentials') || '{}');
     expect(storedUpdated.sourceHost).toBe('https://src-modified.com');
   });
+
+  it('swaps source and target connection credentials when Swap button is clicked', () => {
+    render(<MigrationDashboard />);
+
+    const srcHostInput = screen.getByPlaceholderText('https://source-cm-host.com');
+    const tgtHostInput = screen.getByPlaceholderText('https://target-cm-host.com');
+
+    // Set initial values
+    fireEvent.change(srcHostInput, { target: { value: 'https://source-initial.com' } });
+    fireEvent.change(tgtHostInput, { target: { value: 'https://target-initial.com' } });
+
+    // Click Swap button
+    const swapBtn = screen.getByRole('button', { name: /Swap/ });
+    fireEvent.click(swapBtn);
+
+    // Verify values are swapped
+    expect(srcHostInput).toHaveValue('https://target-initial.com');
+    expect(tgtHostInput).toHaveValue('https://source-initial.com');
+  });
 });
