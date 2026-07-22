@@ -969,7 +969,6 @@ export default function MigrationDashboard({ initialItemPath, title = "Sitecore 
 																<option value='OverrideExistingTree'>OverrideExistingTree</option>
 																<option value='OverrideExistingItem'>OverrideExistingItem</option>
 																<option value='KeepExistingItem'>KeepExistingItem</option>
-																<option value='LatestWin'>LatestWin</option>
 															</select>
 														</td>
 														<td className='px-3 py-2 text-center'>
