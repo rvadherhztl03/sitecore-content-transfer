@@ -655,7 +655,7 @@ export class MigrationService {
             'x-chunkset-id': chunksetId,
             'x-chunk-index': String(i)
           },
-          body: chunkBuffer
+          body: new Uint8Array(chunkBuffer)
         });
 
         if (!uploadRes.ok) {

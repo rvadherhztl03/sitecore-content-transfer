@@ -150,7 +150,7 @@ export async function POST(request: Request) {
 
     const zipBuffer = await zip.generateAsync({ type: "uint8array", compression: "DEFLATE" });
 
-    return new NextResponse(new Blob([zipBuffer as any]), {
+    return new NextResponse(zipBuffer as any, {
       headers: {
         'Content-Type': 'application/zip',
         'Content-Disposition': `attachment; filename="contentTransfer-${transferId}.zip"`
