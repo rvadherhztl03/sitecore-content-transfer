@@ -79,7 +79,7 @@ export default function MigrationDashboard({ initialItemPath, title = "Sitecore 
 		if (h.includes("dev") || h.includes("local") || h.includes("localhost")) return "Dev";
 		if (h.includes("qa") || h.includes("test")) return "QA";
 		if (h.includes("uat")) return "UAT";
-		if (h.includes("stage") || h.includes("staging")) return "UAT";
+		if (h.includes("stage") || h.includes("staging")) return "STAGE";
 		if (h.includes("prod")) return "Prod";
 		return "Live";
 	};
