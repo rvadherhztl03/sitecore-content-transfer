@@ -252,6 +252,56 @@ export default function MigrationDashboard({ initialItemPath, title = "Sitecore 
 		]);
 	};
 
+	const handleJsonQueueUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+		const file = e.target.files?.[0];
+		if (!file) return;
+
+		const reader = new FileReader();
+		reader.onload = (event) => {
+			try {
+				const text = event.target?.result as string;
+				const parsed = JSON.parse(text);
+
+				let treesToLoad: any[] = [];
+				if (Array.isArray(parsed)) {
+					treesToLoad = parsed;
+				} else if (parsed.dataTrees && Array.isArray(parsed.dataTrees)) {
+					treesToLoad = parsed.dataTrees;
+				} else if (parsed.items && Array.isArray(parsed.items)) {
+					treesToLoad = parsed.items;
+				} else {
+					throw new Error("Invalid JSON format. Expected an array of items or a dataTrees object wrapper.");
+				}
+
+				const validatedTrees = treesToLoad
+					.filter((item: any) => item.path || item.ItemPath)
+					.map((item: any) => ({
+						ItemPath: item.path || item.ItemPath,
+						Scope: item.scope || item.Scope || "ItemAndDescendants",
+						MergeStrategy: item.strategy || item.MergeStrategy || "OverrideExistingTree"
+					}));
+
+				if (validatedTrees.length === 0) {
+					addLog("No valid item paths found in JSON.", "error");
+					return;
+				}
+
+				setDataTrees((prev) => {
+					const existingPaths = prev.map((t) => t.ItemPath);
+					const newTrees = validatedTrees.filter((t) => !existingPaths.includes(t.ItemPath));
+					return [...prev, ...newTrees];
+				});
+
+				addLog(`Successfully loaded ${validatedTrees.length} content tree paths from JSON queue! 📂`, "success");
+			} catch (err) {
+				console.error(err);
+				addLog(`Failed to parse JSON queue file: ${err instanceof Error ? err.message : String(err)}`, "error");
+			}
+		};
+		reader.readAsText(file);
+		e.target.value = ""; // Reset input
+	};
+
 	const handleRemoveTree = (idx: number) => {
 		setDataTrees((prev) => prev.filter((_, i) => i !== idx));
 	};
@@ -984,6 +1034,20 @@ export default function MigrationDashboard({ initialItemPath, title = "Sitecore 
 									>
 										+ Add Path
 									</button>
+									<button
+										onClick={() => document.getElementById("json-queue-upload")?.click()}
+										className='flex items-center gap-1.5 px-2.5 py-1.5 border border-[#ECE6E1] hover:bg-zinc-50 rounded-xl text-xs font-semibold transition-all duration-150'
+									>
+										<Upload className='w-3.5 h-3.5 text-zinc-500' />
+										Import JSON Queue
+									</button>
+									<input 
+										id="json-queue-upload"
+										type="file"
+										accept=".json"
+										className="hidden"
+										onChange={handleJsonQueueUpload}
+									/>
 								</div>
 							</div>
 							{/* Explorer component wrapper */}
