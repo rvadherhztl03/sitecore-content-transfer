@@ -50,6 +50,15 @@ describe('toEnvs', () => {
     };
     expect(toEnvs(ctx as any).map((e) => e.name)).toEqual(['Acme (acme-dev)', 'Acme (r2)', 'QA']);
   });
+  it('tells apart same-named environments by tenantId when there is no tenantName', () => {
+    const ctx = {
+      resourceAccess: [
+        { resourceId: 'xmcloud', tenantId: 't1', tenantDisplayName: 'X', context: { preview: 'p1' } },
+        { resourceId: 'xmcloud', tenantId: 't2', tenantDisplayName: 'X', context: { preview: 'p2' } },
+      ],
+    };
+    expect(toEnvs(ctx as any).map((e) => e.name)).toEqual(['X (t1)', 'X (t2)']);
+  });
 });
 
 describe('envKind', () => {
@@ -70,6 +79,10 @@ describe('envKind', () => {
   });
   it('checks tenantName when name has no match', () => {
     expect(kind('Content hub', 'acme-prd')).toBe('prod');
+  });
+  it('lets a prod match in either text win over a weaker match in the other', () => {
+    expect(kind('Latest Content', 'acme-prod')).toBe('prod');
+    expect(kind('Develop Hub', 'acme-qa')).toBe('test');
   });
 });
 

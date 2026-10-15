@@ -36,9 +36,9 @@ export function toEnvs(ctx: ApplicationContext | undefined): Env[] {
     const name = r.tenantDisplayName ?? r.tenantName ?? r.resourceId;
     return contextId ? [{ id: r.tenantId ?? contextId, name, contextId, tenantName: r.tenantName, r }] : [];
   });
-  // Same display name twice: add the tenant (or resource id) so the pickers can tell them apart.
+  // Same display name twice: add the tenant name, tenant id or resource id so the pickers can tell them apart.
   return envs.map(({ r, ...env }) =>
-    envs.filter((e) => e.name === env.name).length > 1 ? { ...env, name: `${env.name} (${r.tenantName ?? r.resourceId})` } : env,
+    envs.filter((e) => e.name === env.name).length > 1 ? { ...env, name: `${env.name} (${r.tenantName ?? r.tenantId ?? r.resourceId})` } : env,
   );
 }
 
@@ -50,13 +50,10 @@ const KINDS: [EnvKind, RegExp][] = [
   ['dev', /dev|local/i],
 ];
 
-/** Guesses the environment's role from its name, then its tenant name; `null` when neither says. */
+/** Guesses the environment's role from its name and tenant name; prod beats test beats dev across both, `null` when neither says. */
 export function envKind(env: Env): EnvKind | null {
-  for (const text of [env.name, env.tenantName]) {
-    const kind = text && KINDS.find(([, re]) => re.test(text))?.[0];
-    if (kind) return kind;
-  }
-  return null;
+  const texts = [env.name, env.tenantName].filter((t): t is string => !!t);
+  return KINDS.find(([, re]) => texts.some((t) => re.test(t)))?.[0] ?? null;
 }
 
 // Returns '' when there is nothing useful to say (undefined, empty string or `{}`).
