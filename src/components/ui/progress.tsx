@@ -40,6 +40,7 @@ function Progress({
   return (
     <ProgressPrimitive.Root
       data-slot="progress"
+      value={value}
       data-indeterminate={indeterminate ? "" : undefined}
       aria-label={indeterminate ? "Progress" : `Progress: ${value ?? 0}%`}
       className={cn(

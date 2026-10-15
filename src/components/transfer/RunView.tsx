@@ -44,6 +44,7 @@ export function formatDuration(ms: number): string {
 
 type Words = {
   label: string;
+  noun: string;
   running(source: string, target: string): string;
   summary(source: string, target: string): string;
   done: string;
@@ -55,6 +56,7 @@ type Words = {
 const WORDS: Record<RunKind, Words> = {
   transfer: {
     label: 'Transfer',
+    noun: 'transfer',
     running: (_s, t) => `Copying content to ${t}`,
     summary: (s, t) => `Content from ${s} is now in ${t}.`,
     done: 'Transfer complete',
@@ -64,6 +66,7 @@ const WORDS: Record<RunKind, Words> = {
   },
   export: {
     label: 'Export',
+    noun: 'export',
     running: (s) => `Packaging content from ${s}`,
     summary: () => 'Your package is ready to download.',
     done: 'Package ready',
@@ -73,6 +76,7 @@ const WORDS: Record<RunKind, Words> = {
   },
   install: {
     label: 'Install',
+    noun: 'install',
     running: (_s, t) => `Installing package into ${t}`,
     summary: (_s, t) => `The package is now in ${t}.`,
     done: 'Package installed',
@@ -337,7 +341,7 @@ export function RunView({
                 <H className={cn('leading-tight font-semibold break-words', compact ? 'text-lg' : 'text-2xl')}>
                   {failed ? w.failed : w.running(from, to)}
                 </H>
-                {failed && <p className="text-neutral-fg text-sm">Check the activity log below for what went wrong.</p>}
+                {failed && <p className="text-neutral-fg text-sm">See the activity log for details.</p>}
               </div>
             </div>
             {!failed && (
@@ -348,14 +352,7 @@ export function RunView({
           </div>
           {!failed && (
             <>
-              {/* Blok's Progress draws the bar from `value` but doesn't hand it to Radix's root, so aria-valuenow is set here. */}
-              <Progress
-                value={percent}
-                aria-valuenow={percent}
-                aria-valuetext={`${percent}%`}
-                aria-label={`${w.label} progress`}
-                className="bg-primary-100 h-2.5"
-              />
+              <Progress value={percent} aria-label={`${w.label} progress`} className="bg-primary-100 h-2.5" />
               <p aria-live="polite" className="text-neutral-fg text-sm">
                 {chunk && (
                   <>
@@ -385,7 +382,7 @@ export function RunView({
           {activity}
         </div>
       </div>
-      {!compact && (cancel || note) && <ActionBar summary={note}>{cancel}</ActionBar>}
+      {!compact && (cancel || note) && <ActionBar summary={note ?? `Keep this tab open until the ${w.noun} finishes.`}>{cancel}</ActionBar>}
     </div>
   );
 }

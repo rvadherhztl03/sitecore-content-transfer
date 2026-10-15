@@ -99,6 +99,17 @@ describe('RunView running', () => {
     expect(live).not.toHaveTextContent('6 of 12');
   });
 
+  it('uses the last matching chunk line, not simply the last log line', () => {
+    setup({
+      logs: [
+        { time: '1', text: 'Copying chunk 5 / 12', type: 'info' },
+        { time: '2', text: 'Copying chunk 6 / 12', type: 'info' },
+        { time: '3', text: 'Assembling package on Acme · QA', type: 'info' },
+      ],
+    });
+    expect(document.querySelector('[aria-live="polite"]')).toHaveTextContent('Copying chunk 6 of 12');
+  });
+
   it('takes the verb from the log line and leaves the live region empty without a chunk line', () => {
     const { rerender, container } = setup({ logs: [{ time: '1', text: 'Uploading chunk 3 / 10', type: 'info' }] });
     expect(container.querySelector('[aria-live="polite"]')).toHaveTextContent('Uploading chunk 3 of 10');
@@ -155,6 +166,27 @@ describe('RunView running', () => {
     setup({ kind, onCancel: undefined });
     expect(screen.getByText("The import can't be cancelled once it starts.")).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /^Cancel/ })).not.toBeInTheDocument();
+  });
+
+  it.each([
+    ['transfer', 'Keep this tab open until the transfer finishes.'],
+    ['export', 'Keep this tab open until the export finishes.'],
+    ['install', 'Keep this tab open until the install finishes.'],
+  ] as const)('footer of a cancellable %s asks to keep the tab open', (kind, text) => {
+    setup({ kind });
+    const footer = screen.getByRole('contentinfo');
+    expect(within(footer).getByText(text)).toBeInTheDocument();
+    expect(within(footer).getByRole('button', { name: `Cancel ${kind}` })).toBeInTheDocument();
+  });
+
+  it('footer shows the can-not-cancel note instead of the keep-open line, and compact has neither line', () => {
+    const { unmount } = setup({ onCancel: undefined });
+    const footer = screen.getByRole('contentinfo');
+    expect(within(footer).getByText("The import can't be cancelled once it starts.")).toBeInTheDocument();
+    expect(screen.queryByText(/Keep this tab open/)).not.toBeInTheDocument();
+    unmount();
+    setup({ compact: true });
+    expect(screen.queryByText(/Keep this tab open/)).not.toBeInTheDocument();
   });
 
   it('without onCancel an export shows neither Cancel nor the import note nor a footer', () => {
@@ -260,6 +292,7 @@ describe('RunView failed', () => {
     });
     const items = within(screen.getByRole('list', { name: 'Steps' })).getAllByRole('listitem');
     expect(items[1]).toHaveTextContent('Failed');
+    expect(screen.getByText('See the activity log for details.')).toBeInTheDocument();
     expect(container.querySelector('details')).toBeNull();
     expect(screen.getByText('Copying chunk 7 / 12')).toBeVisible();
     expect(screen.queryByRole('progressbar')).not.toBeInTheDocument();
