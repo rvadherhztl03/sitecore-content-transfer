@@ -35,8 +35,11 @@ export function toEnvs(ctx: ApplicationContext | undefined): Env[] {
   });
 }
 
-const errorText = (e: any): string =>
-  typeof e === 'string' ? e : (e?.message ?? e?.Message ?? e?.title ?? JSON.stringify(e));
+// Returns '' when there is nothing useful to say (undefined, empty string or `{}`).
+const errorText = (e: any): string => {
+  const t = typeof e === 'string' ? e : (e?.message ?? e?.Message ?? e?.title ?? JSON.stringify(e));
+  return typeof t === 'string' && t !== '{}' ? t : '';
+};
 
 export async function call<T = any>(
   client: SdkClient,
@@ -50,17 +53,18 @@ export async function call<T = any>(
   try {
     res = await client[kind](key, options);
   } catch (e) {
-    throw new SdkError(errorText(e));
+    throw new SdkError(errorText(e) || 'SDK call failed');
   }
   // query() catches thrown errors into `error` and wraps the hey-api result in `data`.
-  if (kind === 'query' && res?.error !== undefined) throw new SdkError(errorText(res.error));
+  if (kind === 'query' && res?.error !== undefined) throw new SdkError(errorText(res.error) || 'SDK call failed');
   const { data, error, response } = (kind === 'query' ? res?.data : res) ?? {};
   if ((response && !response.ok) || error !== undefined) {
     const status: number | undefined = response?.status;
     if (status === 401 || status === 403) {
       throw new SdkError(`The app can't access ${env.name}. Grant it in Cloud Portal → app → environment access.`, status);
     }
-    throw new SdkError(`HTTP ${status}: ${errorText(error)}`, status);
+    const text = errorText(error) || response?.statusText;
+    throw new SdkError(`HTTP ${status}${text ? `: ${text}` : ''}`, status);
   }
   return { data, response };
 }

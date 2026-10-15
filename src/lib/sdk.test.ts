@@ -65,6 +65,29 @@ describe('call', () => {
     expect(err.status).toBe(500);
   });
 
+  it('reports an API error without a body as just the status', async () => {
+    const { client } = fakeClient({ [START]: () => ({ status: 500 }) });
+    const err = await call(client, DEV, 'mutate', START).catch((e) => e);
+    expect(err).toBeInstanceOf(SdkError);
+    expect(err.status).toBe(500);
+    expect(err.message).toBe('HTTP 500');
+  });
+
+  it('resolves a 204 with no data to {}', async () => {
+    const { client } = fakeClient({ [START]: () => ({ status: 204 }) });
+    const res = await call(client, DEV, 'mutate', START);
+    expect(res.data).toEqual({});
+    expect(res.response?.status).toBe(204);
+  });
+
+  it('wraps errors thrown inside query()', async () => {
+    const key = 'xmc.contentTransfer.getContentTransferStatus';
+    const { client } = fakeClient({ [key]: () => { throw new Error('bridge down'); } });
+    const err = await call(client, DEV, 'query', key).catch((e) => e);
+    expect(err).toBeInstanceOf(SdkError);
+    expect(err.message).toBe('bridge down');
+  });
+
   it('wraps thrown client errors', async () => {
     const { client } = fakeClient({ [START]: () => { throw new Error('bridge down'); } });
     const err = await call(client, DEV, 'mutate', START).catch((e) => e);

@@ -16,8 +16,8 @@ export function fakeClient(handlers: Record<string, Handler>) {
     if (!key.startsWith('xmc.')) return { data: reply.data };
     const status = reply.status ?? 200;
     const result = {
-      data: status < 400 ? reply.data : undefined,
-      error: status >= 400 ? (reply.error ?? `HTTP ${status}`) : undefined,
+      data: status < 400 ? (reply.data ?? {}) : undefined, // real client returns {} for 204/empty bodies
+      error: status >= 400 ? (reply.error ?? {}) : undefined, // real client: error = body || {}
       response: new Response(null, { status, headers: reply.headers }),
     };
     return kind === 'query' ? { data: result } : result;
