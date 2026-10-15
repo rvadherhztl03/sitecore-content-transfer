@@ -20,10 +20,10 @@ const TREE: Record<string, ReturnType<typeof item>[]> = {
 };
 const byPath = (params: { body: { variables: { path: string } } }) => reply(...(TREE[params.body.variables.path] ?? []));
 
-function setup(selectedPaths: string[] = []) {
+function setup(selectedPaths: string[] = [], title?: string) {
   const onToggle = vi.fn();
   const { client, calls } = fakeClient({ 'xmc.authoring.graphql': byPath });
-  const view = render(<ContentTree client={client} env={ENV} selectedPaths={selectedPaths} onToggle={onToggle} />);
+  const view = render(<ContentTree client={client} env={ENV} selectedPaths={selectedPaths} onToggle={onToggle} title={title} />);
   return { onToggle, calls, ...view };
 }
 
@@ -32,6 +32,31 @@ describe('ContentTree', () => {
     setup();
     expect(await screen.findByText('content')).toBeInTheDocument();
     expect(screen.getByText('media library')).toBeInTheDocument();
+  });
+
+  it('shows the title as the card heading', async () => {
+    setup([], 'Browse Dev');
+    expect(screen.getByRole('heading', { name: 'Browse Dev' })).toBeInTheDocument();
+    await screen.findByText('content');
+  });
+
+  it('has no heading without a title', async () => {
+    setup();
+    await screen.findByText('content');
+    expect(screen.queryByRole('heading')).not.toBeInTheDocument();
+  });
+
+  it('searches with the new placeholder and keeps the filter label', async () => {
+    setup();
+    await screen.findByText('content');
+    expect(screen.getByLabelText('Filter loaded items')).toHaveAttribute('placeholder', 'Search loaded items');
+  });
+
+  it('tints selected rows only', async () => {
+    setup(['/sitecore/content']);
+    const row = (await screen.findByRole('checkbox', { name: 'Select /sitecore/content' })).parentElement;
+    expect(row).toHaveClass('bg-primary-50');
+    expect(screen.getByRole('checkbox', { name: 'Select /sitecore/media library' }).parentElement).not.toHaveClass('bg-primary-50');
   });
 
   it('expanding loads children', async () => {
@@ -82,6 +107,13 @@ describe('ContentTree', () => {
     expect(screen.getByText('media library')).toBeInTheDocument();
     expect(screen.getByText('/sitecore/media library')).toBeInTheDocument();
     expect(screen.queryByText('content')).not.toBeInTheDocument();
+  });
+
+  it('tints selected rows in the filtered list too', async () => {
+    setup(['/sitecore/media library']);
+    await screen.findByText('content');
+    fireEvent.change(screen.getByLabelText('Filter loaded items'), { target: { value: 'med' } });
+    expect(screen.getByRole('checkbox', { name: 'Select /sitecore/media library' }).parentElement).toHaveClass('bg-primary-50');
   });
 
   it('shows Retry on error', async () => {

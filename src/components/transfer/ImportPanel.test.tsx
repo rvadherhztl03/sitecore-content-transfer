@@ -11,6 +11,16 @@ async function zipFile(name: string, withMeta = true) {
   return new File([await zip.generateAsync({ type: 'uint8array' })], name);
 }
 
+// Two chunks (the second one media), 4 + 6 bytes of raif.
+async function chunkedZip(name: string) {
+  const chunks = [
+    { chunkSet: 0, index: 0, isMedia: false, offset: 0, length: 4 },
+    { chunkSet: 0, index: 1, isMedia: true, offset: 4, length: 6 },
+  ];
+  const zip = new JSZip().file('package.raif', 'raif-bytes').file('package-chunks.json', JSON.stringify(chunks));
+  return new File([await zip.generateAsync({ type: 'uint8array' })], name);
+}
+
 function setup(disabled?: boolean) {
   const onPackage = vi.fn();
   render(<ImportPanel onPackage={onPackage} disabled={disabled} />);
@@ -24,7 +34,10 @@ describe('ImportPanel', () => {
     expect(await screen.findByText('/sitecore/content/A')).toBeInTheDocument();
     expect(screen.getByText('This item only')).toBeInTheDocument();
     expect(screen.getByText('Keep the newer one')).toBeInTheDocument();
-    expect(screen.getByText('p.zip').parentElement).toHaveTextContent('p.zip · 1 chunk');
+    expect(screen.getByText("What's inside")).toBeInTheDocument();
+    expect(screen.getByRole('columnheader', { name: 'If it exists' })).toBeInTheDocument();
+    expect(screen.getByText('p.zip')).toHaveClass('font-mono');
+    expect(screen.getByText(/1 chunk · 0 media/)).toBeInTheDocument();
     expect(onPackage).toHaveBeenCalledOnce();
     const pkg = onPackage.mock.calls[0][0];
     expect(pkg.fileName).toBe('p.zip');
@@ -33,15 +46,48 @@ describe('ImportPanel', () => {
 
   it('accepts a dropped file', async () => {
     const { onPackage } = setup();
-    fireEvent.drop(screen.getByText(/Drop a package/), { dataTransfer: { files: [await zipFile('d.zip')] } });
+    fireEvent.drop(screen.getByText(/Drop a .zip or .raif here/), { dataTransfer: { files: [await zipFile('d.zip')] } });
     expect(await screen.findByText('/sitecore/content/A')).toBeInTheDocument();
     expect(onPackage).toHaveBeenCalledWith(expect.objectContaining({ fileName: 'd.zip' }));
+  });
+
+  it('shows the drop zone copy before anything is loaded', () => {
+    setup();
+    expect(screen.getByText('Drop a .zip or .raif here, or browse')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Replace' })).not.toBeInTheDocument();
+  });
+
+  it('shows the size, chunk and media counts on the file card', async () => {
+    const { onPackage, input } = setup();
+    const file = await chunkedZip('c.zip');
+    fireEvent.change(input, { target: { files: [file] } });
+    expect(await screen.findByText(/ · 2 chunks · 1 media$/)).toBeInTheDocument();
+    expect(onPackage).toHaveBeenCalledWith(expect.objectContaining({ fileName: 'c.zip', size: file.size }));
+  });
+
+  it('formats the size with one decimal', async () => {
+    const { input } = setup();
+    fireEvent.change(input, { target: { files: [new File([new Uint8Array(1536)], 'big.raif')] } });
+    expect(await screen.findByText('1.5 KB · 1 chunk · 0 media')).toBeInTheDocument();
+    fireEvent.change(input, { target: { files: [new File([new Uint8Array(512)], 'small.raif')] } });
+    expect(await screen.findByText('512 B · 1 chunk · 0 media')).toBeInTheDocument();
+    fireEvent.change(input, { target: { files: [new File([new Uint8Array(3 * 1024 * 1024)], 'huge.raif')] } });
+    expect(await screen.findByText('3.0 MB · 3 chunks · 0 media')).toBeInTheDocument();
+  });
+
+  it('Replace opens the file chooser', async () => {
+    const { input } = setup();
+    fireEvent.change(input, { target: { files: [await zipFile('p.zip')] } });
+    const click = vi.spyOn(input, 'click');
+    fireEvent.click(await screen.findByRole('button', { name: 'Replace' }));
+    expect(click).toHaveBeenCalledOnce();
   });
 
   it('says so when a package has no metadata', async () => {
     const { input } = setup();
     fireEvent.change(input, { target: { files: [new File(['raif'], 'bare.raif')] } });
     expect(await screen.findByText('No metadata in this package.')).toBeInTheDocument();
+    expect(screen.queryByText("What's inside")).not.toBeInTheDocument();
   });
 
   it('shows the error for an unsupported file and reports null', async () => {
@@ -64,7 +110,7 @@ describe('ImportPanel', () => {
   it('ignores drops and disables the input when disabled', async () => {
     const { onPackage, input } = setup(true);
     expect(input).toBeDisabled();
-    fireEvent.drop(screen.getByText(/Drop a package/), { dataTransfer: { files: [await zipFile('d.zip')] } });
+    fireEvent.drop(screen.getByText(/Drop a .zip or .raif here/), { dataTransfer: { files: [await zipFile('d.zip')] } });
     expect(onPackage).not.toHaveBeenCalled();
   });
 });

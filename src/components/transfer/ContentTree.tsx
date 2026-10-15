@@ -7,7 +7,8 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Icon } from '@/lib/icon';
 import { fetchChildren, type Env, type SdkClient, type TreeNode } from '@/lib/sdk';
-import { mdiChevronDown, mdiChevronRight, mdiFileOutline, mdiFolderOutline } from '@mdi/js';
+import { cn } from '@/lib/utils';
+import { mdiChevronDown, mdiChevronRight, mdiFileOutline, mdiFolderOutline, mdiMagnify } from '@mdi/js';
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 
 const ROOT = '/sitecore';
@@ -18,7 +19,11 @@ type Props = {
   env: Env;
   selectedPaths: string[];
   onToggle(path: string, checked: boolean): void;
+  /** Card heading, e.g. `Browse Acme · Development`. */
+  title?: string;
 };
+
+const ROW = 'flex min-h-10 items-center gap-2 rounded-lg pr-2.5 pointer-coarse:min-h-11';
 
 // Keyed by environment: switching env remounts the tree, which drops the cache, the expansion state and the filter,
 // and lets Tree's unmount guard discard any response still in flight for the previous env.
@@ -26,7 +31,7 @@ export function ContentTree(props: Props) {
   return <Tree key={props.env.id} {...props} />;
 }
 
-function Tree({ client, env, selectedPaths, onToggle }: Props) {
+function Tree({ client, env, selectedPaths, onToggle, title }: Props) {
   const [cache, setCache] = useState<Record<string, Entry>>({ [ROOT]: 'loading' });
   const [open, setOpen] = useState<Record<string, boolean>>({});
   const [filter, setFilter] = useState('');
@@ -59,9 +64,11 @@ function Tree({ client, env, selectedPaths, onToggle }: Props) {
     if (isOpen && !cache[path]) void load(path);
   };
 
+  // The pseudo-element grows the tap target to 44px on touch screens without shifting the layout.
   const check = (n: TreeNode) => (
     <Checkbox
       aria-label={`Select ${n.path}`}
+      className="relative size-[18px] pointer-coarse:after:absolute pointer-coarse:after:-inset-3.5"
       checked={selected.has(n.path)}
       onCheckedChange={(c) => onToggle(n.path, c === true)}
     />
@@ -69,27 +76,30 @@ function Tree({ client, env, selectedPaths, onToggle }: Props) {
   const nodeIcon = (n: TreeNode) => (
     <Icon path={n.hasChildren ? mdiFolderOutline : mdiFileOutline} className="text-muted-foreground size-5 shrink-0" />
   );
+  const rowTone = (n: TreeNode) => (selected.has(n.path) ? 'bg-primary-50' : 'hover:bg-neutral-bg');
+  const nameClass = (n: TreeNode) => cn('min-w-0 truncate text-md', selected.has(n.path) && 'font-semibold');
 
   const row = (n: TreeNode, depth: number): ReactNode => (
     <Collapsible open={!!open[n.path]} onOpenChange={(o) => toggle(n.path, o)}>
-      <div className="flex items-center gap-1.5 py-0.5 pr-2" style={{ paddingLeft: `${depth * 1.25}rem` }}>
+      <div className={cn(ROW, rowTone(n))} style={{ paddingLeft: `${0.625 + depth * 1.25}rem` }}>
         {n.hasChildren ? (
           <CollapsibleTrigger asChild>
             <Button
               type="button"
               variant="ghost"
               size="icon-sm"
+              className="size-7 rounded-md pointer-coarse:size-11"
               aria-label={`${open[n.path] ? 'Collapse' : 'Expand'} ${n.name}`}
             >
               <Icon path={open[n.path] ? mdiChevronDown : mdiChevronRight} />
             </Button>
           </CollapsibleTrigger>
         ) : (
-          <span className="size-8 shrink-0" aria-hidden />
+          <span className="size-7 shrink-0 pointer-coarse:size-11" aria-hidden />
         )}
         {check(n)}
         {nodeIcon(n)}
-        <span className="min-w-0 truncate text-sm" title={n.name}>
+        <span className={nameClass(n)} title={n.name}>
           {n.name}
         </span>
       </div>
@@ -99,7 +109,7 @@ function Tree({ client, env, selectedPaths, onToggle }: Props) {
 
   const branch = (path: string, depth: number): ReactNode => {
     const entry = cache[path];
-    const indent = { paddingLeft: `${depth * 1.25}rem` };
+    const indent = { paddingLeft: `${0.625 + depth * 1.25}rem` };
     if (!entry || entry === 'loading') {
       return (
         <div role="status" aria-label="Loading" className="flex flex-col gap-1 py-1 pr-2" style={indent}>
@@ -147,16 +157,23 @@ function Tree({ client, env, selectedPaths, onToggle }: Props) {
     : [];
 
   return (
-    <section className="flex flex-col gap-2">
-      <Input
-        aria-label="Filter loaded items"
-        placeholder="Filter loaded items"
-        value={filter}
-        onChange={(e) => setFilter(e.target.value)}
-      />
+    <section className="flex min-w-0 flex-col overflow-hidden rounded-[14px] border bg-white">
+      <div className="flex flex-col gap-2.5 border-b px-4 py-3.5">
+        {title && <h2 className="text-[15px] font-semibold break-words">{title}</h2>}
+        <div className="relative">
+          <Icon path={mdiMagnify} className="text-muted-foreground pointer-events-none absolute top-1/2 left-3 size-5 -translate-y-1/2" aria-hidden />
+          <Input
+            aria-label="Filter loaded items"
+            placeholder="Search loaded items"
+            className="rounded-lg pl-10 text-sm pointer-coarse:h-11"
+            value={filter}
+            onChange={(e) => setFilter(e.target.value)}
+          />
+        </div>
+      </div>
       {/* Radix wraps the content in a `display: table` div (inline style), which grows to the widest row and defeats `truncate`; force it to a block. */}
-      <ScrollArea className="h-96 rounded-md border [&>[data-slot=scroll-area-viewport]>div]:!block">
-        <div className="p-1">
+      <ScrollArea className="h-100 [&>[data-slot=scroll-area-viewport]>div]:!block">
+        <div className="p-2">
           {!query ? (
             branch(ROOT, 0)
           ) : matches.length === 0 ? (
@@ -164,10 +181,10 @@ function Tree({ client, env, selectedPaths, onToggle }: Props) {
           ) : (
             <ul>
               {matches.map((n) => (
-                <li key={n.path} className="flex items-center gap-1.5 px-2 py-1">
+                <li key={n.path} className={cn(ROW, 'pl-2.5', rowTone(n))}>
                   {check(n)}
                   {nodeIcon(n)}
-                  <span className="min-w-0 truncate text-sm" title={n.name}>
+                  <span className={nameClass(n)} title={n.name}>
                     {n.name}
                   </span>
                   <span className="text-muted-foreground min-w-0 truncate font-mono text-xs" title={n.path}>
