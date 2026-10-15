@@ -240,6 +240,38 @@ describe('runTransfer', () => {
     expect(r.logs).not.toContainEqual(STILL_IMPORTING('QA'));
   });
 
+  it('reads the import state from BlobState as the Item Transfer API reports it', async () => {
+    let polls = 0;
+    const { client } = fakeClient(
+      happyHandlers({ getBlobState: () => ({ data: polls++ === 0 ? { BlobState: 'Uploaded' } : { BlobState: 'Transferred', Error: null } }) }),
+    );
+    const r = recorder();
+    expect(await runTransfer(client, OPTS, r.cb)).toBe(true);
+    expect(r.steps).toContainEqual([5, 'done']);
+  });
+
+  it('fails with a clear message when the import finished with errors', async () => {
+    const { client } = fakeClient(happyHandlers({ getBlobState: () => ({ data: { BlobState: 'TransferredWithErrors' } }) }));
+    const r = recorder();
+    expect(await runTransfer(client, OPTS, r.cb)).toBe(false);
+    expect(r.steps).toContainEqual([5, 'fail']);
+    expect(r.logs.map(([m]) => m).join('\n')).toContain('QA imported the package with errors (TransferredWithErrors).');
+  });
+
+  it('logs the raw import state each time it changes', async () => {
+    let polls = 0;
+    const states = [{ status: 'NotFound' }, { status: 'NotFound' }, { BlobState: 'Uploaded' }, { status: 'OK' }];
+    const { client } = fakeClient(happyHandlers({ getBlobState: () => ({ data: states[Math.min(polls++, 3)] }) }));
+    const r = recorder();
+    expect(await runTransfer(client, OPTS, r.cb)).toBe(true);
+    const raw = r.logs.filter(([m]) => m.startsWith('QA import state: '));
+    expect(raw.map(([m]) => m)).toEqual([
+      'QA import state: {"status":"NotFound"}',
+      'QA import state: {"BlobState":"Uploaded"}',
+      'QA import state: {"status":"OK"}',
+    ]);
+  });
+
   it('does not warn the target may still import when it rejected the import', async () => {
     const reject = { status: 400, error: 'Allowed schema is not specified. Use either file://<fileName> or blob://<fileName>.' };
     const { client, calls } = fakeClient(happyHandlers({ consumeFile: () => reject }));

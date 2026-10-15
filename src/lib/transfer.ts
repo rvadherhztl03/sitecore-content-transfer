@@ -91,16 +91,30 @@ export async function consumeFiles(
   }
 }
 
+// The SDK types GetBlobState as `{ status }`, but the Item Transfer API reports `BlobState`; accept either.
+const importState = (data: unknown): string => {
+  const d = (data ?? {}) as Record<string, unknown>;
+  const value = [d.status, d.Status, d.BlobState, d.blobState].find((v) => typeof v === 'string');
+  return typeof value === 'string' ? value : '';
+};
+
 export async function verifyFiles(client: SdkClient, env: Env, files: string[], cb: RunCallbacks, signal?: AbortSignal) {
   for (const fileName of files) {
     const deadline = Date.now() + TIMING.verifyTimeoutMs;
+    let last: string | undefined;
     for (;;) {
       signal?.throwIfAborted();
-      const { data } = await call<{ status?: string }>(client, env, 'query', CT + 'getBlobState', { query: { fileName } });
-      const status = data?.status ?? '';
+      const { data } = await call(client, env, 'query', CT + 'getBlobState', { query: { fileName } });
+      const status = importState(data);
+      // Show what the target reports whenever it changes, so an unexpected state is visible rather than a silent wait.
+      if (status !== last) cb.onLog(`${env.name} import state: ${JSON.stringify(data).slice(0, 300)}`, 'info');
+      last = status;
       if (BLOB_SUCCESS.includes(status)) {
         cb.onLog(`Imported ${fileName} (${status}).`, 'success');
         break;
+      }
+      if (status === 'TransferredWithErrors') {
+        throw new Error(`${env.name} imported the package with errors (TransferredWithErrors). Check the item transfer details on ${env.name}.`);
       }
       if (BLOB_FAILURE.includes(status)) throw new Error(`Import failed on ${env.name}: ${status}`);
       if (Date.now() >= deadline) throw new Error('Timed out waiting for the import to finish.');
