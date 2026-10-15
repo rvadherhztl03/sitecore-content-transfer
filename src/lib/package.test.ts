@@ -78,6 +78,15 @@ describe('package', () => {
     await expect(readPackage(file)).rejects.toThrow('This package has no package.raif.');
   });
 
+  it('readPackage rejects an empty .raif', async () => {
+    await expect(readPackage(new File([], 'e.raif'))).rejects.toThrow('This package is empty.');
+  });
+
+  it('readPackage rejects a zip with an empty chunk map', async () => {
+    const file = new File([await buildPackage([], ITEMS)], 'p.zip');
+    await expect(readPackage(file)).rejects.toThrow('This package is empty.');
+  });
+
   it('readPackage rejects other file types', async () => {
     await expect(readPackage(new File(['x'], 'q.txt'))).rejects.toThrow('Choose a .zip or .raif package.');
   });

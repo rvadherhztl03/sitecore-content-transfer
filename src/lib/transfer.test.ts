@@ -239,6 +239,15 @@ describe('runTransfer', () => {
     expect(r.logs).toContainEqual(['Cancelled.', 'warning']);
   });
 
+  it('never saves a chunk the source returned without binary data', async () => {
+    const { client, calls } = fakeClient(happyHandlers({ getChunk: () => ({ data: { foo: 1 } }) }));
+    const r = recorder();
+    expect(await runTransfer(client, OPTS, r.cb)).toBe(false);
+    expect(ofKey(calls, 'saveChunk')).toHaveLength(0);
+    expect(r.logs).toContainEqual(['Dev returned no data for chunk 1 of chunk set cs1.', 'error']);
+    expect(ofKey(calls, 'deleteContentTransfer').map(ctxOf)).toEqual(['ctx-dev', 'ctx-qa']);
+  });
+
   it('treats a cleanup failure as a warning', async () => {
     const { client } = fakeClient(happyHandlers({ deleteContentTransfer: () => ({ status: 500 }) }));
     const r = recorder();

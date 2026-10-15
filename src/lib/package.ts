@@ -35,6 +35,13 @@ const slices = (raif: Blob) =>
   }));
 
 export async function readPackage(file: Blob & { name: string }): Promise<{ items: PackageItem[]; parts: PackagePart[] }> {
+  const pkg = await unpack(file);
+  // Nothing to upload: importing would complete a never-saved chunk set or report success for nothing.
+  if (pkg.parts.every((p) => !p.chunks.length)) throw new Error('This package is empty.');
+  return pkg;
+}
+
+async function unpack(file: Blob & { name: string }): Promise<{ items: PackageItem[]; parts: PackagePart[] }> {
   const name = file.name.toLowerCase();
   // Never read a bare .raif: it can be large, and slices are all the upload needs.
   if (name.endsWith('.raif')) return { items: [], parts: [{ chunks: slices(file) }] };

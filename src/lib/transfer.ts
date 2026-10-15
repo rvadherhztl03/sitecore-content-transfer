@@ -147,9 +147,7 @@ async function fetchChunk(
   transferId: string,
   chunksetId: string,
   chunkId: number,
-  signal?: AbortSignal,
 ): Promise<{ blob: Blob; isMedia: boolean }> {
-  signal?.throwIfAborted();
   const { data, response } = await call<Blob>(client, env, 'query', CT + 'getChunk', { path: { transferId, chunksetId, chunkId } });
   // Never pass a non-binary body on to a target or a package.
   if (!(data instanceof Blob)) throw new Error(`${env.name} returned no data for chunk ${chunkId + 1} of chunk set ${chunksetId}.`);
@@ -197,7 +195,7 @@ export async function runTransfer(
         signal?.throwIfAborted();
         cb.onLog(`Copying chunk ${copied + 1} / ${total}`, 'info');
         const path = { transferId, chunksetId: set.ChunkSetId, chunkId };
-        const { blob, isMedia } = await fetchChunk(client, source, transferId, set.ChunkSetId, chunkId, signal);
+        const { blob, isMedia } = await fetchChunk(client, source, transferId, set.ChunkSetId, chunkId);
         signal?.throwIfAborted();
         await call(client, target, 'mutate', CT + 'saveChunk', { path, query: { isMedia }, body: blob });
         copied++;
@@ -249,7 +247,7 @@ export async function runExport(
       for (let index = 0; index < set.ChunkCount; index++) {
         signal?.throwIfAborted();
         cb.onLog(`Downloading chunk ${chunks.length + 1} / ${total}`, 'info');
-        const { blob, isMedia } = await fetchChunk(client, source, transferId, set.ChunkSetId, index, signal);
+        const { blob, isMedia } = await fetchChunk(client, source, transferId, set.ChunkSetId, index);
         chunks.push({ chunkSet, index, isMedia, data: blob });
         cb.onProgress(Math.round(30 + (65 * chunks.length) / total));
       }
