@@ -29,6 +29,11 @@ describe('AppHeader', () => {
     expect(screen.queryByText('New transfer')).not.toBeInTheDocument();
   });
 
+  it('disables the brand button, keeping its name, without onHome', () => {
+    render(<AppHeader crumb="New transfer" />);
+    expect(screen.getByRole('button', { name: 'Content Transfer' })).toBeDisabled();
+  });
+
   it('shows Cancel only when onCancel is given', () => {
     const onCancel = vi.fn();
     const { rerender } = render(<AppHeader onHome={vi.fn()} />);

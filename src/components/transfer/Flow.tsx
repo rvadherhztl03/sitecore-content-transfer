@@ -80,7 +80,9 @@ export function Flow({ client, mode, envs, onHome }: Props) {
   const routeOk = !!source && (!transfer || !!target);
   const prodChecked = !!target && prodFor === target.id;
   const running = !!run?.running;
-  // Lost the route on a later step (an environment vanished): show Route again.
+  // Lost the route on a later step (an environment vanished): back to Route, so re-picking a card doesn't
+  // jump ahead to the remembered step. Render-phase reset; this pass still shows Route.
+  if (!run && !routeOk && step) setStep(0);
   const current = run ? 3 : routeOk ? step : 0;
 
   // Announce completion or failure: move focus to the run heading.
@@ -345,8 +347,10 @@ export function Flow({ client, mode, envs, onHome }: Props) {
 
   return (
     <div className="bg-muted flex min-h-screen flex-col">
-      <AppHeader crumb={transfer ? 'New transfer' : 'New export'} onHome={onHome} onCancel={running ? undefined : onHome} />
-      <Stepper steps={steps} current={current} locked={running} onGo={go} />
+      {/* No way out through the header while running (leaving would abort the run), and no Cancel or step links
+          once a run exists: RunView's own buttons lead on. */}
+      <AppHeader crumb={transfer ? 'New transfer' : 'New export'} onHome={running ? undefined : onHome} onCancel={run ? undefined : onHome} />
+      <Stepper steps={steps} current={current} locked={!!run} onGo={go} />
       {body}
       {footer}
     </div>

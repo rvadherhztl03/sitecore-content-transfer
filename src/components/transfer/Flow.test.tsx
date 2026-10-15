@@ -49,6 +49,8 @@ const group = (name: string) => screen.getByRole('group', { name });
 const radio = (legend: string, env: Env) => within(group(legend)).getByRole('radio', { name: new RegExp(env.name) });
 const stepBar = () => screen.getByRole('navigation', { name: 'Transfer steps' });
 const ofKey = (calls: { key: string }[], k: string) => calls.filter((c) => c.key === CT + k) as any[];
+// jsdom may lack these; the export test stubs them and afterEach puts the originals back.
+const URL_FNS = { createObjectURL: URL.createObjectURL, revokeObjectURL: URL.revokeObjectURL };
 
 // The tree loads its root on arrival at Content; wait for it so no update lands outside act().
 async function toContent() {
@@ -74,6 +76,7 @@ describe('Flow', () => {
   afterEach(() => {
     TIMING.pollMs = pollMs;
     vi.restoreAllMocks();
+    Object.assign(URL, URL_FNS);
   });
 
   describe('Route', () => {
@@ -112,6 +115,17 @@ describe('Flow', () => {
       expect(screen.getByText('Pick items from the tree or paste a path.')).toBeInTheDocument();
       expect(screen.getByRole('button', { name: 'Review transfer' })).toBeDisabled();
       expect(screen.getByRole('heading', { name: 'Browse Acme Production' })).toBeInTheDocument();
+    });
+
+    it('a vanished target on Review returns to Route, and re-picking needs Continue', async () => {
+      const { client, rerender } = setup();
+      await toReview();
+      expect(screen.getByRole('heading', { level: 1, name: 'Ready to transfer' })).toBeInTheDocument();
+      rerender(<Flow client={client} mode="transfer" envs={[DEV, PROD]} onHome={vi.fn()} />);
+      expect(screen.getByRole('heading', { level: 1, name: 'Where is the content going?' })).toBeInTheDocument();
+      fireEvent.click(radio('To', PROD));
+      expect(screen.getByRole('heading', { level: 1, name: 'Where is the content going?' })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Continue' })).toBeEnabled();
     });
 
     it('a vanished environment is unselected', () => {
@@ -200,6 +214,10 @@ describe('Flow', () => {
       expect(screen.getByText('Items').parentElement).toHaveTextContent('Items3');
       expect(screen.getByText('Chunks').parentElement).toHaveTextContent('Chunks2');
       expect(screen.getByText('Took')).toBeInTheDocument();
+      // Locked after the result too: only RunView's buttons lead on.
+      expect(within(stepBar()).queryAllByRole('button')).toHaveLength(0);
+      expect(screen.queryByRole('button', { name: 'Cancel' })).not.toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Content Transfer' })).toBeEnabled();
 
       click('Start another transfer');
       expect(screen.getByRole('heading', { level: 1, name: 'Where is the content going?' })).toBeInTheDocument();
@@ -219,6 +237,29 @@ describe('Flow', () => {
       expect(screen.getByText("The import can't be cancelled once it starts.")).toBeInTheDocument();
       release();
       expect(await screen.findByText('Transfer complete')).toBeInTheDocument();
+    });
+
+    it('the header home button is disabled while running and does not abort', async () => {
+      let release!: () => void;
+      let chunks = 0;
+      const { calls, onHome } = setup({
+        overrides: {
+          getChunk: () =>
+            chunks++ === 0 ? new Promise<FakeReply>((r) => (release = () => r({ data: new Blob(['c']) }))) : { data: new Blob(['c']) },
+        },
+      });
+      await toReview();
+      click('Start transfer');
+      await waitFor(() => expect(release).toBeTypeOf('function'));
+      const home = screen.getByRole('button', { name: 'Content Transfer' });
+      expect(home).toBeDisabled();
+      fireEvent.click(home);
+      expect(onHome).not.toHaveBeenCalled();
+      expect(ofKey(calls, 'deleteContentTransfer')).toHaveLength(0);
+      // Later chunks resolve at once; the run carries on to the end.
+      release();
+      expect(await screen.findByText('Transfer complete')).toBeInTheDocument();
+      expect(ofKey(calls, 'saveChunk').length).toBeGreaterThan(0);
     });
 
     it('unmount aborts the run', async () => {
@@ -274,6 +315,7 @@ describe('Flow', () => {
     expect(await screen.findByText('Package ready')).toBeInTheDocument();
     expect(create).toHaveBeenCalledTimes(1);
     expect(revoke).not.toHaveBeenCalled();
+    await waitFor(() => expect(revoke).toHaveBeenCalledWith('blob:pkg'), { timeout: 1500 });
     expect(names[0]).toMatch(/^contentTransfer-Acme · Development-\d{4}-\d{2}-\d{2}\.zip$/);
     expect(ofKey(calls, 'saveChunk')).toHaveLength(0);
 
