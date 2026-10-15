@@ -1,147 +1,77 @@
 # Sitecore Content Transfer Pro
 
-A **Sitecore Marketplace Extension** that enables enterprise-grade content migration between XM Cloud environments directly from within the Sitecore UI. Built with Next.js 15 and the Sitecore Marketplace SDK.
+A **Sitecore Marketplace app** for moving content between XM Cloud environments from inside the Sitecore UI. You pick environments from dropdowns; there are no client IDs, secrets or hosts to enter. Built with Next.js 15, the Sitecore Marketplace SDK and the Sitecore Blok design system.
 
 ---
 
-## What It Does
-
-Sitecore Content Transfer Pro provides three core workflows from a single fullscreen dashboard:
+## What it does
 
 | Workflow | Description |
 |---|---|
-| **Env → Env Transfer** | Migrates content items directly from a Source XM Cloud environment to a Target via a 6-step proxied pipeline |
-| **Export Package** | Exports selected content from Source into a downloadable `.zip` package |
-| **Import Package** | Uploads and imports a pre-exported `.zip` or `.raif` package file into a Target environment |
+| **Transfer between environments** | Copies the queued items from a source environment to a target environment, then imports them into the target database (`master` or `web`). |
+| **Export package** | Exports the queued items from the source environment into a downloadable `.zip` package. |
+| **Import package** | Imports a `.zip` or `.raif` package into a target environment. The package contents are shown before you start. |
+
+Build the queue by ticking items in the source content tree or by pasting a path. Each queued item has a scope (`SingleItem` or `ItemAndDescendants`) and a merge strategy (`OverrideExistingItem`, `KeepExistingItem`, `LatestWin` or `OverrideExistingTree`). The Pages context panel pre-fills the queue with the page you are editing.
 
 ---
 
-## Features
+## Setup
 
-- **6-Step Migration Pipeline** — Initiate, poll status, stream chunks, stitch, consume, and verify — with live progress tracking
-- **Content Tree Explorer** — Browse the Source environment content tree and select items via checkboxes
-- **Package Verification Modal** — Inspect and review all content items inside an uploaded package before importing
-- **OAuth Client Credentials Auth** — Authenticates against Sitecore Cloud Auth (`auth.sitecorecloud.io`) server-side; credentials are never exposed to the browser
-- **Demo Mode** — Run full end-to-end simulations with mocked API responses, no real credentials required
-- **Dark / Light Theme** — Toggle between themes from the dashboard header
-- **Real-time Execution Console** — Live log output with timestamped info, success, warning, and error messages
-- **Configurable Merge Strategies** — Choose how conflicts are resolved when a content item already exists on the target:
+1. Install the app in **Sitecore Cloud Portal**.
+2. Grant it access to **every environment you want to transfer between**. The app can only list and call environments it has been granted.
+3. Map the extension points to these routes:
 
-  | Strategy | Behaviour |
-  |---|---|
-  | `OverrideExistingItem` | Replaces only the single target item with the source version, leaving its descendants untouched |
-  | `KeepExistingItem` | Skips the item entirely if it already exists on the target — source version is ignored |
-  | `LatestWin` | Compares last-modified timestamps and keeps whichever version (source or target) is newer |
-  | `OverrideExistingTree` | Replaces the target item **and all its descendants** with the source versions |
-- **Configurable Scopes** — `SingleItem` or `ItemAndDescendants` per path
-- **Multiple Content Paths** — Queue multiple item paths in a single migration run
+| Extension point | Route |
+|---|---|
+| Fullscreen | `/fullscreen-extension` |
+| Standalone | `/standalone-extension` |
+| Pages context panel | `/pages-contextpanel-extension` |
+
+The routes only work when opened by Sitecore through an extension point, not directly in a browser. See the [Sitecore Marketplace documentation](https://doc.sitecore.com/mp/en/developers/marketplace/introduction-to-sitecore-marketplace.html).
 
 ---
 
-## Extension Points
-
-This app integrates with three Sitecore Marketplace extension points:
-
-### Fullscreen Extension
-- **Location:** `src/app/fullscreen-extension/page.tsx`
-- Renders the full `MigrationDashboard` UI inside XM Cloud as a fullscreen panel.
-
-### Pages Context Panel Extension
-- **Location:** `src/app/pages-contextpanel-extension/page.tsx`
-- Pre-fills the migration source path from the currently selected page in the XM Cloud Pages editor. Subscribes to `pages.context` events via the Marketplace SDK.
-
-### Standalone Extension
-- **Location:** `src/app/standalone-extension/page.tsx`
-- Runs the migration dashboard as a standalone app outside of other extension points.
-
----
-
-## Architecture
-
-```
-src/
-├── app/
-│   ├── api/migrate/
-│   │   ├── initiate/      — POST: Starts a transfer job on the Source environment
-│   │   ├── status/        — POST: Polls the transfer job state and retrieves chunkset metadata
-│   │   ├── transfer-chunk/ — POST: Downloads a chunk from Source and uploads it to Target
-│   │   ├── complete/      — POST: Signals Target to stitch uploaded chunks into a .raif package
-│   │   ├── consume/       — POST: Extracts the .raif package into the target database
-│   │   ├── verify/        — POST: Polls the target blob state to confirm successful transfer
-│   │   ├── download/      — POST: Stitches all chunks and returns a .zip for browser download
-│   │   └── upload/        — POST: Accepts chunked binary uploads from the browser to Target storage
-│   ├── fullscreen-extension/
-│   ├── pages-contextpanel-extension/
-│   └── standalone-extension/
-├── components/
-│   ├── MigrationDashboard.tsx   — Main dashboard UI component
-│   └── ContentTreeExplorer.tsx  — Interactive source content tree browser
-└── utils/
-    ├── auth.ts               — OAuth Client Credentials token utility
-    └── migrationService.ts   — Migration pipeline orchestration service (Live & Demo modes)
-```
-
----
-
-## Getting Started
-
-> **Note:** Extension point routes (e.g. `/fullscreen-extension`) cannot be accessed directly in the browser. They must be invoked within the Sitecore XM Cloud environment through configured extension points. See the [Sitecore Marketplace documentation](https://doc.sitecore.com/mp/en/developers/marketplace/introduction-to-sitecore-marketplace.html).
-
-### 1. Clone and install
+## Develop
 
 ```sh
-git clone https://github.com/rvadherhztl03/sitecore-content-transfer.git
-cd sitecore-content-transfer
 npm install
-```
-
-### 2. Run the development server
-
-```sh
 npm run dev
-```
-
-### 3. Run tests
-
-```sh
 npm test
 ```
 
-### 4. Configure in XM Cloud
+---
 
-Register the app in your Sitecore Marketplace account and map the extension point URLs to the appropriate routes.
+## How it works
+
+Everything runs in the browser through the Marketplace SDK: `xmc.contentTransfer.*` for the transfer pipeline and `xmc.authoring.graphql` for the content tree and item IDs. Each call carries the `sitecoreContextId` of the environment it targets, and the Sitecore host authenticates it. Environments come from the app's `resourceAccess`. There are no server routes, client IDs, secrets or hosts.
+
+The pipelines live in `src/lib/transfer.ts`:
+
+- **Transfer:** create job on the source, wait for the package, copy every chunk to the target, assemble, import into the database, verify, then clean up both sides.
+- **Export:** create job, wait for the package, download the chunks and zip them.
+- **Import:** upload the package chunks, assemble, import into the database, verify.
 
 ---
 
-## Environment Credentials
+## Package format
 
-When running in **Live Mode**, you will need OAuth credentials for both environments:
+A package is a `.zip` with three files:
 
-| Field | Description |
+| File | Content |
 |---|---|
-| Host URL | The CM host of your XM Cloud environment (e.g. `https://your-cm.sitecorecloud.io`) |
-| Client ID | OAuth Client ID from your Sitecore Cloud app registration |
-| Client Secret | OAuth Client Secret |
-| Authority | Auth endpoint — defaults to `https://auth.sitecorecloud.io` |
-| Audience | API audience — defaults to `https://api.sitecorecloud.io` |
+| `package-metadata.json` | `[{ ItemPath, ItemId, Scope, MergeStrategy }]`, one entry per queued item |
+| `package.raif` | The transferred chunks, concatenated |
+| `package-chunks.json` | `[{ chunkSet, index, isMedia, offset, length }]`, where each chunk sits inside `package.raif` |
 
-> Credentials are sent over HTTPS and processed entirely server-side. They are never stored, cached, or printed in console logs.
-
-Use **Demo Mode** to test the full migration pipeline with simulated API responses and no real credentials.
+Older zips without `package-chunks.json` still import: `package.raif` is uploaded in 1 MB slices. A bare `.raif` file imports the same way.
 
 ---
 
-## Tech Stack
+## Limitations
 
-| Technology | Version |
-|---|---|
-| Next.js | 15 |
-| React | 19 |
-| TypeScript | 5.9 |
-| `@sitecore-marketplace-sdk/client` | ^0.2.0 |
-| `@sitecore-marketplace-sdk/xmc` | ^0.2.0 |
-| JSZip | ^3.10 |
-| Vitest | ^4.1 |
+- Same Sitecore Cloud organization only: the app sees only the environments it was granted.
+- Light theme only.
 
 ---
 
