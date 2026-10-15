@@ -13,7 +13,6 @@ describe('queue', () => {
       { value: 'OverrideExistingTree', label: 'Replace it and everything below', long: 'Replace it and everything below' },
       { value: 'OverrideExistingItem', label: 'Replace this item only', long: 'Replace this item only' },
       { value: 'KeepExistingItem', label: "Keep what's there", long: "Keep what's there" },
-      { value: 'LatestWin', label: 'Keep the newer one', long: 'Keep the newer one' },
     ]);
   });
 
@@ -43,13 +42,11 @@ describe('queue', () => {
     expect(labels('SingleItem')).toEqual([
       ['OverrideExistingItem', 'Replace this item only'],
       ['KeepExistingItem', "Keep what's there"],
-      ['LatestWin', 'Keep the newer one'],
     ]);
     // + Children replaces the item and each child on its own, never anything deeper.
     expect(labels('ItemAndChildren')).toEqual([
       ['OverrideExistingItem', 'Replace it and its children'],
       ['KeepExistingItem', "Keep what's there"],
-      ['LatestWin', 'Keep the newer one'],
     ]);
     expect(mergesFor('ItemAndChildren')[0].long).toBe('Replace it and its children');
     expect(mergesFor('ItemAndDescendants')).toBe(MERGES);
@@ -67,23 +64,23 @@ describe('queue', () => {
     expect(withScope(newTree('/a'), 'ItemAndChildren')).toEqual({ itemPath: '/a', scope: 'ItemAndChildren', mergeStrategy: 'OverrideExistingItem' });
     expect(withScope(newTree('/a'), 'SingleItem')).toEqual({ itemPath: '/a', scope: 'SingleItem', mergeStrategy: 'OverrideExistingItem' });
     expect(withScope(newTree('/a'), 'ItemAndDescendants')).toEqual(newTree('/a'));
-    const keep = { ...newTree('/a'), mergeStrategy: 'LatestWin' as const };
+    const keep = { ...newTree('/a'), mergeStrategy: 'KeepExistingItem' as const };
     expect(withScope(keep, 'ItemAndChildren')).toEqual({ ...keep, scope: 'ItemAndChildren' });
   });
 
   it('mergeTrees dedupes by path', () => {
-    const existing = [{ itemPath: '/a', scope: 'SingleItem' as const, mergeStrategy: 'LatestWin' as const }];
+    const existing = [{ itemPath: '/a', scope: 'SingleItem' as const, mergeStrategy: 'KeepExistingItem' as const }];
     expect(mergeTrees(existing, [newTree('/a/'), newTree('/b')])).toEqual([existing[0], newTree('/b')]);
   });
 
   it('parseQueueJson accepts an array, { dataTrees } and { items }', () => {
     const rows = [
-      { path: '/a', scope: 'SingleItem', strategy: 'LatestWin' },
+      { path: '/a', scope: 'SingleItem', strategy: 'OverrideExistingItem' },
       { ItemPath: '/b', Scope: 'SingleItem', MergeStrategy: 'KeepExistingItem' },
       { itemPath: '/c', mergeStrategy: 'OverrideExistingItem' },
     ];
     const expected = [
-      { itemPath: '/a', scope: 'SingleItem', mergeStrategy: 'LatestWin' },
+      { itemPath: '/a', scope: 'SingleItem', mergeStrategy: 'OverrideExistingItem' },
       { itemPath: '/b', scope: 'SingleItem', mergeStrategy: 'KeepExistingItem' },
       { itemPath: '/c', scope: 'ItemAndDescendants', mergeStrategy: 'OverrideExistingItem' },
     ];
@@ -96,6 +93,14 @@ describe('queue', () => {
     expect(parseQueueJson('[{"path":"/a","scope":"Nope","strategy":"Nope"}]')).toEqual([newTree('/a')]);
   });
 
+  it('parseQueueJson reads the retired LatestWin as "Keep what\'s there", never as a replace', () => {
+    // The Content Transfer API has no LatestWin; keeping the target's item is the choice that can't lose content.
+    expect(parseQueueJson('[{"path":"/a","strategy":"LatestWin"},{"path":"/b","scope":"SingleItem","MergeStrategy":"LatestWin"}]')).toEqual([
+      { itemPath: '/a', scope: 'ItemAndDescendants', mergeStrategy: 'KeepExistingItem' },
+      { itemPath: '/b', scope: 'SingleItem', mergeStrategy: 'KeepExistingItem' },
+    ]);
+  });
+
   it('parseQueueJson never replaces everything below a single item', () => {
     expect(parseQueueJson('[{"path":"/a","scope":"SingleItem","strategy":"OverrideExistingTree"}]')).toEqual([
       { itemPath: '/a', scope: 'SingleItem', mergeStrategy: 'OverrideExistingItem' },
@@ -103,9 +108,9 @@ describe('queue', () => {
   });
 
   it('parseQueueJson accepts ItemAndChildren, without replacing everything below', () => {
-    expect(parseQueueJson('[{"path":"/a","scope":"ItemAndChildren"},{"path":"/b","scope":"ItemAndChildren","strategy":"LatestWin"}]')).toEqual([
+    expect(parseQueueJson('[{"path":"/a","scope":"ItemAndChildren"},{"path":"/b","scope":"ItemAndChildren","strategy":"KeepExistingItem"}]')).toEqual([
       { itemPath: '/a', scope: 'ItemAndChildren', mergeStrategy: 'OverrideExistingItem' },
-      { itemPath: '/b', scope: 'ItemAndChildren', mergeStrategy: 'LatestWin' },
+      { itemPath: '/b', scope: 'ItemAndChildren', mergeStrategy: 'KeepExistingItem' },
     ]);
   });
 

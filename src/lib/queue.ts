@@ -10,7 +10,6 @@ export const MERGES: { value: MergeStrategy; label: string; long: string }[] = [
   { value: 'OverrideExistingTree', label: 'Replace it and everything below', long: 'Replace it and everything below' },
   { value: 'OverrideExistingItem', label: 'Replace this item only', long: 'Replace this item only' },
   { value: 'KeepExistingItem', label: "Keep what's there", long: "Keep what's there" },
-  { value: 'LatestWin', label: 'Keep the newer one', long: 'Keep the newer one' },
 ];
 
 /**
@@ -64,6 +63,10 @@ const pick = (row: Record<string, unknown>, ...names: string[]) => names.map((n)
 const oneOf = <T extends string>(options: { value: T }[], value: unknown, fallback: T) =>
   options.find((o) => o.value === value)?.value ?? fallback;
 
+// Older lists can name LatestWin, which the API doesn't support: keep the target's item rather than fall back
+// to the default, which deletes everything below.
+const retired = (strategy: unknown) => (strategy === 'LatestWin' ? 'KeepExistingItem' : strategy);
+
 /** Reads a queue file: an array, `{ dataTrees }` or `{ items }`; unsupported scope/merge fall back to the defaults. */
 export function parseQueueJson(text: string): DataTree[] {
   const parsed = JSON.parse(text);
@@ -79,7 +82,7 @@ export function parseQueueJson(text: string): DataTree[] {
     const tree: DataTree = {
       itemPath: path.trim(),
       scope: defaults.scope,
-      mergeStrategy: oneOf(MERGES, pick(row, 'strategy', 'MergeStrategy', 'mergeStrategy'), defaults.mergeStrategy),
+      mergeStrategy: oneOf(MERGES, retired(pick(row, 'strategy', 'MergeStrategy', 'mergeStrategy')), defaults.mergeStrategy),
     };
     return [withScope(tree, oneOf(SCOPES, pick(row, 'scope', 'Scope'), defaults.scope))];
   });

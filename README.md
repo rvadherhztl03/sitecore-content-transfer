@@ -21,7 +21,8 @@ Options are shown in plain language. Each item has what it includes, `This item`
 | Replace it and everything below | `OverrideExistingTree` |
 | Replace this item only | `OverrideExistingItem` |
 | Keep what's there | `KeepExistingItem` |
-| Keep the newer one | `LatestWin` |
+
+These are the three strategies the Content Transfer API lists. `LatestWin` ("Keep the newer one") isn't offered: the SDK types it but the API doesn't support it. A JSON list that still names it is read as `Keep what's there`.
 
 Sitecore's API has no item-and-children scope, so `+ Children` is expanded when the run starts: the item and each of its direct children (read from the source at that moment) are sent as single items, and a child you also queued on its own keeps its own settings. Nested items are left alone: `+ Children` offers `Replace it and its children`, which replaces the item and each child on its own but nothing below them. `Replace it and everything below` is only offered with `+ Everything below`; switching an item to `This item` or `+ Children` moves it to `Replace this item only` or `Replace it and its children`. Each child becomes its own package on the target, and an item with 1,000 or more children is refused (use `+ Everything below` instead).
 

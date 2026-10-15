@@ -33,7 +33,8 @@ describe('ImportPanel', () => {
     fireEvent.change(input, { target: { files: [await zipFile('p.zip')] } });
     expect(await screen.findByText('/sitecore/content/A')).toBeInTheDocument();
     expect(screen.getByText('This item only')).toBeInTheDocument();
-    expect(screen.getByText('Keep the newer one')).toBeInTheDocument();
+    // An older package can still name LatestWin, which no picker offers any more: it is shown as is.
+    expect(screen.getByText('LatestWin')).toBeInTheDocument();
     expect(screen.getByText("What's inside")).toBeInTheDocument();
     expect(screen.getByRole('columnheader', { name: 'If it exists' })).toBeInTheDocument();
     expect(screen.getByText('p.zip')).toHaveClass('font-mono');

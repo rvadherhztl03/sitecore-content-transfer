@@ -3,7 +3,8 @@ import { SdkError, call, fetchChildren, fetchItemId, type Env, type SdkClient } 
 
 // The API only knows SingleItem and ItemAndDescendants; ItemAndChildren is expanded before the job is created.
 export type Scope = 'SingleItem' | 'ItemAndChildren' | 'ItemAndDescendants';
-export type MergeStrategy = 'OverrideExistingItem' | 'KeepExistingItem' | 'LatestWin' | 'OverrideExistingTree';
+// The Content Transfer API's strategies. The SDK also types LatestWin, but the API doesn't list it.
+export type MergeStrategy = 'OverrideExistingItem' | 'KeepExistingItem' | 'OverrideExistingTree';
 export type DataTree = { itemPath: string; scope: Scope; mergeStrategy: MergeStrategy };
 export type LogType = 'info' | 'success' | 'warning' | 'error';
 export type StepStatus = 'pending' | 'running' | 'done' | 'fail';
