@@ -6,7 +6,7 @@ import { cn } from "@/lib/utils";
 const geist = Geist({subsets:['latin'],variable:'--font-sans'});
 
 export const metadata: Metadata = {
-  title: 'Sitecore Marketplace Extensions',
+  title: 'Content Transfer',
   description: 'Sitecore Marketplace extension starter application',
 }
 
