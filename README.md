@@ -1,18 +1,47 @@
 # Sitecore Content Transfer Pro
 
-A **Sitecore Marketplace app** for moving content between XM Cloud environments from inside the Sitecore UI. You pick environments from dropdowns; there are no client IDs, secrets or hosts to enter. Built with Next.js 15, the Sitecore Marketplace SDK and the Sitecore Blok design system.
+A **Sitecore Marketplace app** for moving content between XM Cloud environments from inside the Sitecore UI. You pick environments by name; there are no client IDs, secrets or hosts to enter. Built with Next.js 15, the Sitecore Marketplace SDK and the Sitecore Blok design system.
 
 ---
 
 ## What it does
 
-| Workflow | Description |
-|---|---|
-| **Transfer between environments** | Copies the queued items from a source environment to a target environment, then imports them into the target database (`master` or `web`). |
-| **Export package** | Exports the queued items from the source environment into a downloadable `.zip` package. |
-| **Import package** | Imports a `.zip` or `.raif` package into a target environment. The package contents are shown before you start. |
+The app opens on **Home** ("What would you like to do?"): three actions, plus the environments the app can reach. Transfer needs at least two environments; export and install work with one.
 
-Build the queue by ticking items in the source content tree or by pasting a path. Each queued item has a scope (`SingleItem` or `ItemAndDescendants`) and a merge strategy (`OverrideExistingItem`, `KeepExistingItem`, `LatestWin` or `OverrideExistingTree`). The Pages context panel pre-fills the queue with the page you are editing.
+| Action | What it does |
+|---|---|
+| **Transfer between environments** | Copies items from a source environment into a target environment's `master` or `web` database. |
+| **Export a package** | Packages items from one environment into a `.zip` download. |
+| **Install a package** | Installs a `.zip` or `.raif` package into an environment. |
+
+Options are shown in plain language. Each item has what it includes, `This item` (`SingleItem`) or `+ Everything below` (`ItemAndDescendants`), and what happens if it already exists on the target:
+
+| Option | Value |
+|---|---|
+| Replace it and everything below | `OverrideExistingTree` |
+| Replace this item only | `OverrideExistingItem` |
+| Keep what's there | `KeepExistingItem` |
+| Keep the newer one | `LatestWin` |
+
+### Transfer
+
+1. **Route:** pick the environment to copy **From** and the one to copy **To** (cards, with a swap button; the source can't also be the target) and the database to write to. Items are always read from `master` on the source.
+2. **Content:** tick items in the source tree, add them by path, or import a JSON list. New items start as `+ Everything below` and `Replace it and everything below`; change either per item.
+3. **Review:** "Ready to transfer. Nothing has been written yet." It shows the route and every item, and warns when an item replaces everything below it on the target. If the target's name looks like production, you must tick `I understand this writes to <target>` before **Start transfer** is enabled.
+4. **Live progress:** percentage, chunk counter, a step timeline with durations and an activity log. You can cancel until the import into the target starts; after that the target finishes on its own and the app says so.
+5. **Complete:** a summary with items, chunks and time, then **Start another transfer** or **Back to home**. If a step fails, **Transfer failed** marks it and **Try again** returns to Review.
+
+### Export
+
+The same steps, with **From** only (no target or database). Review ends in **Create package**; **Package ready** downloads `contentTransfer-<source>-<date>.zip` automatically, and **Download package** saves it again.
+
+### Install a package
+
+One screen: choose a `.zip` or `.raif` file, check **What's inside** (items, what each includes and its "if it exists" rule; a bare `.raif` has no list), pick the environment and database to **Install into**, and confirm production if needed. **Install package** runs the same live progress, then **Package installed**.
+
+### Pages editor: Send this page
+
+In the Pages editor context panel, the current page is shown as a compact form: **From** and **To** (nothing preselected), an **Include subpages** switch (on by default) and **If it already exists on** `<target>` (the item-only option reads `Replace this page only`). **Send to** `<target>` opens an inline review with the same warnings and production checkbox, then **Start** runs it in the panel. Content is written to `master`, and nothing is written before you confirm. The page you sent stays fixed until you close the review or run, even if you open another page meanwhile.
 
 ---
 
