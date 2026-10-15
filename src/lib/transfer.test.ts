@@ -240,6 +240,17 @@ describe('runTransfer', () => {
     expect(r.logs).not.toContainEqual(STILL_IMPORTING('QA'));
   });
 
+  it('does not warn the target may still import when it rejected the import', async () => {
+    const reject = { status: 400, error: 'Allowed schema is not specified. Use either file://<fileName> or blob://<fileName>.' };
+    const { client, calls } = fakeClient(happyHandlers({ consumeFile: () => reject }));
+    const r = recorder();
+    expect(await runTransfer(client, OPTS, r.cb)).toBe(false);
+    expect(r.steps).toContainEqual([4, 'fail']);
+    expect(r.logs.map(([m]) => m).join('\n')).toContain('Allowed schema is not specified');
+    expect(r.logs).not.toContainEqual(STILL_IMPORTING('QA'));
+    expect(ofKey(calls, 'getBlobState')).toHaveLength(0);
+  });
+
   it('fails when the blob state is Error and warns the target may still import', async () => {
     const { client } = fakeClient(happyHandlers({ getBlobState: () => ({ data: { status: 'Error' } }) }));
     const r = recorder();
@@ -425,6 +436,13 @@ describe('runImport', () => {
     expect(await runImport(client, IMPORT, r.cb)).toBe(false);
     expect(r.logs.map(([m]) => m).join('\n')).toMatch(/^QA returned no file name for chunk set .+\.$/m);
     expect(ofKey(calls, 'consumeFile')).toHaveLength(0);
+    expect(r.logs).not.toContainEqual(STILL_IMPORTING('QA'));
+  });
+
+  it('import does not warn the target may still import when it rejected the import', async () => {
+    const { client } = fakeClient(happyHandlers({ consumeFile: () => ({ status: 400 }) }));
+    const r = recorder();
+    expect(await runImport(client, IMPORT, r.cb)).toBe(false);
     expect(r.logs).not.toContainEqual(STILL_IMPORTING('QA'));
   });
 

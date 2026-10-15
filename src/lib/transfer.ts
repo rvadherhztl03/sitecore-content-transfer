@@ -76,10 +76,18 @@ export async function waitForPackage(client: SdkClient, env: Env, transferId: st
   }
 }
 
-export async function consumeFiles(client: SdkClient, env: Env, database: string, files: string[], signal?: AbortSignal) {
+export async function consumeFiles(
+  client: SdkClient,
+  env: Env,
+  database: string,
+  files: string[],
+  signal?: AbortSignal,
+  onAccepted?: () => void,
+) {
   for (const fileName of files) {
     signal?.throwIfAborted();
     await call(client, env, 'query', CT + 'consumeFile', { query: { databaseName: database, fileName } });
+    onAccepted?.();
   }
 }
 
@@ -115,8 +123,8 @@ export async function cleanup(client: SdkClient, envs: Env[], transferId: string
 type Steps = { begin(i: number, message: string): void; done(percent: number): void };
 
 // Shared step bookkeeping: marks the running step failed on error, logs `Cancelled.` on abort,
-// returns `failed`, and always cleans up `envs`. From `importAt.step` on, the target may already be
-// importing, so a failure or cancel also warns that it may still finish.
+// returns `failed`, and always cleans up `envs`. Once the target has accepted an import
+// (`importAt.started()`), it may still be importing, so a failure or cancel also warns that it may still finish.
 async function runSteps<T>(
   client: SdkClient,
   envs: Env[],
@@ -125,7 +133,7 @@ async function runSteps<T>(
   signal: AbortSignal | undefined,
   failed: T,
   body: (steps: Steps) => Promise<T>,
-  importAt?: { step: number; target: Env },
+  importAt?: { target: Env; started(): boolean },
 ): Promise<T> {
   let step = 0;
   const steps: Steps = {
@@ -145,7 +153,7 @@ async function runSteps<T>(
     cb.onStepChange(step, 'fail');
     if (signal?.aborted) cb.onLog('Cancelled.', 'warning');
     else cb.onLog(e instanceof Error ? e.message : String(e), 'error');
-    if (importAt && step >= importAt.step) {
+    if (importAt?.started()) {
       cb.onLog(`${importAt.target.name} may still finish importing; check it before running again.`, 'warning');
     }
     return failed;
@@ -193,6 +201,8 @@ export async function runTransfer(
 ): Promise<boolean> {
   const { source, target, database, dataTrees } = opts;
   const transferId = crypto.randomUUID();
+  // Set once the target accepts an import: from then on it may finish even if this run fails.
+  let importing = false;
   return runSteps(client, [source, target], transferId, cb, signal, false, async ({ begin, done }) => {
     begin(0, `Creating transfer job on ${source.name}.`);
     signal?.throwIfAborted();
@@ -228,7 +238,7 @@ export async function runTransfer(
     done(80);
 
     begin(4, `Importing into ${database} on ${target.name}.`);
-    await consumeFiles(client, target, database, files, signal);
+    await consumeFiles(client, target, database, files, signal, () => (importing = true));
     done(88);
 
     begin(5, `Verifying the import on ${target.name}.`);
@@ -236,7 +246,7 @@ export async function runTransfer(
     done(100);
     cb.onLog('Transfer complete.', 'success');
     return true;
-  }, { step: IMPORT_STEP.transfer, target });
+  }, { target, started: () => importing });
 }
 
 export async function runExport(
@@ -295,6 +305,8 @@ export async function runImport(
 ): Promise<boolean> {
   const { target, database, parts } = opts;
   const transferId = crypto.randomUUID();
+  // Set once the target accepts an import: from then on it may finish even if this run fails.
+  let importing = false;
   const chunksetIds = parts.map(() => crypto.randomUUID());
   return runSteps(client, [target], transferId, cb, signal, false, async ({ begin, done }) => {
     begin(0, `Uploading the package to ${target.name}.`);
@@ -320,7 +332,7 @@ export async function runImport(
     done(65);
 
     begin(2, `Importing into ${database} on ${target.name}.`);
-    await consumeFiles(client, target, database, files, signal);
+    await consumeFiles(client, target, database, files, signal, () => (importing = true));
     done(80);
 
     begin(3, `Verifying the import on ${target.name}.`);
@@ -328,5 +340,5 @@ export async function runImport(
     done(100);
     cb.onLog('Import complete.', 'success');
     return true;
-  }, { step: IMPORT_STEP.import, target });
+  }, { target, started: () => importing });
 }
