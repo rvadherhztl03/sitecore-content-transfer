@@ -6,7 +6,7 @@ import { Spinner } from '@/components/ui/spinner';
 import { Icon } from '@/lib/icon';
 import type { LogType, StepStatus } from '@/lib/transfer';
 import { mdiAlertCircle, mdiCheckCircle, mdiCircleOutline, mdiContentCopy } from '@mdi/js';
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 export type LogLine = { text: string; type: LogType; time: string };
 
@@ -30,6 +30,8 @@ const STEP_TEXT: Record<StepStatus, string> = {
   done: 'finished',
   fail: 'failed',
 };
+const COPY_TEXT = { idle: 'Copy logs', copied: 'Copied', failed: 'Copy failed' };
+const CHUNK = /chunk (\d+) \/ (\d+)/i;
 const LOG_COLOR: Record<LogType, string> = {
   info: 'text-muted-foreground',
   success: 'text-success-500',
@@ -62,13 +64,27 @@ export function RunPanel({
     logRef.current?.scrollTo?.({ top: logRef.current.scrollHeight });
   }, [logs.length]);
 
+  const [copy, setCopy] = useState<keyof typeof COPY_TEXT>('idle');
+  const copyTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
+  useEffect(() => () => clearTimeout(copyTimer.current), []);
+
   const percent = Math.round(progress);
   const current = steps.find((s) => s.status === 'running');
   const status =
     result === 'success' ? 'Completed' : result === 'fail' ? 'Failed' : running ? `${current?.label ?? 'Starting'} · ${percent}%` : '';
-  // ponytail: no "copied" feedback, and a clipboard blocked by the iframe is ignored.
-  const copyLogs = () => {
-    navigator.clipboard.writeText(logs.map((l) => `${l.time} ${l.text}`).join('\n')).catch(() => {});
+  // The engine logs "<verb> chunk N / M"; the latest such line is the live counter.
+  const chunk = running ? [...logs].reverse().map((l) => CHUNK.exec(l.text)).find(Boolean) : null;
+  const copyLogs = async () => {
+    let next: 'copied' | 'failed' = 'copied';
+    try {
+      // Throws a TypeError when there is no clipboard (common in the XM Cloud iframe), so it lands in the catch.
+      await navigator.clipboard.writeText(logs.map((l) => `${l.time} ${l.text}`).join('\n'));
+    } catch {
+      next = 'failed';
+    }
+    setCopy(next);
+    clearTimeout(copyTimer.current);
+    copyTimer.current = setTimeout(() => setCopy('idle'), 2000);
   };
 
   const body = (
@@ -76,7 +92,10 @@ export function RunPanel({
       <div aria-live="polite" className="text-sm font-semibold">
         {status}
       </div>
-      <Progress value={progress} />
+      <div className="flex items-center gap-3">
+        <Progress value={progress} />
+        {chunk && <span className="text-muted-foreground shrink-0 text-xs">{`Chunk ${chunk[1]} / ${chunk[2]}`}</span>}
+      </div>
       <ol className="flex flex-col gap-2">
         {steps.map((s, i) => (
           <li key={i} className="flex items-center gap-2 text-sm">
@@ -95,7 +114,7 @@ export function RunPanel({
           </CollapsibleTrigger>
           <Button type="button" variant="outline" size="sm" disabled={logs.length === 0} onClick={copyLogs}>
             <Icon path={mdiContentCopy} />
-            Copy logs
+            {COPY_TEXT[copy]}
           </Button>
         </div>
         <CollapsibleContent>
@@ -137,11 +156,17 @@ export function RunPanel({
     );
   }
 
-  // A running transfer can't be dismissed: Escape, outside clicks and the X are all ignored.
+  // A running transfer can't be dismissed: Escape and outside clicks are ignored and the X is hidden.
   const guard = (e: Event) => running && e.preventDefault();
   return (
     <Sheet open={open} onOpenChange={(next) => !next && !running && onClose()}>
-      <SheetContent side="right" className="sm:max-w-md" onEscapeKeyDown={guard} onPointerDownOutside={guard}>
+      <SheetContent
+        side="right"
+        className="sm:max-w-md"
+        showCloseButton={!running}
+        onEscapeKeyDown={guard}
+        onPointerDownOutside={guard}
+      >
         <SheetHeader>
           <SheetTitle>{title}</SheetTitle>
           <SheetDescription className="sr-only">Steps, progress and logs for this run.</SheetDescription>

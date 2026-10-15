@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { RunPanel } from '@/components/transfer/RunPanel';
 import type { StepStatus } from '@/lib/transfer';
@@ -27,7 +27,10 @@ function setup(props: Partial<React.ComponentProps<typeof RunPanel>> = {}) {
   return handlers;
 }
 
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => {
+  vi.unstubAllGlobals();
+  vi.useRealTimers();
+});
 
 describe('RunPanel', () => {
   it('while running shows the steps, a live status and Cancel', () => {
@@ -55,26 +58,78 @@ describe('RunPanel', () => {
     expect(screen.getByText('Failed')).toBeInTheDocument();
   });
 
-  it('copies the logs as "<time> <text>" lines', () => {
+  it('copies the logs as "<time> <text>" lines and confirms with Copied', async () => {
     const writeText = vi.fn().mockResolvedValue(undefined);
     Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
     setup();
     fireEvent.click(screen.getByRole('button', { name: 'Copy logs' }));
     expect(writeText).toHaveBeenCalledWith('10:00:01 Started\n10:00:02 Boom');
+    expect(await screen.findByRole('button', { name: 'Copied' })).toBeInTheDocument();
   });
 
-  it('ignores Escape and the close button while running', () => {
+  it('goes back to Copy logs after two seconds', async () => {
+    Object.defineProperty(navigator, 'clipboard', {
+      value: { writeText: vi.fn().mockResolvedValue(undefined) },
+      configurable: true,
+    });
+    vi.useFakeTimers();
+    setup();
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Copy logs' }));
+    });
+    expect(screen.getByRole('button', { name: 'Copied' })).toBeInTheDocument();
+    act(() => {
+      vi.advanceTimersByTime(2000);
+    });
+    expect(screen.getByRole('button', { name: 'Copy logs' })).toBeInTheDocument();
+  });
+
+  it('shows Copy failed when the clipboard is unavailable', async () => {
+    Object.defineProperty(navigator, 'clipboard', { value: undefined, configurable: true });
+    setup();
+    fireEvent.click(screen.getByRole('button', { name: 'Copy logs' }));
+    expect(await screen.findByRole('button', { name: 'Copy failed' })).toBeInTheDocument();
+  });
+
+  it('shows Copy failed when the clipboard rejects', async () => {
+    const writeText = vi.fn().mockRejectedValue(new Error('denied'));
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
+    setup();
+    fireEvent.click(screen.getByRole('button', { name: 'Copy logs' }));
+    expect(await screen.findByRole('button', { name: 'Copy failed' })).toBeInTheDocument();
+  });
+
+  it('shows the live chunk counter from the latest chunk log', () => {
+    setup({
+      logs: [
+        { time: '10:00:01', text: 'Copying chunk 1 / 10', type: 'info' },
+        { time: '10:00:02', text: 'Uploading chunk 3 / 10', type: 'info' },
+        { time: '10:00:03', text: 'Waiting for the target', type: 'info' },
+      ],
+    });
+    expect(screen.getByText('Chunk 3 / 10')).toBeInTheDocument();
+  });
+
+  it('shows no chunk counter without chunk logs or once finished', () => {
+    const logs = [{ time: '10:00:01', text: 'Uploading chunk 3 / 10', type: 'info' as const }];
+    setup({ logs, running: false, result: 'success' });
+    expect(screen.queryByText(/^Chunk \d/)).not.toBeInTheDocument();
+  });
+
+  it('cannot be dismissed while running: no Close button, Escape ignored', () => {
     const { onClose } = setup();
+    expect(screen.queryByRole('button', { name: 'Close' })).not.toBeInTheDocument();
     fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' });
-    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
     expect(screen.getByRole('dialog')).toBeInTheDocument();
     expect(onClose).not.toHaveBeenCalled();
   });
 
-  it('closes on Escape once the run has finished', () => {
+  it('can be dismissed once finished: Close button and Escape', () => {
     const { onClose } = setup({ running: false, result: 'success' });
-    fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' });
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
     expect(onClose).toHaveBeenCalledOnce();
+    fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' });
+    expect(onClose).toHaveBeenCalledTimes(2);
   });
 
   it('renders inline without a dialog when compact', () => {
