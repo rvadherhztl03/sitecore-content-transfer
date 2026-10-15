@@ -71,7 +71,7 @@ Kept from the current service: `onLog(message, type)`, `onProgress(percent)`, `o
 4. **Assemble**: `completeChunkSetTransfer` on target per chunk set → `ContentTransferFileName`.
 5. **Import**: `consumeFile` on target with `{ databaseName, fileName }`.
 6. **Verify**: poll `getBlobState({ fileName })` every 3 s, 5 min timeout, until a success status; an error status fails the run.
-7. **Clean up** (`finally`, best-effort): `deleteContentTransfer` on source and target. Failures are logged as warnings, never thrown.
+7. **Clean up** (`finally`, best-effort): `deleteContentTransfer` on the source, and on the target only if it never accepted an import (it keeps syncing from the package in the background after verify, and deleting the transfer there removes the unsynced items). Failures are logged as warnings, never thrown.
 
 ### runExport(client, { source, dataTrees }, callbacks, signal)
 
@@ -88,7 +88,7 @@ The browser then downloads `contentTransfer-<transferId>.zip`. Cleanup runs on s
 
 - `.zip`: read `package-metadata.json` (for the preview list) and `package.raif` (or per-chunk entries, see above).
 - `.raif`: use as is; preview shows "no metadata in package".
-- Upload in 1 MB slices with `saveChunk` (target, `transferId = chunksetId = randomUUID()`), then complete → consume → verify → cleanup on target.
+- Upload in 1 MB slices with `saveChunk` (target, `transferId = chunksetId = randomUUID()`), then complete → consume → verify; cleanup on target only when the run fails before the import is accepted.
 
 The package contents list is **read-only**. Today's per-path checkboxes only logged selections and never filtered the import, so they are removed.
 

@@ -147,7 +147,7 @@ export async function cleanup(client: SdkClient, envs: Env[], transferId: string
 type Steps = { begin(i: number, message: string): void; done(percent: number): void };
 
 // Shared step bookkeeping: marks the running step failed on error, logs `Cancelled.` on abort,
-// returns `failed`, and always cleans up `envs`. Once the target has accepted an import
+// returns `failed`, and cleans up `envs` (never a target that accepted an import). Once the target has accepted an import
 // (`importAt.started()`), it may still be importing, so a failure or cancel also warns that it may still finish.
 async function runSteps<T>(
   client: SdkClient,
@@ -182,7 +182,10 @@ async function runSteps<T>(
     }
     return failed;
   } finally {
-    await cleanup(client, envs, transferId, cb);
+    // The target imports from the package it assembled under this transfer and keeps syncing in the background
+    // after GetBlobState reports Consumed; deleting the transfer there removes that package and the unsynced items.
+    const importing = importAt?.started() ? importAt.target : undefined;
+    await cleanup(client, envs.filter((e) => e !== importing), transferId, cb);
   }
 }
 

@@ -166,7 +166,8 @@ describe('InstallFlow', () => {
     const saves = ofKey(calls, 'saveChunk');
     expect(saves.map((c) => c.params.query.isMedia)).toEqual([false, true]);
     expect(ofKey(calls, 'consumeFile')[0].params.query).toMatchObject({ databaseName: 'master', sitecoreContextId: 'ctx-qa' });
-    expect(ofKey(calls, 'deleteContentTransfer')).toHaveLength(1);
+    // The target keeps importing from the package after verify, so the transfer is not deleted there.
+    expect(ofKey(calls, 'deleteContentTransfer')).toHaveLength(0);
     expect(screen.getByText('Items').parentElement).toHaveTextContent('Items2');
     expect(screen.getByText('Chunks').parentElement).toHaveTextContent('Chunks2');
     expect(screen.getByText('Took')).toBeInTheDocument();
@@ -206,7 +207,7 @@ describe('InstallFlow', () => {
     });
     expect(await screen.findByText('Package installed')).toBeInTheDocument();
     expect(ofKey(calls, 'saveChunk')).toHaveLength(1);
-    expect(ofKey(calls, 'deleteContentTransfer')).toHaveLength(1);
+    expect(ofKey(calls, 'consumeFile')).toHaveLength(1);
   });
 
   it('leaves the header no way out while running, and home works again after', async () => {

@@ -77,7 +77,7 @@ Everything runs in the browser through the Marketplace SDK: `xmc.contentTransfer
 
 The pipelines live in `src/lib/transfer.ts`:
 
-- **Transfer:** create job on the source, wait for the package, copy every chunk to the target, assemble, import into `master`, verify, then clean up both sides.
+- **Transfer:** create job on the source, wait for the package, copy every chunk to the target, assemble, import into `master`, verify, then clean up the source (the target is left alone: it finishes syncing the import in the background).
 - **Export:** create job, wait for the package, download the chunks and zip them.
 - **Import:** upload the package chunks, assemble, import into `master`, verify.
 

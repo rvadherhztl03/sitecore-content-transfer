@@ -119,7 +119,6 @@ describe('runTransfer', () => {
       ['consumeFile', 'ctx-qa'],
       ['getBlobState', 'ctx-qa'],
       ['deleteContentTransfer', 'ctx-dev'],
-      ['deleteContentTransfer', 'ctx-qa'],
     ]);
     for (const c of calls) expect(c.kind).toBe(KIND[short(c.key)]);
 
@@ -360,6 +359,13 @@ describe('runTransfer', () => {
     expect(ofKey(calls, 'deleteContentTransfer').map(ctxOf)).toEqual(['ctx-dev', 'ctx-qa']);
   });
 
+  it('never cleans up the target once it accepted the import', async () => {
+    // Deleting the transfer on the target removes the package it is still importing from.
+    const { client, calls } = fakeClient(happyHandlers({ getBlobState: () => ({ data: { status: 'Error' } }) }));
+    expect(await runTransfer(client, OPTS, recorder().cb)).toBe(false);
+    expect(ofKey(calls, 'deleteContentTransfer').map(ctxOf)).toEqual(['ctx-dev']);
+  });
+
   it('treats a cleanup failure as a warning', async () => {
     const { client } = fakeClient(happyHandlers({ deleteContentTransfer: () => ({ status: 500 }) }));
     const r = recorder();
@@ -439,7 +445,7 @@ describe('runImport', () => {
 
     for (const c of calls) expect(ctxOf(c)).toBe('ctx-qa');
     const seq = calls.map((c) => short(c.key)).filter((k, i, a) => i === 0 || k !== a[i - 1]);
-    expect(seq).toEqual(['saveChunk', 'completeChunkSetTransfer', 'consumeFile', 'getBlobState', 'deleteContentTransfer']);
+    expect(seq).toEqual(['saveChunk', 'completeChunkSetTransfer', 'consumeFile', 'getBlobState']);
 
     const saves = ofKey(calls, 'saveChunk');
     const { transferId } = saves[0].params.path;
@@ -456,7 +462,7 @@ describe('runImport', () => {
       { databaseName: 'master', fileName: `blob://f-${setA}.raif`, sitecoreContextId: 'ctx-qa' },
       { databaseName: 'master', fileName: `blob://f-${setB}.raif`, sitecoreContextId: 'ctx-qa' },
     ]);
-    expect(ofKey(calls, 'deleteContentTransfer')).toHaveLength(1);
+    expect(ofKey(calls, 'deleteContentTransfer')).toHaveLength(0);
     expect(r.progress.at(-1)).toBe(100);
     for (let i = 0; i < 4; i++) expect(r.steps).toContainEqual([i, 'done']);
   });
@@ -488,10 +494,11 @@ describe('runImport', () => {
   });
 
   it('import warns the target may still import when verify fails', async () => {
-    const { client } = fakeClient(happyHandlers({ getBlobState: () => ({ data: { status: 'Error' } }) }));
+    const { client, calls } = fakeClient(happyHandlers({ getBlobState: () => ({ data: { status: 'Error' } }) }));
     const r = recorder();
     expect(await runImport(client, IMPORT, r.cb)).toBe(false);
     expect(r.logs).toContainEqual(STILL_IMPORTING('QA'));
+    expect(ofKey(calls, 'deleteContentTransfer')).toHaveLength(0);
   });
 
   it('cancels before uploading the next chunk', async () => {
