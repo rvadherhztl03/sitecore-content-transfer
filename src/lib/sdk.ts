@@ -1,7 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import type { ApplicationContext } from '@sitecore-marketplace-sdk/client';
 
-export type Env = { id: string; name: string; contextId: string };
+export type Env = { id: string; name: string; contextId: string; tenantName?: string };
 
 export interface SdkClient {
   query(key: string, options?: { params?: unknown }): Promise<any>;
@@ -22,6 +22,7 @@ export const CONTEXT_KIND: 'preview' | 'live' = 'preview';
 // The SDK's published .d.ts re-exports from a missing ../src, so ApplicationContext resolves to `any`; type the entries here.
 type Resource = {
   resourceId: string;
+  tenantId?: string;
   tenantName?: string;
   tenantDisplayName?: string;
   context?: { live?: string; preview?: string };
@@ -31,12 +32,31 @@ export function toEnvs(ctx: ApplicationContext | undefined): Env[] {
   const entries: Resource[] = ctx?.resourceAccess ?? ctx?.resources ?? [];
   const envs = entries.flatMap((r) => {
     const contextId = r.context?.[CONTEXT_KIND];
-    return contextId ? [{ id: r.resourceId, name: r.tenantDisplayName ?? r.tenantName ?? r.resourceId, contextId, r }] : [];
+    // In XM Cloud every entry shares the product's resourceId, so the tenant identifies the environment.
+    const name = r.tenantDisplayName ?? r.tenantName ?? r.resourceId;
+    return contextId ? [{ id: r.tenantId ?? contextId, name, contextId, tenantName: r.tenantName, r }] : [];
   });
   // Same display name twice: add the tenant (or resource id) so the pickers can tell them apart.
   return envs.map(({ r, ...env }) =>
     envs.filter((e) => e.name === env.name).length > 1 ? { ...env, name: `${env.name} (${r.tenantName ?? r.resourceId})` } : env,
   );
+}
+
+export type EnvKind = 'prod' | 'test' | 'dev';
+
+const KINDS: [EnvKind, RegExp][] = [
+  ['prod', /prod|prd|live/i],
+  ['test', /qa|test|uat|stag/i],
+  ['dev', /dev|local/i],
+];
+
+/** Guesses the environment's role from its name, then its tenant name; `null` when neither says. */
+export function envKind(env: Env): EnvKind | null {
+  for (const text of [env.name, env.tenantName]) {
+    const kind = text && KINDS.find(([, re]) => re.test(text))?.[0];
+    if (kind) return kind;
+  }
+  return null;
 }
 
 // Returns '' when there is nothing useful to say (undefined, empty string or `{}`).

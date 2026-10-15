@@ -11,18 +11,27 @@ export interface RunCallbacks {
   onLog(message: string, type: LogType): void;
   onProgress(percent: number): void;
   onStepChange(index: number, status: StepStatus): void;
+  /** Called once, when the source package is ready. */
+  onInfo?(info: { chunkCount: number; itemCount: number }): void;
 }
 
 export const TRANSFER_STEPS = ['Create job', 'Wait for package', 'Copy chunks', 'Assemble on target', 'Import into database', 'Verify'];
 export const EXPORT_STEPS = ['Create job', 'Wait for package', 'Download & zip'];
 export const IMPORT_STEPS = ['Upload package', 'Assemble on target', 'Import into database', 'Verify'];
+// Index of 'Import into database' in each step list; from here on a failure or cancel may leave the target importing.
+export const IMPORT_STEP = { transfer: 4, import: 2 } as const;
 export const TIMING = { pollMs: 3000, statusTimeoutMs: 600_000, verifyTimeoutMs: 300_000 };
 export const BLOB_SUCCESS = ['OK', 'Transferred', 'Consumed'];
 export const BLOB_FAILURE = ['Error', 'Failed'];
 
 const CT = 'xmc.contentTransfer.';
 
-type ChunkSet = { ChunkSetId: string; ChunkCount: number };
+type ChunkSet = { ChunkSetId: string; ChunkCount: number; TotalItemCount?: number };
+
+const infoOf = (sets: ChunkSet[]) => ({
+  chunkCount: sets.reduce((n, s) => n + s.ChunkCount, 0),
+  itemCount: sets.reduce((n, s) => n + (s.TotalItemCount ?? 0), 0),
+});
 
 export function parseIsMedia(header: string | null): boolean {
   return header?.match(/IsMedia\s*=\s*(true|false)/i)?.[1].toLowerCase() === 'true';
@@ -191,6 +200,7 @@ export async function runTransfer(
 
     begin(1, `Waiting for ${source.name} to build the package.`);
     const sets = await waitForPackage(client, source, transferId, signal);
+    cb.onInfo?.(infoOf(sets));
     done(15);
 
     begin(2, `Copying chunks from ${source.name} to ${target.name}.`);
@@ -223,7 +233,7 @@ export async function runTransfer(
     done(100);
     cb.onLog('Transfer complete.', 'success');
     return true;
-  }, { step: TRANSFER_STEPS.indexOf('Import into database'), target });
+  }, { step: IMPORT_STEP.transfer, target });
 }
 
 export async function runExport(
@@ -244,6 +254,7 @@ export async function runExport(
 
     begin(1, `Waiting for ${source.name} to build the package.`);
     const sets = await waitForPackage(client, source, transferId, signal);
+    cb.onInfo?.(infoOf(sets));
     done(30);
 
     begin(2, `Downloading the package from ${source.name}.`);
@@ -314,5 +325,5 @@ export async function runImport(
     done(100);
     cb.onLog('Import complete.', 'success');
     return true;
-  }, { step: IMPORT_STEPS.indexOf('Import into database'), target });
+  }, { step: IMPORT_STEP.import, target });
 }

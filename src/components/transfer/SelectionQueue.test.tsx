@@ -48,11 +48,11 @@ describe('SelectionQueue', () => {
   it('changes scope and merge on one row', () => {
     const onChange = setup();
     fireEvent.keyDown(screen.getByLabelText('Scope for /a'), { key: 'Enter' });
-    fireEvent.click(screen.getByRole('option', { name: 'Single item' }));
+    fireEvent.click(screen.getByRole('option', { name: 'This item' }));
     expect(onChange).toHaveBeenLastCalledWith([{ ...TREES[0], scope: 'SingleItem' }, TREES[1]]);
 
     fireEvent.keyDown(screen.getByLabelText('Merge for /b'), { key: 'Enter' });
-    fireEvent.click(screen.getByRole('option', { name: /Latest wins/ }));
+    fireEvent.click(screen.getByRole('option', { name: 'Keep the newer one' }));
     expect(onChange).toHaveBeenLastCalledWith([TREES[0], { ...TREES[1], mergeStrategy: 'LatestWin' }]);
   });
 

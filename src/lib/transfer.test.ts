@@ -3,7 +3,10 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { readPackage, type PackagePart } from '@/lib/package';
 import {
+  IMPORT_STEP,
+  IMPORT_STEPS,
   TIMING,
+  TRANSFER_STEPS,
   runExport,
   runImport,
   runTransfer,
@@ -57,18 +60,40 @@ function recorder() {
   const logs: [string, LogType][] = [];
   const progress: number[] = [];
   const steps: [number, StepStatus][] = [];
+  const infos: { chunkCount: number; itemCount: number }[] = [];
   const cb: RunCallbacks = {
     onLog: (m, t) => logs.push([m, t]),
     onProgress: (p) => progress.push(p),
     onStepChange: (i, s) => steps.push([i, s]),
+    onInfo: (i) => infos.push(i),
   };
-  return { cb, logs, progress, steps };
+  return { cb, logs, progress, steps, infos };
 }
 
 const short = (key: string) => key.replace(CT, '');
 const STILL_IMPORTING = (env: string) => [`${env} may still finish importing; check it before running again.`, 'warning'];
 const ofKey = (calls: { key: string }[], k: string) => calls.filter((c) => c.key === CT + k) as any[];
 const ctxOf = (c: any) => c.params.query.sitecoreContextId;
+
+// Two chunk sets; the second one has no TotalItemCount (counts as 0).
+const TWO_SETS: Record<string, Handler> = {
+  getContentTransferStatus: () => ({
+    data: {
+      State: 'Completed',
+      ChunkSetsMetadata: [
+        { ChunkSetId: 'cs1', ChunkCount: 2, TotalItemCount: 3 },
+        { ChunkSetId: 'cs2', ChunkCount: 1 },
+      ],
+    },
+  }),
+};
+
+describe('IMPORT_STEP', () => {
+  it('points at the Import into database step', () => {
+    expect(TRANSFER_STEPS[IMPORT_STEP.transfer]).toBe('Import into database');
+    expect(IMPORT_STEPS[IMPORT_STEP.import]).toBe('Import into database');
+  });
+});
 
 beforeEach(() => {
   Object.assign(TIMING, { pollMs: 0, statusTimeoutMs: 50, verifyTimeoutMs: 50 });
@@ -148,6 +173,13 @@ describe('runTransfer', () => {
     ]);
   });
 
+  it('reports the chunk and item counts once the package is ready', async () => {
+    const { client } = fakeClient(happyHandlers(TWO_SETS));
+    const r = recorder();
+    expect(await runTransfer(client, OPTS, r.cb)).toBe(true);
+    expect(r.infos).toEqual([{ chunkCount: 3, itemCount: 3 }]);
+  });
+
   it('treats a 404 status as still processing', async () => {
     let n = 0;
     const { client } = fakeClient(
@@ -166,6 +198,7 @@ describe('runTransfer', () => {
     const r = recorder();
     expect(await runTransfer(client, OPTS, r.cb)).toBe(false);
     expect(r.steps).toContainEqual([1, 'fail']);
+    expect(r.infos).toEqual([]);
     expect(r.logs.some(([, t]) => t === 'error')).toBe(true);
     expect(ofKey(calls, 'deleteContentTransfer').map(ctxOf)).toEqual(['ctx-dev', 'ctx-qa']);
   });
@@ -300,6 +333,13 @@ describe('runExport', () => {
     for (const c of calls) expect(ctxOf(c)).toBe('ctx-dev');
     expect(r.progress.at(-1)).toBe(100);
     for (let i = 0; i < 3; i++) expect(r.steps).toContainEqual([i, 'done']);
+  });
+
+  it('reports the chunk and item counts once the package is ready', async () => {
+    const { client } = fakeClient(withGraphql(TWO_SETS));
+    const r = recorder();
+    expect(await runExport(client, { source: DEV, dataTrees: TREES }, r.cb)).toBeInstanceOf(Blob);
+    expect(r.infos).toEqual([{ chunkCount: 3, itemCount: 3 }]);
   });
 
   it('exports with an empty ItemId when the ID lookup fails', async () => {

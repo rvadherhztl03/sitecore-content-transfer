@@ -1,32 +1,22 @@
 import type { DataTree, MergeStrategy, Scope } from '@/lib/transfer';
 
-export const SCOPES: { value: Scope; label: string }[] = [
-  { value: 'SingleItem', label: 'Single item' },
-  { value: 'ItemAndDescendants', label: 'Item & descendants' },
+export const SCOPES: { value: Scope; label: string; long: string }[] = [
+  { value: 'SingleItem', label: 'This item', long: 'This item only' },
+  { value: 'ItemAndDescendants', label: '+ Everything below', long: 'Item + everything below' },
 ];
 
-export const MERGES: { value: MergeStrategy; label: string; description: string }[] = [
-  {
-    value: 'OverrideExistingTree',
-    label: 'Override tree',
-    description: 'Replace the item and all its descendants on the target.',
-  },
-  {
-    value: 'OverrideExistingItem',
-    label: 'Override item',
-    description: 'Replace only this item; leave its descendants alone.',
-  },
-  {
-    value: 'KeepExistingItem',
-    label: 'Keep existing',
-    description: 'Skip items that already exist on the target.',
-  },
-  {
-    value: 'LatestWin',
-    label: 'Latest wins',
-    description: 'Keep whichever version was modified most recently.',
-  },
+export const MERGES: { value: MergeStrategy; label: string; long: string }[] = [
+  { value: 'OverrideExistingTree', label: 'Replace it and everything below', long: 'Replace it and everything below' },
+  { value: 'OverrideExistingItem', label: 'Replace this item only', long: 'Replace this item only' },
+  { value: 'KeepExistingItem', label: "Keep what's there", long: "Keep what's there" },
+  { value: 'LatestWin', label: 'Keep the newer one', long: 'Keep the newer one' },
 ];
+
+/** Plain-language label for a value: short for controls, `long` for review screens and tables. */
+export const labelOf = (options: { value: string; label: string; long?: string }[], value: string, long = false): string => {
+  const o = options.find((o) => o.value === value);
+  return (long && o?.long) || o?.label || value;
+};
 
 export const newTree = (itemPath: string): DataTree => ({
   itemPath,

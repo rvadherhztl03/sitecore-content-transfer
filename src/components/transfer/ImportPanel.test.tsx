@@ -22,8 +22,8 @@ describe('ImportPanel', () => {
     const { onPackage, input } = setup();
     fireEvent.change(input, { target: { files: [await zipFile('p.zip')] } });
     expect(await screen.findByText('/sitecore/content/A')).toBeInTheDocument();
-    expect(screen.getByText('Single item')).toBeInTheDocument();
-    expect(screen.getByText('Latest wins')).toBeInTheDocument();
+    expect(screen.getByText('This item only')).toBeInTheDocument();
+    expect(screen.getByText('Keep the newer one')).toBeInTheDocument();
     expect(screen.getByText('p.zip').parentElement).toHaveTextContent('p.zip · 1 chunk');
     expect(onPackage).toHaveBeenCalledOnce();
     const pkg = onPackage.mock.calls[0][0];

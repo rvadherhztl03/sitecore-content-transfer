@@ -114,8 +114,7 @@ export function SelectionQueue({ trees, onChange, disabled }: Props) {
                 <SelectContent>
                   {MERGES.map((m) => (
                     <SelectItem key={m.value} value={m.value}>
-                      <span>{m.label}</span>
-                      <span className="text-muted-foreground text-xs">{m.description}</span>
+                      {m.label}
                     </SelectItem>
                   ))}
                 </SelectContent>

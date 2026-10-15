@@ -1,8 +1,28 @@
 // @vitest-environment node
 import { describe, expect, it } from 'vitest';
-import { mergeTrees, newTree, parseQueueJson } from '@/lib/queue';
+import { MERGES, SCOPES, labelOf, mergeTrees, newTree, parseQueueJson } from '@/lib/queue';
 
 describe('queue', () => {
+  it('uses the plain-language labels', () => {
+    expect(SCOPES).toEqual([
+      { value: 'SingleItem', label: 'This item', long: 'This item only' },
+      { value: 'ItemAndDescendants', label: '+ Everything below', long: 'Item + everything below' },
+    ]);
+    expect(MERGES).toEqual([
+      { value: 'OverrideExistingTree', label: 'Replace it and everything below', long: 'Replace it and everything below' },
+      { value: 'OverrideExistingItem', label: 'Replace this item only', long: 'Replace this item only' },
+      { value: 'KeepExistingItem', label: "Keep what's there", long: "Keep what's there" },
+      { value: 'LatestWin', label: 'Keep the newer one', long: 'Keep the newer one' },
+    ]);
+  });
+
+  it('labelOf returns the short label, the long one, or the value itself', () => {
+    expect(labelOf(SCOPES, 'SingleItem')).toBe('This item');
+    expect(labelOf(SCOPES, 'SingleItem', true)).toBe('This item only');
+    expect(labelOf(SCOPES, 'Nope')).toBe('Nope');
+    expect(labelOf([{ value: 'a', label: 'A' }], 'a', true)).toBe('A');
+  });
+
   it('newTree uses the defaults', () => {
     expect(newTree('/a')).toEqual({
       itemPath: '/a',

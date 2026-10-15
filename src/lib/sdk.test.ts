@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { describe, expect, it } from 'vitest';
-import { SdkError, call, fetchChildren, fetchItemId, toEnvs } from '@/lib/sdk';
+import { SdkError, call, envKind, fetchChildren, fetchItemId, toEnvs } from '@/lib/sdk';
 import { fakeClient } from '@/test/fakeClient';
 
 const DEV = { id: 'r1', name: 'Dev', contextId: 'p1' };
@@ -9,8 +9,8 @@ const ENTRIES = [
   { resourceId: 'r2', tenantName: 'acme-qa', context: { preview: 'p2', live: 'l2' } },
 ];
 const ENVS = [
-  { id: 'r1', name: 'Dev', contextId: 'p1' },
-  { id: 'r2', name: 'acme-qa', contextId: 'p2' },
+  { id: 'p1', name: 'Dev', contextId: 'p1' },
+  { id: 'p2', name: 'acme-qa', contextId: 'p2', tenantName: 'acme-qa' },
 ];
 
 describe('toEnvs', () => {
@@ -24,6 +24,22 @@ describe('toEnvs', () => {
   it('falls back to deprecated resources', () => {
     expect(toEnvs({ resources: ENTRIES } as any)).toEqual(ENVS);
   });
+  it('uses tenantId so environments sharing a resourceId stay distinct', () => {
+    const ctx = {
+      resourceAccess: [
+        { resourceId: 'xmcloud', tenantId: 't1', tenantDisplayName: 'Acme / dev', tenantName: 'acme-dev', context: { preview: 'p1' } },
+        { resourceId: 'xmcloud', tenantId: 't2', tenantDisplayName: 'Acme / qa', tenantName: 'acme-qa', context: { preview: 'p2' } },
+      ],
+    };
+    const envs = toEnvs(ctx as any);
+    expect(envs.map((e) => e.id)).toEqual(['t1', 't2']);
+    expect(envs.map((e) => e.name)).toEqual(['Acme / dev', 'Acme / qa']);
+    expect(envs.map((e) => e.tenantName)).toEqual(['acme-dev', 'acme-qa']);
+  });
+  it('falls back to the context id without a tenantId', () => {
+    const ctx = { resourceAccess: [{ resourceId: 'xmcloud', context: { preview: 'p1' } }] };
+    expect(toEnvs(ctx as any)[0].id).toBe('p1');
+  });
   it('tells apart environments with the same display name', () => {
     const ctx = {
       resourceAccess: [
@@ -33,6 +49,27 @@ describe('toEnvs', () => {
       ],
     };
     expect(toEnvs(ctx as any).map((e) => e.name)).toEqual(['Acme (acme-dev)', 'Acme (r2)', 'QA']);
+  });
+});
+
+describe('envKind', () => {
+  const kind = (name: string, tenantName?: string) => envKind({ id: 'i', name, contextId: 'c', tenantName });
+  it.each([
+    ['Acme Production', 'prod'],
+    ['acme-prd', 'prod'],
+    ['Live site', 'prod'],
+    ['QA', 'test'],
+    ['uat', 'test'],
+    ['Staging', 'test'],
+    ['devpets', 'dev'],
+    ['local', 'dev'],
+    ['Content hub', null],
+    ['dev-to-prod', 'prod'],
+  ])('%s -> %s', (name, expected) => {
+    expect(kind(name)).toBe(expected);
+  });
+  it('checks tenantName when name has no match', () => {
+    expect(kind('Content hub', 'acme-prd')).toBe('prod');
   });
 });
 

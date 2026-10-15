@@ -195,7 +195,7 @@ describe('Workspace', () => {
     await treeLoaded();
     fireEvent.click(screen.getByRole('button', { name: 'Start transfer' }));
     const dialog = screen.getByRole('alertdialog');
-    expect(dialog).toHaveTextContent('Copy 1 item tree from Dev → QA (master). Merge: Override tree.');
+    expect(dialog).toHaveTextContent('Copy 1 item tree from Dev → QA (master). Merge: Replace it and everything below.');
     expect(within(dialog).getByText('/sitecore/content/Home')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Start' }));
     // The run sheet is modal, so the page behind it is aria-hidden.

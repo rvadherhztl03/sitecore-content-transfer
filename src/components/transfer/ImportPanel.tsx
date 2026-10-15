@@ -1,16 +1,13 @@
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Icon } from '@/lib/icon';
 import { type PackageItem, type PackagePart, readPackage } from '@/lib/package';
-import { MERGES, SCOPES } from '@/lib/queue';
+import { MERGES, SCOPES, labelOf } from '@/lib/queue';
 import { mdiFileUploadOutline } from '@mdi/js';
 import { useState } from 'react';
 
 export type LoadedPackage = { fileName: string; items: PackageItem[]; parts: PackagePart[] };
 
 type Props = { disabled?: boolean; onPackage(pkg: LoadedPackage | null): void };
-
-const label = (options: { value: string; label: string }[], value: string) =>
-  options.find((o) => o.value === value)?.label ?? value;
 
 export function ImportPanel({ disabled, onPackage }: Props) {
   const [pkg, setPkg] = useState<LoadedPackage | null>(null);
@@ -92,8 +89,8 @@ export function ImportPanel({ disabled, onPackage }: Props) {
                     <td className="max-w-0 truncate py-1 pr-3 font-mono" title={i.path}>
                       {i.path}
                     </td>
-                    <td className="py-1 pr-3">{label(SCOPES, i.scope)}</td>
-                    <td className="py-1">{label(MERGES, i.mergeStrategy)}</td>
+                    <td className="py-1 pr-3">{labelOf(SCOPES, i.scope, true)}</td>
+                    <td className="py-1">{labelOf(MERGES, i.mergeStrategy, true)}</td>
                   </tr>
                 ))}
               </tbody>
