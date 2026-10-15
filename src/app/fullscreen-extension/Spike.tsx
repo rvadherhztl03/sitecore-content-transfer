@@ -88,115 +88,122 @@ export default function Spike({ client }: { client: ClientSDK | null }) {
 		const tgt = ra[tgtIdx];
 		const paths = [itemPath, mediaPath].map((p) => p.trim()).filter(Boolean);
 		if (!src || !tgt || !paths.length) return log("Transfer aborted: need valid source/target index and at least one item path");
+		if (srcIdx === tgtIdx) return log("Transfer aborted: source index equals target index");
+		const srcCtx = src.context?.[kind];
+		const tgtCtx = tgt.context?.[kind];
+		if (!srcCtx || !tgtCtx) return log("Transfer aborted: missing context id", { kind, srcCtx, tgtCtx });
 		const tgtName = tgt.tenantDisplayName ?? tgt.tenantName ?? tgt.tenantId;
 		if (!window.confirm(`This writes ${paths.join(", ")} into ${tgtName}. Continue?`)) return log("Transfer cancelled by user");
 
-		const srcCtx = src.context?.[kind];
-		const tgtCtx = tgt.context?.[kind];
 		const transferId = crypto.randomUUID();
 		log("Transfer start", { transferId, kind, srcCtx, tgtCtx, paths, target: tgtName });
 
-		const created = await op("mutate", "xmc.contentTransfer.createContentTransfer", {
-			query: { sitecoreContextId: srcCtx },
-			body: {
-				transferId,
-				configuration: {
-					dataTrees: paths.map((itemPath) => ({ itemPath, scope: "SingleItem", mergeStrategy: "OverrideExistingItem" })),
-				},
-			},
-		});
-		logRes("createContentTransfer", created);
-
-		let status: Any;
-		for (let i = 1; i <= 40; i++) {
-			status = await op("query", "xmc.contentTransfer.getContentTransferStatus", {
-				path: { transferId },
+		try {
+			const created = await op("mutate", "xmc.contentTransfer.createContentTransfer", {
 				query: { sitecoreContextId: srcCtx },
+				body: {
+					transferId,
+					configuration: {
+						dataTrees: paths.map((itemPath) => ({ itemPath, scope: "SingleItem", mergeStrategy: "OverrideExistingItem" })),
+					},
+				},
 			});
-			logRes(`getContentTransferStatus #${i}`, status);
-			const state = status?.data?.State;
-			if (state === "Completed" || state === "Failed" || status?.error) break;
-			await sleep(3000);
-		}
+			logRes("createContentTransfer", created);
 
-		const chunkSets: Any[] = status?.data?.ChunkSetsMetadata ?? [];
-		log("chunk sets", { count: chunkSets.length, chunkSets });
-
-		let fileName: string | undefined;
-		let lastChunksetId: string | undefined;
-		for (const cs of chunkSets) {
-			const chunksetId: string = cs.ChunkSetId ?? cs.ChunksetId;
-			lastChunksetId = chunksetId;
-			for (let chunkId = 0; chunkId < cs.ChunkCount; chunkId++) {
-				const got = await op("query", "xmc.contentTransfer.getChunk", {
-					path: { transferId, chunksetId, chunkId },
+			let status: Any;
+			for (let i = 1; i <= 40; i++) {
+				status = await op("query", "xmc.contentTransfer.getContentTransferStatus", {
+					path: { transferId },
 					query: { sitecoreContextId: srcCtx },
 				});
-				const h = got?.response?.headers;
-				const header = (n: string) => h?.get?.(n) ?? null;
-				const disposition: string | null = header("content-disposition");
-				log(`getChunk ${chunksetId}/${chunkId}`, {
-					blobSize: got?.data?.size ?? null,
-					dataType: typeof got?.data,
-					"content-disposition": disposition,
-					"content-type": header("content-type"),
-					"content-length": header("content-length"),
-					error: got?.error,
-				});
-				const isMedia = /IsMedia=true/i.test(disposition ?? "");
-				const saved = await op("mutate", "xmc.contentTransfer.saveChunk", {
-					path: { transferId, chunksetId, chunkId },
-					query: { isMedia, sitecoreContextId: tgtCtx },
-					body: got?.data,
-				});
-				logRes(`saveChunk ${chunksetId}/${chunkId} (isMedia=${isMedia})`, saved);
-			}
-			const done = await op("mutate", "xmc.contentTransfer.completeChunkSetTransfer", {
-				path: { transferId, chunksetId },
-				query: { sitecoreContextId: tgtCtx },
-			});
-			logRes(`completeChunkSetTransfer ${chunksetId}`, done);
-			fileName = done?.data?.ContentTransferFileName;
-		}
-
-		if (lastChunksetId) {
-			const consume = (name?: string) =>
-				op("query", "xmc.contentTransfer.consumeFile", {
-					query: { databaseName: "master", fileName: name, sitecoreContextId: tgtCtx },
-				});
-			let used = fileName;
-			let consumed = await consume(used);
-			logRes(`consumeFile fileName=${used}`, consumed);
-			if (consumed?.error) {
-				used = `contentTransfer-${transferId}-${lastChunksetId}.raif`;
-				consumed = await consume(used);
-				logRes(`consumeFile (retry) fileName=${used}`, consumed);
-			}
-
-			let prev: string | undefined;
-			let same = 0;
-			for (let i = 1; i <= 40; i++) {
-				const bs = await op("query", "xmc.contentTransfer.getBlobState", {
-					query: { fileName: used, sitecoreContextId: tgtCtx },
-				});
-				const s = bs?.data?.status;
-				logRes(`getBlobState #${i} status=${s}`, bs);
-				same = s === prev ? same + 1 : 0;
-				prev = s;
-				if (same >= 5) break; // same status 6x in a row: it is final
+				logRes(`getContentTransferStatus #${i}`, status);
+				const state = status?.data?.State;
+				if (state === "Completed" || state === "Failed" || status?.error) break;
 				await sleep(3000);
 			}
-		}
 
-		logRes("deleteContentTransfer (source)", await op("mutate", "xmc.contentTransfer.deleteContentTransfer", {
-			path: { transferId },
-			query: { sitecoreContextId: srcCtx },
-		}));
-		logRes("deleteContentTransfer (target)", await op("mutate", "xmc.contentTransfer.deleteContentTransfer", {
-			path: { transferId },
-			query: { sitecoreContextId: tgtCtx },
-		}));
-		log("Transfer finished", { transferId });
+			const chunkSets: Any[] = status?.data?.ChunkSetsMetadata ?? [];
+			log("chunk sets", { count: chunkSets.length, chunkSets });
+
+			let fileName: string | undefined;
+			let lastChunksetId: string | undefined;
+			let ok = true;
+			for (const cs of chunkSets) {
+				const chunksetId: string = cs.ChunkSetId ?? cs.ChunksetId;
+				lastChunksetId = chunksetId;
+				for (let chunkId = 0; chunkId < cs.ChunkCount; chunkId++) {
+					const got = await op("query", "xmc.contentTransfer.getChunk", {
+						path: { transferId, chunksetId, chunkId },
+						query: { sitecoreContextId: srcCtx },
+					});
+					const h = got?.response?.headers;
+					const header = (n: string) => h?.get?.(n) ?? null;
+					const disposition: string | null = header("content-disposition");
+					log(`getChunk ${chunksetId}/${chunkId}`, {
+						dataTag: Object.prototype.toString.call(got?.data),
+						size: got?.data?.size ?? null,
+						byteLength: got?.data?.byteLength ?? null,
+						"content-disposition": disposition,
+						"content-type": header("content-type"),
+						"content-length": header("content-length"),
+						error: got?.error,
+						response: got?.response,
+					});
+					if (got?.error || !(got?.data instanceof Blob)) {
+						log(`getChunk ${chunksetId}/${chunkId} failed or data is not a Blob: skipping saveChunk, complete, consume and verify`);
+						ok = false;
+						break;
+					}
+					const isMedia = /IsMedia=true/i.test(disposition ?? "");
+					const saved = await op("mutate", "xmc.contentTransfer.saveChunk", {
+						path: { transferId, chunksetId, chunkId },
+						query: { isMedia, sitecoreContextId: tgtCtx },
+						body: got.data,
+					});
+					logRes(`saveChunk ${chunksetId}/${chunkId} (isMedia=${isMedia})`, saved);
+				}
+				if (!ok) break;
+				const done = await op("mutate", "xmc.contentTransfer.completeChunkSetTransfer", {
+					path: { transferId, chunksetId },
+					query: { sitecoreContextId: tgtCtx },
+				});
+				logRes(`completeChunkSetTransfer ${chunksetId}`, done);
+				fileName = done?.data?.ContentTransferFileName;
+			}
+
+			if (ok && lastChunksetId) {
+				const consume = (name?: string) =>
+					op("query", "xmc.contentTransfer.consumeFile", {
+						query: { databaseName: "master", fileName: name, sitecoreContextId: tgtCtx },
+					});
+				let used = fileName;
+				let consumed = await consume(used);
+				logRes(`consumeFile fileName=${used}`, consumed);
+				if (consumed?.error) {
+					used = `contentTransfer-${transferId}-${lastChunksetId}.raif`;
+					consumed = await consume(used);
+					logRes(`consumeFile (retry) fileName=${used}`, consumed);
+				}
+
+				for (let i = 1; i <= 40; i++) {
+					const bs = await op("query", "xmc.contentTransfer.getBlobState", {
+						query: { fileName: used, sitecoreContextId: tgtCtx },
+					});
+					logRes(`getBlobState #${i}`, bs);
+					await sleep(3000);
+				}
+			}
+		} finally {
+			logRes("deleteContentTransfer (source)", await op("mutate", "xmc.contentTransfer.deleteContentTransfer", {
+				path: { transferId },
+				query: { sitecoreContextId: srcCtx },
+			}));
+			logRes("deleteContentTransfer (target)", await op("mutate", "xmc.contentTransfer.deleteContentTransfer", {
+				path: { transferId },
+				query: { sitecoreContextId: tgtCtx },
+			}));
+			log("Transfer finished", { transferId });
+		}
 	};
 
 	const run = (fn: () => Promise<void>) => async () => {
