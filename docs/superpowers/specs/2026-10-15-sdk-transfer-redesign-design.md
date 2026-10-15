@@ -156,3 +156,15 @@ Found while writing the implementation plan; these override the sections above.
 - Branch `feat/sdk-transfer-redesign`.
 - The uncommitted JSON-import button fix in `MigrationDashboard.tsx` is left untouched; that file is replaced and the behavior lives in `SelectionQueue`.
 - README rewritten: no credentials; setup step "grant the app access to every environment you want to transfer between".
+
+## Phase 0 findings (from a real XM Cloud run, 2026-10-15)
+
+From the app's own transfer log, `petsuppliesplus / dev` → `petsuppliesplus / qa`, one item, one chunk:
+
+- **Context ID:** the `preview` context ID works for authoring GraphQL (tree loaded) and for every Content Transfer call (create, status, getChunk, saveChunk, completeChunkSetTransfer).
+- **Environment identity:** environments must be keyed by `tenantId`, because every `resourceAccess` entry shares `resourceId` (fixed).
+- **`consumeFile`:** it rejects a bare `ContentTransferFileName` with `HTTP 400: Allowed schema is not specified. Use either file://<fileName> or blob://<fileName>.` The package is passed as `blob://<ContentTransferFileName>` (fixed; `getBlobState` gets the same location).
+- **Still unconfirmed** (needs the next run past the import):
+  - the `getBlobState` status values
+  - whether `Content-Disposition` / `IsMedia` arrives
+  - whether `TotalItemCount` is returned
