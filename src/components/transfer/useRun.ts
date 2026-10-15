@@ -24,7 +24,7 @@ type Exec = (cb: RunCallbacks, signal: AbortSignal) => Promise<boolean>;
  * - `run` is null until `start`, and always starts as running, so RunView never sees running=false with no result.
  * - A second `start` while a run is in progress is ignored; leaving (unmount) aborts it.
  * - `exec` does the work and returns whether it succeeded; a throw counts as a failure and is logged.
- * - Put `headingRef` on the element that holds RunView: its h1 is focused when the result arrives.
+ * - Put `headingRef` on the element that holds RunView: its heading (h1, or h2 in compact) is focused when the result arrives.
  */
 export function useRun() {
   const [run, setRun] = useState<Run | null>(null);
@@ -36,7 +36,8 @@ export function useRun() {
   const headingRef = useRef<HTMLElement>(null);
   const result = run?.result;
   useEffect(() => {
-    const h = result && headingRef.current?.querySelector('h1');
+    // The first one is the run's own: RunView puts its status card before the Steps and Activity headings.
+    const h = result && headingRef.current?.querySelector<HTMLElement>('h1, h2');
     if (!h) return;
     h.tabIndex = -1;
     h.focus();
