@@ -168,6 +168,10 @@ async function fetchChunk(
   return { blob: data, isMedia: parseIsMedia(response?.headers.get('content-disposition') ?? null) };
 }
 
+// The Items API (ConsumeFile, GetBlobState) wants a location with a scheme, and the assembled package
+// lives in blob storage, so a bare `ContentTransferFileName` becomes `blob://<name>`.
+const packageLocation = (name: string) => (/^[a-z][a-z0-9+.-]*:\/\//i.test(name) ? name : `blob://${name}`);
+
 async function completeSets(client: SdkClient, env: Env, transferId: string, chunksetIds: string[], signal?: AbortSignal) {
   const files: string[] = [];
   for (const chunksetId of chunksetIds) {
@@ -176,7 +180,7 @@ async function completeSets(client: SdkClient, env: Env, transferId: string, chu
       client, env, 'mutate', CT + 'completeChunkSetTransfer', { path: { transferId, chunksetId } },
     );
     if (!data?.ContentTransferFileName) throw new Error(`${env.name} returned no file name for chunk set ${chunksetId}.`);
-    files.push(data.ContentTransferFileName);
+    files.push(packageLocation(data.ContentTransferFileName));
   }
   return files;
 }

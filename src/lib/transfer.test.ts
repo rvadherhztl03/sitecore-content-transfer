@@ -139,10 +139,10 @@ describe('runTransfer', () => {
 
     expect(ofKey(calls, 'consumeFile')[0].params.query).toEqual({
       databaseName: 'master',
-      fileName: 'f-cs1.raif',
+      fileName: 'blob://f-cs1.raif',
       sitecoreContextId: 'ctx-qa',
     });
-    expect(ofKey(calls, 'getBlobState')[0].params.query).toEqual({ fileName: 'f-cs1.raif', sitecoreContextId: 'ctx-qa' });
+    expect(ofKey(calls, 'getBlobState')[0].params.query).toEqual({ fileName: 'blob://f-cs1.raif', sitecoreContextId: 'ctx-qa' });
 
     expect(r.progress.at(-1)).toBe(100);
     for (let i = 0; i < 6; i++) expect(r.steps).toContainEqual([i, 'done']);
@@ -166,11 +166,20 @@ describe('runTransfer', () => {
     expect(await runTransfer(client, OPTS, recorder().cb)).toBe(true);
     expect(ofKey(calls, 'saveChunk').map((c) => c.params.path.chunksetId)).toEqual(['cs1', 'cs2']);
     expect(ofKey(calls, 'completeChunkSetTransfer').map((c) => c.params.path.chunksetId)).toEqual(['cs1', 'cs2']);
-    expect(ofKey(calls, 'consumeFile').map((c) => c.params.query.fileName)).toEqual(['f-cs1.raif', 'f-cs2.raif']);
+    expect(ofKey(calls, 'consumeFile').map((c) => c.params.query.fileName)).toEqual(['blob://f-cs1.raif', 'blob://f-cs2.raif']);
     expect([...new Set(ofKey(calls, 'getBlobState').map((c) => c.params.query.fileName))]).toEqual([
-      'f-cs1.raif',
-      'f-cs2.raif',
+      'blob://f-cs1.raif',
+      'blob://f-cs2.raif',
     ]);
+  });
+
+  it('keeps a file name that already has a scheme', async () => {
+    const { client, calls } = fakeClient(
+      happyHandlers({ completeChunkSetTransfer: () => ({ data: { ContentTransferFileName: 'file://pkg.raif' } }) }),
+    );
+    expect(await runTransfer(client, OPTS, recorder().cb)).toBe(true);
+    expect(ofKey(calls, 'consumeFile')[0].params.query.fileName).toBe('file://pkg.raif');
+    expect(ofKey(calls, 'getBlobState')[0].params.query.fileName).toBe('file://pkg.raif');
   });
 
   it('reports the chunk and item counts once the package is ready', async () => {
@@ -392,8 +401,8 @@ describe('runImport', () => {
 
     expect(ofKey(calls, 'completeChunkSetTransfer').map((c) => c.params.path.chunksetId)).toEqual([setA, setB]);
     expect(ofKey(calls, 'consumeFile').map((c) => c.params.query)).toEqual([
-      { databaseName: 'master', fileName: `f-${setA}.raif`, sitecoreContextId: 'ctx-qa' },
-      { databaseName: 'master', fileName: `f-${setB}.raif`, sitecoreContextId: 'ctx-qa' },
+      { databaseName: 'master', fileName: `blob://f-${setA}.raif`, sitecoreContextId: 'ctx-qa' },
+      { databaseName: 'master', fileName: `blob://f-${setB}.raif`, sitecoreContextId: 'ctx-qa' },
     ]);
     expect(ofKey(calls, 'deleteContentTransfer')).toHaveLength(1);
     expect(r.progress.at(-1)).toBe(100);
