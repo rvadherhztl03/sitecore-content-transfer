@@ -1,0 +1,107 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
+import type { ApplicationContext } from '@sitecore-marketplace-sdk/client';
+
+export type Env = { id: string; name: string; contextId: string };
+
+export interface SdkClient {
+  query(key: string, options?: { params?: unknown }): Promise<any>;
+  mutate(key: string, options?: { params?: unknown }): Promise<any>;
+}
+
+export class SdkError extends Error {
+  status?: number;
+  constructor(message: string, status?: number) {
+    super(message);
+    this.name = 'SdkError';
+    this.status = status;
+  }
+}
+
+export const CONTEXT_KIND: 'preview' | 'live' = 'preview';
+
+// The SDK's published .d.ts re-exports from a missing ../src, so ApplicationContext resolves to `any`; type the entries here.
+type Resource = {
+  resourceId: string;
+  tenantName?: string;
+  tenantDisplayName?: string;
+  context?: { live?: string; preview?: string };
+};
+
+export function toEnvs(ctx: ApplicationContext | undefined): Env[] {
+  const entries: Resource[] = ctx?.resourceAccess ?? ctx?.resources ?? [];
+  return entries.flatMap((r) => {
+    const contextId = r.context?.[CONTEXT_KIND];
+    return contextId ? [{ id: r.resourceId, name: r.tenantDisplayName ?? r.tenantName ?? r.resourceId, contextId }] : [];
+  });
+}
+
+const errorText = (e: any): string =>
+  typeof e === 'string' ? e : (e?.message ?? e?.Message ?? e?.title ?? JSON.stringify(e));
+
+export async function call<T = any>(
+  client: SdkClient,
+  env: Env,
+  kind: 'query' | 'mutate',
+  key: string,
+  params: { path?: Record<string, unknown>; query?: Record<string, unknown>; body?: unknown } = {},
+): Promise<{ data: T; response?: Response }> {
+  const options = { params: { ...params, query: { ...params.query, sitecoreContextId: env.contextId } } };
+  let res: any;
+  try {
+    res = await client[kind](key, options);
+  } catch (e) {
+    throw new SdkError(errorText(e));
+  }
+  // query() catches thrown errors into `error` and wraps the hey-api result in `data`.
+  if (kind === 'query' && res?.error !== undefined) throw new SdkError(errorText(res.error));
+  const { data, error, response } = (kind === 'query' ? res?.data : res) ?? {};
+  if ((response && !response.ok) || error !== undefined) {
+    const status: number | undefined = response?.status;
+    if (status === 401 || status === 403) {
+      throw new SdkError(`The app can't access ${env.name}. Grant it in Cloud Portal → app → environment access.`, status);
+    }
+    throw new SdkError(`HTTP ${status}: ${errorText(error)}`, status);
+  }
+  return { data, response };
+}
+
+export type TreeNode = { id: string; name: string; path: string; hasChildren: boolean };
+
+async function graphql(client: SdkClient, env: Env, query: string, path: string): Promise<any> {
+  const { data } = await call(client, env, 'mutate', 'xmc.authoring.graphql', {
+    body: { query, variables: { path } },
+  });
+  if (data?.errors?.length) throw new SdkError(data.errors[0].message);
+  return data?.data;
+}
+
+const CHILDREN_QUERY = `query GetItemChildren($path: String!) {
+  item(where: { path: $path, database: "master" }) {
+    itemId
+    name
+    path
+    children(first: 1000) {
+      nodes { itemId name path children(first: 1) { nodes { itemId } } }
+    }
+  }
+}`;
+
+const ITEM_ID_QUERY = `query GetItemId($path: String!) {
+  item(where: { path: $path, database: "master" }) { itemId }
+}`;
+
+export async function fetchChildren(client: SdkClient, env: Env, path: string): Promise<TreeNode[]> {
+  const data = await graphql(client, env, CHILDREN_QUERY, path);
+  const nodes: any[] = data?.item?.children?.nodes ?? [];
+  return nodes.map((n) => ({
+    id: n.itemId,
+    name: n.name,
+    path: n.path,
+    hasChildren: (n.children?.nodes?.length ?? 0) > 0,
+  }));
+}
+
+export async function fetchItemId(client: SdkClient, env: Env, path: string): Promise<string | null> {
+  const data = await graphql(client, env, ITEM_ID_QUERY, path);
+  return data?.item?.itemId ?? null;
+}
