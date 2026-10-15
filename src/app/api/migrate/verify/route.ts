@@ -1,6 +1,6 @@
 // src/app/api/migrate/verify/route.ts
 import { NextResponse } from 'next/server';
-import { getOAuthToken } from '@/src/utils/auth';
+import { getOAuthToken } from '@/utils/auth';
 
 export async function POST(request: Request) {
   try {

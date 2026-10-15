@@ -3,8 +3,8 @@
 
 import { useState, useEffect } from "react";
 import type { ApplicationContext, PagesContext } from "@sitecore-marketplace-sdk/client";
-import { useMarketplaceClient } from "@/src/utils/hooks/useMarketplaceClient";
-import MigrationDashboard from "@/src/components/MigrationDashboard";
+import { useMarketplaceClient } from "@/utils/hooks/useMarketplaceClient";
+import MigrationDashboard from "@/components/MigrationDashboard";
 
 function PagesContextPanel() {
 	const { client, error, isInitialized } = useMarketplaceClient();

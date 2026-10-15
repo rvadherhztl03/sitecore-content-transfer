@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useMarketplaceClient } from "@/src/utils/hooks/useMarketplaceClient";
+import { useMarketplaceClient } from "@/utils/hooks/useMarketplaceClient";
 import { ApplicationContext } from "@sitecore-marketplace-sdk/client";
 
 function DashboardWidget() {
