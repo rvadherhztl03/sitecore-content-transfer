@@ -41,6 +41,33 @@ export function ProdConfirm({ target, checked, onChange }: ProdConfirmProps) {
   );
 }
 
+type BackupChoiceProps = { target: Env; available: boolean; checked: boolean; onChange(v: boolean): void };
+
+/** "Back up <target> first": on by default; when nothing on the target would be overwritten, it says so instead. */
+export function BackupChoice({ target, available, checked, onChange }: BackupChoiceProps) {
+  const id = useId();
+  if (!available) return <p className="text-muted-foreground text-sm">{`Nothing on ${target.name} to back up.`}</p>;
+  return (
+    <div className="flex items-start gap-3 rounded-xl border bg-white px-4 py-3.5">
+      <Checkbox
+        id={id}
+        aria-describedby={`${id}-hint`}
+        className="relative mt-0.5 size-[18px] pointer-coarse:after:absolute pointer-coarse:after:-inset-3.5"
+        checked={checked}
+        onCheckedChange={(c) => onChange(c === true)}
+      />
+      <div className="flex min-w-0 flex-col gap-0.5">
+        <Label htmlFor={id} className="cursor-pointer leading-snug font-semibold break-words">
+          {`Back up ${target.name} first`}
+        </Label>
+        <span id={`${id}-hint`} className="text-muted-foreground text-[13px] leading-normal">
+          {`Saves what this transfer overwrites on ${target.name} as a package, so you can restore it with Install a package. Large trees take longer.`}
+        </span>
+      </div>
+    </div>
+  );
+}
+
 const CARD = {
   from: { box: 'bg-muted', tile: 'border bg-white text-neutral-fg', label: 'text-muted-foreground' },
   to: { box: 'border border-primary-200 bg-primary-50', tile: 'bg-primary text-inverse-text', label: 'text-primary-600' },
@@ -84,10 +111,12 @@ type Props = {
   preflight?: Preflight;
   /** Lets the pre-flight notes fix the list: add missing parents, remove items the source lacks. */
   onTreesChange?(trees: DataTree[]): void;
+  /** The "Back up <target> first" choice (transfer only). */
+  backup?: Omit<BackupChoiceProps, 'target'>;
 };
 
 /** What will be written, before it is: route, replace warning, production confirmation and the items. */
-export function ReviewStep({ mode, source, target, database, trees, prodChecked, onProdChecked, onEdit, preflight, onTreesChange }: Props) {
+export function ReviewStep({ mode, source, target, database, trees, prodChecked, onProdChecked, onEdit, preflight, onTreesChange, backup }: Props) {
   const to = mode === 'transfer' ? target : undefined;
   const checks = preflight?.status === 'done' ? preflight.checks : undefined;
   const fix = (f: typeof addMissingParents) => (checks && onTreesChange ? () => onTreesChange(f(trees, checks)) : undefined);
@@ -128,6 +157,8 @@ export function ReviewStep({ mode, source, target, database, trees, prodChecked,
       {to && (
         <PreflightNotes preflight={preflight} source={source} target={to} onAddParents={fix(addMissingParents)} onRemoveNotFound={fix(removeNotFound)} />
       )}
+
+      {to && backup && <BackupChoice target={to} {...backup} />}
 
       {to && needsProdConfirm(to) && <ProdConfirm target={to} checked={prodChecked} onChange={onProdChecked} />}
 

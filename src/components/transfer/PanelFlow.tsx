@@ -1,7 +1,8 @@
 import { ONE_ENV, cancelNote, treeWarning } from '@/components/transfer/copy';
 import { EnvBadge } from '@/components/transfer/EnvironmentCards';
 import { PreflightNotes, PreflightStatus } from '@/components/transfer/Preflight';
-import { ProdConfirm, needsProdConfirm } from '@/components/transfer/ReviewStep';
+import { backupName, download } from '@/components/transfer/download';
+import { BackupChoice, ProdConfirm, needsProdConfirm } from '@/components/transfer/ReviewStep';
 import { RunView } from '@/components/transfer/RunView';
 import { usePreflight } from '@/components/transfer/usePreflight';
 import { useRun } from '@/components/transfer/useRun';
@@ -15,7 +16,7 @@ import { Icon } from '@/lib/icon';
 import { addMissingParents } from '@/lib/preflight';
 import { MERGES, labelOf, mergesFor, nameOf, withScope } from '@/lib/queue';
 import type { Env, SdkClient } from '@/lib/sdk';
-import { DATABASE, IMPORT_STEP, TRANSFER_STEPS, runTransfer, type DataTree, type MergeStrategy, type Scope } from '@/lib/transfer';
+import { DATABASE, IMPORT_STEP, TRANSFER_STEPS, backupTreesFor, runTransfer, type DataTree, type MergeStrategy, type Scope } from '@/lib/transfer';
 import { cn } from '@/lib/utils';
 import { useEnvironments } from '@/utils/hooks/useEnvironments';
 import { mdiArrowRight, mdiSwapHorizontal } from '@mdi/js';
@@ -136,6 +137,10 @@ export function PanelFlow({ client, pageName, pagePath }: Props) {
   const [parents, setParents] = useState<DataTree[]>([]);
   // The target id the production box was ticked for: another target, or a fresh review, needs it ticked again.
   const [prodFor, setProdFor] = useState<string | null>(null);
+  // "Back up <target> first" (on by default), the backup the current run made, and whether that run has a backup step.
+  const [backupOn, setBackupOn] = useState(true);
+  const [backupZip, setBackupZip] = useState<{ blob: Blob; name: string }>();
+  const [withBackup, setWithBackup] = useState(false);
   const runner = useRun();
   const { run } = runner;
 
@@ -151,6 +156,8 @@ export function PanelFlow({ client, pageName, pagePath }: Props) {
   const canStart = !!held && routeOk && !(needsProdConfirm(target) && !prodChecked);
   const dataTrees: DataTree[] = held ? [...parents, { itemPath: held.path, scope, mergeStrategy: merge }] : [];
   const preflight = usePreflight(client, held && !run ? source : undefined, target, dataTrees);
+  // Without a finished check (still checking, or it failed), the page is backed up whenever it can be overwritten.
+  const backupTrees = backupTreesFor(dataTrees, preflight?.status === 'done' ? preflight.checks : undefined);
   // An environment vanished during the review (e.g. after a Retry): back to the form. Render-phase reset.
   if (held && !run && !routeOk) setHeld(undefined);
 
@@ -171,8 +178,17 @@ export function PanelFlow({ client, pageName, pagePath }: Props) {
   };
   const start = () => {
     if (!client || !source || !target || !held || !canStart) return;
-    void runner.start({ labels: TRANSFER_STEPS, source, target }, (cb, signal) =>
-      runTransfer(client, { source, target, database: DATABASE, dataTrees }, cb, signal),
+    const backup = backupOn ? backupTrees : [];
+    setBackupZip(undefined);
+    setWithBackup(backup.length > 0);
+    const onBackup = (blob: Blob) => {
+      const pkg = { blob, name: backupName(target.name) };
+      setBackupZip(pkg);
+      download(pkg.blob, pkg.name);
+    };
+    const labels = backup.length ? ['Back up target', ...TRANSFER_STEPS] : TRANSFER_STEPS;
+    void runner.start({ labels, source, target }, (cb, signal) =>
+      runTransfer(client, { source, target, database: DATABASE, dataTrees, backup }, { ...cb, onBackup }, signal),
     );
   };
 
@@ -194,7 +210,7 @@ export function PanelFlow({ client, pageName, pagePath }: Props) {
           tookMs={run.tookMs}
           info={run.info}
           // Cancel is only safe until the target starts importing.
-          onCancel={runner.canCancelUntil(IMPORT_STEP.transfer) ? runner.cancel : undefined}
+          onCancel={runner.canCancelUntil(IMPORT_STEP.transfer + (withBackup ? 1 : 0)) ? runner.cancel : undefined}
           onAgain={() => {
             if (run.result === 'fail') {
               // Back to a fresh review of the same page.
@@ -203,6 +219,7 @@ export function PanelFlow({ client, pageName, pagePath }: Props) {
             } else close();
           }}
           onHome={close}
+          onDownloadBackup={backupZip ? () => download(backupZip.blob, backupZip.name) : undefined}
         />
       </section>
     );
@@ -259,6 +276,7 @@ export function PanelFlow({ client, pageName, pagePath }: Props) {
               : undefined
           }
         />
+        <BackupChoice target={target} available={backupTrees.length > 0} checked={backupOn} onChange={setBackupOn} />
         {needsProdConfirm(target) && <ProdConfirm target={target} checked={prodChecked} onChange={(v) => setProdFor(v ? target.id : null)} />}
         <p className="text-muted-foreground text-[13px] leading-normal">
           {cancelNote(target.name)}

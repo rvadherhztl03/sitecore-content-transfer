@@ -32,6 +32,8 @@ type Props = {
   onAgain(): void;
   onHome(): void;
   onDownload?(): void;
+  /** Set when the run backed up the target first: offers the backup again, with how to restore it. */
+  onDownloadBackup?(): void;
 };
 
 export function formatDuration(ms: number): string {
@@ -159,6 +161,7 @@ export function RunView({
   onAgain,
   onHome,
   onDownload,
+  onDownloadBackup,
 }: Props) {
   const logRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -266,6 +269,18 @@ export function RunView({
     </div>
   );
 
+  const backupButton = onDownloadBackup && (
+    <Button type="button" variant="outline" className={BTN} onClick={onDownloadBackup}>
+      Download backup
+    </Button>
+  );
+  const backupNote = (when: string) =>
+    onDownloadBackup && (
+      <p className="text-neutral-fg max-w-[520px] text-sm leading-normal break-words">
+        {`A backup of ${to} from before this transfer was downloaded. Install it into ${to} ${when}.`}
+      </p>
+    );
+
   if (result === 'success') {
     const stats = [
       info?.itemCount !== undefined && (['Items', info.itemCount] as const),
@@ -280,6 +295,7 @@ export function RunView({
           </span>
           <H className="text-[26px] leading-tight font-semibold break-words">{w.done}</H>
           <p className="text-neutral-fg max-w-[520px] text-[15px] leading-normal break-words">{w.summary(from, to)}</p>
+          {backupNote('to undo the transfer')}
           {stats.length > 0 && (
             <dl className="mt-2 flex w-full flex-wrap gap-3 text-left">
               {stats.map(([label, value]) => (
@@ -299,6 +315,7 @@ export function RunView({
             <Button type="button" variant={kind === 'export' && onDownload ? 'outline' : 'default'} className={BTN} onClick={onAgain}>
               {w.again}
             </Button>
+            {backupButton}
             {homeButton}
           </div>
         </section>
@@ -349,6 +366,7 @@ export function RunView({
                   {failed ? w.failed : w.running(from, to)}
                 </H>
                 {failed && <p className="text-neutral-fg text-sm">See the activity log for details.</p>}
+                {failed && backupNote('to put it back as it was')}
               </div>
             </div>
             {!failed && (
@@ -374,6 +392,7 @@ export function RunView({
               <Button type="button" className={BTN} onClick={onAgain}>
                 Try again
               </Button>
+              {backupButton}
               {homeButton}
             </div>
           )}

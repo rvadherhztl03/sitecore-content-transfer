@@ -16,17 +16,21 @@ const NO_PAGE = 'Open a page in the Pages editor to send it.';
 const CT = 'xmc.contentTransfer.';
 
 type Handler = (params: any) => FakeReply | Promise<FakeReply>;
+// The backup test stubs these; afterEach puts the originals back.
+const URL_FNS = { createObjectURL: URL.createObjectURL, revokeObjectURL: URL.revokeObjectURL };
 
 const context = (...names: string[]) => ({
   data: { resourceAccess: names.map((name, i) => ({ resourceId: `r${i + 1}`, tenantDisplayName: name, context: { preview: `ctx-${name}` } })) },
 });
 
 type Find = Parameters<typeof preflightReply>[0];
-// By default every path is on both environments as the same item, so the pre-flight check finds nothing.
+// Every path is on both environments as the same item.
 const EVERYWHERE: Find = (_, path) => ({ id: path });
+// The default: like EVERYWHERE, except QA doesn't have the page yet, so there is nothing to back up.
+const NEW_ON_QA: Find = (ctx, path) => (ctx === `ctx-${QA}` && path === HOME ? undefined : { id: path });
 
 // Modelled on happyHandlers in src/lib/transfer.test.ts.
-function handlers(names: string[], overrides: Record<string, Handler>, find: Find = EVERYWHERE): Record<string, Handler> {
+function handlers(names: string[], overrides: Record<string, Handler>, find: Find = NEW_ON_QA): Record<string, Handler> {
   let statusCalls = 0;
   return {
     'application.context': () => context(...names),
@@ -81,9 +85,11 @@ async function route(from = DEV, to = QA, options: Parameters<typeof setup>[0] =
   pick('To', to);
   return view;
 }
+// Opens the review and waits for its pre-flight check to finish, so Start runs with its result.
 async function toReview(from = DEV, to = QA, options: Parameters<typeof setup>[0] = {}) {
   const view = await route(from, to, options);
   fireEvent.click(send());
+  await waitFor(() => expect(screen.queryAllByText(/^Checking/)).toHaveLength(0));
   return view;
 }
 
@@ -95,6 +101,7 @@ describe('PanelFlow', () => {
   });
   afterEach(() => {
     TIMING.pollMs = pollMs;
+    Object.assign(URL, URL_FNS);
   });
 
   describe('Form', () => {
@@ -275,7 +282,7 @@ describe('PanelFlow', () => {
     const ACME = '/sitecore/content/Acme';
 
     it('shows what the target holds for the page', async () => {
-      await toReview();
+      await toReview(DEV, QA, { find: EVERYWHERE });
       const review = screen.getByRole('region', { name: 'Review' });
       expect(await screen.findByText('Pre-flight check: everything is in place on Acme · QA.')).toBeInTheDocument();
       expect(within(review).getByText('On Acme · QA').closest('div')).toHaveTextContent('Exists');
@@ -304,6 +311,23 @@ describe('PanelFlow', () => {
       click('Back');
       fireEvent.click(send());
       expect(screen.queryByText('Also sends')).not.toBeInTheDocument();
+    });
+  });
+
+  describe('Backup', () => {
+    it('backs up the page on the target first, and offers the backup afterwards', async () => {
+      Object.assign(URL, { createObjectURL: () => 'blob:b', revokeObjectURL: () => {} });
+      const { calls } = await toReview(DEV, QA, { find: EVERYWHERE });
+      expect(screen.getByRole('checkbox', { name: 'Back up Acme · QA first' })).toBeChecked();
+      click('Start');
+      expect(await screen.findByRole('heading', { name: 'Transfer complete' })).toBeInTheDocument();
+      expect(ofKey(calls, 'createContentTransfer').map((c) => c.params.query.sitecoreContextId)).toEqual([`ctx-${QA}`, `ctx-${DEV}`]);
+      expect(screen.getByRole('button', { name: 'Download backup' })).toBeInTheDocument();
+    });
+
+    it('says there is nothing to back up for a page the target does not have', async () => {
+      await toReview();
+      expect(screen.getByText('Nothing on Acme · QA to back up.')).toBeInTheDocument();
     });
   });
 

@@ -1,4 +1,5 @@
 import { ContentTree } from '@/components/transfer/ContentTree';
+import { backupName, download, localDate } from '@/components/transfer/download';
 import { EnvironmentCards } from '@/components/transfer/EnvironmentCards';
 import { ActionBar, AppHeader, BTN, MAIN, PageHeading } from '@/components/transfer/Layout';
 import { ReviewStep, needsProdConfirm } from '@/components/transfer/ReviewStep';
@@ -11,31 +12,16 @@ import { Button } from '@/components/ui/button';
 import { Icon } from '@/lib/icon';
 import { mergeTrees, newTree } from '@/lib/queue';
 import type { Env, SdkClient } from '@/lib/sdk';
-import { DATABASE, IMPORT_STEP, runExport, runTransfer, type DataTree } from '@/lib/transfer';
+import { DATABASE, IMPORT_STEP, backupTreesFor, runExport, runTransfer, type DataTree } from '@/lib/transfer';
 import { mdiArrowRight, mdiSwapHorizontal } from '@mdi/js';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 
 type Mode = 'transfer' | 'export';
 type Props = { client: SdkClient; mode: Mode; envs: Env[]; onHome(): void };
 
-function download(blob: Blob, fileName: string) {
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = fileName;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  // Revoking right after click() can drop the download in some browsers.
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
-}
-
-const localDate = (d = new Date()) =>
-  [d.getFullYear(), d.getMonth() + 1, d.getDate()].map((n) => String(n).padStart(2, '0')).join('-');
-
-const stepLabels = (mode: Mode, source: Env, target: Env | undefined) =>
+const stepLabels = (mode: Mode, source: Env, target: Env | undefined, backup = false) =>
   mode === 'transfer'
-    ? [`Create job on ${source.name}`, 'Package content', `Copy chunks to ${target!.name}`, `Assemble package on ${target!.name}`, `Import into ${DATABASE}`, 'Verify']
+    ? [...(backup ? [`Back up ${target!.name}`] : []), `Create job on ${source.name}`, 'Package content', `Copy chunks to ${target!.name}`, `Assemble package on ${target!.name}`, `Import into ${DATABASE}`, 'Verify']
     : [`Create job on ${source.name}`, 'Package content', 'Download & zip'];
 
 /** The transfer and export flow: Route ▸ Content ▸ Review ▸ Run. Owns the route, the queue and the run. */
@@ -52,6 +38,10 @@ export function Flow({ client, mode, envs, onHome }: Props) {
   const { run, running } = runner;
   // The export's package, kept for Download package.
   const [zip, setZip] = useState<{ blob: Blob; name: string }>();
+  // "Back up <target> first" (on by default), the backup the current run made, and whether that run has a backup step.
+  const [backupOn, setBackupOn] = useState(true);
+  const [backupZip, setBackupZip] = useState<{ blob: Blob; name: string }>();
+  const [withBackup, setWithBackup] = useState(false);
 
   // An id that is no longer in `envs` (e.g. after a Retry) counts as unselected.
   const source = envs.find((e) => e.id === sourceId);
@@ -64,6 +54,8 @@ export function Flow({ client, mode, envs, onHome }: Props) {
   const current = run ? 3 : routeOk ? step : 0;
   // Checks the target while on Review (transfer only); changing the list there re-checks it.
   const preflight = usePreflight(client, transfer && current === 2 ? source : undefined, target, trees);
+  // Without a finished check (still checking, or it failed), every row that can overwrite is backed up.
+  const backupTrees = transfer ? backupTreesFor(trees, preflight?.status === 'done' ? preflight.checks : undefined) : [];
 
   // Moving to another step puts focus on its heading. Not on first mount, and not into the run: useRun focuses its own.
   const page = useRef<HTMLDivElement>(null);
@@ -97,9 +89,19 @@ export function Flow({ client, mode, envs, onHome }: Props) {
   const start = () => {
     if (!canStart) return;
     const src = source!;
+    const backup = transfer && backupOn ? backupTrees : [];
     setZip(undefined);
-    void runner.start({ labels: stepLabels(mode, src, target), source: src, target }, async (cb, signal) => {
-      if (transfer) return runTransfer(client, { source: src, target: target!, database: DATABASE, dataTrees: trees }, cb, signal);
+    setBackupZip(undefined);
+    setWithBackup(backup.length > 0);
+    void runner.start({ labels: stepLabels(mode, src, target, backup.length > 0), source: src, target }, async (cb, signal) => {
+      if (transfer) {
+        const onBackup = (blob: Blob) => {
+          const pkg = { blob, name: backupName(target!.name) };
+          setBackupZip(pkg);
+          download(pkg.blob, pkg.name);
+        };
+        return runTransfer(client, { source: src, target: target!, database: DATABASE, dataTrees: trees, backup }, { ...cb, onBackup }, signal);
+      }
       const blob = await runExport(client, { source: src, dataTrees: trees }, cb, signal);
       if (!blob) return false;
       const pkg = { blob, name: `contentTransfer-${src.name}-${localDate()}.zip` };
@@ -123,7 +125,7 @@ export function Flow({ client, mode, envs, onHome }: Props) {
   let footer: ReactNode = null;
   if (run) {
     // Export has no import phase; a transfer can be cancelled until the target starts importing.
-    const cancellable = !transfer || runner.canCancelUntil(IMPORT_STEP.transfer);
+    const cancellable = !transfer || runner.canCancelUntil(IMPORT_STEP.transfer + (withBackup ? 1 : 0));
     body = (
       <div ref={runner.headingRef} className="flex flex-1 flex-col [&_h1]:outline-none">
         <RunView
@@ -145,6 +147,7 @@ export function Flow({ client, mode, envs, onHome }: Props) {
           }}
           onHome={onHome}
           onDownload={zip ? () => download(zip.blob, zip.name) : undefined}
+          onDownloadBackup={backupZip ? () => download(backupZip.blob, backupZip.name) : undefined}
         />
       </div>
     );
@@ -267,6 +270,7 @@ export function Flow({ client, mode, envs, onHome }: Props) {
             onEdit={() => go(1)}
             preflight={preflight}
             onTreesChange={setTrees}
+            backup={transfer ? { available: backupTrees.length > 0, checked: backupOn, onChange: setBackupOn } : undefined}
           />
         </main>
       );

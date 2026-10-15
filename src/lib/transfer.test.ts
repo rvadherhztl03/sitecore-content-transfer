@@ -7,6 +7,7 @@ import {
   IMPORT_STEPS,
   TIMING,
   TRANSFER_STEPS,
+  backupTreesFor,
   runExport,
   runImport,
   runTransfer,
@@ -371,6 +372,122 @@ describe('runTransfer', () => {
     const r = recorder();
     expect(await runTransfer(client, OPTS, r.cb)).toBe(true);
     expect(r.logs.some(([m, t]) => t === 'warning' && m.startsWith('Cleanup failed'))).toBe(true);
+  });
+});
+
+describe('backupTreesFor', () => {
+  const t = (itemPath: string, scope: DataTree['scope'], mergeStrategy: DataTree['mergeStrategy']): DataTree => ({ itemPath, scope, mergeStrategy });
+  const ROWS = [
+    t('/tree', 'ItemAndDescendants', 'OverrideExistingTree'),
+    t('/tree-items', 'ItemAndDescendants', 'OverrideExistingItem'),
+    t('/item', 'SingleItem', 'OverrideExistingItem'),
+    t('/children', 'ItemAndChildren', 'OverrideExistingItem'),
+    t('/kept', 'ItemAndDescendants', 'KeepExistingItem'),
+  ];
+  const check = (itemPath: string, onTarget: 'new' | 'same' | 'other') => ({ itemPath, onSource: true, onTarget, missingParents: [], otherParents: [], deleted: [] });
+
+  it('backs up what each row can overwrite, so that installing it puts the target back', () => {
+    expect(backupTreesFor(ROWS)).toEqual([
+      // A whole tree comes back exactly, removing whatever the transfer added under it.
+      t('/tree', 'ItemAndDescendants', 'OverrideExistingTree'),
+      t('/tree-items', 'ItemAndDescendants', 'OverrideExistingTree'),
+      t('/item', 'SingleItem', 'OverrideExistingItem'),
+      t('/children', 'ItemAndChildren', 'OverrideExistingItem'),
+    ]);
+  });
+
+  it('with a pre-flight check, backs up only items the target has as the same item', () => {
+    const checks = new Map([check('/tree', 'same'), check('/tree-items', 'new'), check('/item', 'other')].map((c) => [c.itemPath, c]));
+    expect(backupTreesFor(ROWS, checks)).toEqual([t('/tree', 'ItemAndDescendants', 'OverrideExistingTree')]);
+  });
+});
+
+describe('backup before the transfer', () => {
+  const BACKUP: DataTree[] = [{ itemPath: TREES[0].itemPath, scope: 'SingleItem', mergeStrategy: 'OverrideExistingItem' }];
+  const onQa = (p: any) => p.query.sitecoreContextId === 'ctx-qa';
+  const withBackup = (overrides: Record<string, Handler> = {}) => {
+    const r = recorder();
+    const zips: Blob[] = [];
+    r.cb.onBackup = (zip) => zips.push(zip);
+    const { client, calls } = fakeClient(happyHandlers(overrides));
+    return { r, zips, calls, run: () => runTransfer(client, { ...OPTS, backup: BACKUP }, r.cb) };
+  };
+
+  it('exports the target under its own job first, hands over the zip, then transfers', async () => {
+    const { r, zips, calls, run } = withBackup();
+    expect(await run()).toBe(true);
+
+    const creates = ofKey(calls, 'createContentTransfer');
+    expect(creates.map(ctxOf)).toEqual(['ctx-qa', 'ctx-dev']);
+    expect(creates[0].params.body.configuration.dataTrees).toEqual(BACKUP);
+    const backupId = creates[0].params.body.transferId;
+    expect(backupId).not.toBe(creates[1].params.body.transferId);
+    // Everything before the transfer starts is the backup: read from QA, under the backup job, cleaned up there.
+    const before = calls.slice(0, calls.indexOf(creates[1])).filter((c) => c.key.startsWith(CT));
+    expect(before.map((c) => short(c.key)).filter((k, i, a) => i === 0 || k !== a[i - 1])).toEqual([
+      'createContentTransfer',
+      'getContentTransferStatus',
+      'getChunk',
+      'deleteContentTransfer',
+    ]);
+    for (const c of before) {
+      expect(ctxOf(c)).toBe('ctx-qa');
+      expect(c.params.path?.transferId ?? c.params.body.transferId).toBe(backupId);
+    }
+
+    expect(zips).toHaveLength(1);
+    const { items, parts } = await readPackage(new File([zips[0]], 'b.zip'));
+    expect(items).toEqual([{ path: TREES[0].itemPath, id: '', scope: 'SingleItem', mergeStrategy: 'OverrideExistingItem' }]);
+    expect(await Promise.all(parts.flatMap((p) => p.chunks).map((c) => c.data.text()))).toEqual(['c0', 'c1']);
+
+    expect(r.logs).toContainEqual(['Backup chunk 1 / 2', 'info']);
+    expect(r.logs).toContainEqual(['Backed up QA.', 'success']);
+    for (let i = 0; i <= TRANSFER_STEPS.length; i++) expect(r.steps).toContainEqual([i, 'done']);
+    expect(r.steps).toContainEqual([IMPORT_STEP.transfer + 1, 'running']);
+    expect(r.progress.at(-1)).toBe(100);
+    expect(r.progress).toEqual([...r.progress].sort((a, b) => a - b));
+  });
+
+  it('stops before anything is written when the backup fails', async () => {
+    const { r, zips, calls, run } = withBackup({
+      getContentTransferStatus: (p) => (onQa(p) ? { data: { State: 'Failed' } } : { data: { State: 'Completed', ChunkSetsMetadata: [] } }),
+    });
+    expect(await run()).toBe(false);
+    expect(ofKey(calls, 'createContentTransfer').map(ctxOf)).toEqual(['ctx-qa']);
+    expect(ofKey(calls, 'saveChunk')).toHaveLength(0);
+    expect(zips).toHaveLength(0);
+    expect(r.steps).toContainEqual([0, 'fail']);
+    expect(r.logs).toContainEqual([
+      'Backup of QA failed: The source environment reported the transfer as Failed. Nothing was written to QA; to transfer without a backup, untick it on Review.',
+      'error',
+    ]);
+    const backupId = ofKey(calls, 'createContentTransfer')[0].params.body.transferId;
+    expect(ofKey(calls, 'deleteContentTransfer').some((c) => onQa(c.params) && c.params.path.transferId === backupId)).toBe(true);
+  });
+
+  it('carries on without a zip when the target has none of the items', async () => {
+    let n = 0;
+    const { r, zips, calls, run } = withBackup({
+      getContentTransferStatus: (p) =>
+        onQa(p)
+          ? { data: { State: 'Completed', ChunkSetsMetadata: [{ ChunkSetId: 'b1', ChunkCount: 0 }] } }
+          : n++ === 0
+            ? { data: { State: 'Processing' } }
+            : { data: { State: 'Completed', ChunkSetsMetadata: [{ ChunkSetId: 'cs1', ChunkCount: 2, TotalItemCount: 3 }] } },
+    });
+    expect(await run()).toBe(true);
+    expect(zips).toHaveLength(0);
+    expect(r.logs).toContainEqual(['Nothing on QA to back up.', 'info']);
+    expect(r.steps).toContainEqual([0, 'done']);
+    expect(ofKey(calls, 'saveChunk')).toHaveLength(2);
+  });
+
+  it('runs no backup step for an empty backup list', async () => {
+    const { client, calls } = fakeClient(happyHandlers());
+    const r = recorder();
+    expect(await runTransfer(client, { ...OPTS, backup: [] }, r.cb)).toBe(true);
+    expect(ofKey(calls, 'createContentTransfer').map(ctxOf)).toEqual(['ctx-dev']);
+    expect(r.steps).not.toContainEqual([TRANSFER_STEPS.length, 'done']);
   });
 });
 

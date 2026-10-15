@@ -1,4 +1,5 @@
 import { buildPackage, type ChunkData, type PackageItem, type PackagePart } from '@/lib/package';
+import type { ItemCheck } from '@/lib/preflight';
 import { SdkError, call, fetchChildren, fetchItemId, type Env, type SdkClient } from '@/lib/sdk';
 
 // The API only knows SingleItem and ItemAndDescendants; ItemAndChildren is expanded before the job is created.
@@ -15,6 +16,8 @@ export interface RunCallbacks {
   onStepChange(index: number, status: StepStatus): void;
   /** Called once, when the source package is ready. */
   onInfo?(info: { chunkCount: number; itemCount: number }): void;
+  /** Called once with the target's backup package, when a transfer backs it up first and it had something to back up. */
+  onBackup?(zip: Blob): void;
 }
 
 /** Every import writes into this database; there is no choice. */
@@ -27,6 +30,8 @@ export const IMPORT_STEP = { transfer: 4, import: 2 } as const;
 export const TIMING = { pollMs: 3000, statusTimeoutMs: 600_000, verifyTimeoutMs: 300_000 };
 export const BLOB_SUCCESS = ['OK', 'Transferred', 'Consumed'];
 export const BLOB_FAILURE = ['Error', 'Failed', 'Discarded'];
+// The share of the progress bar the backup step takes, when there is one.
+const BACKUP_SHARE = 20;
 
 const CT = 'xmc.contentTransfer.';
 
@@ -88,7 +93,7 @@ export function sleep(ms: number, signal?: AbortSignal): Promise<void> {
   });
 }
 
-export async function waitForPackage(client: SdkClient, env: Env, transferId: string, signal?: AbortSignal): Promise<ChunkSet[]> {
+export async function waitForPackage(client: SdkClient, env: Env, transferId: string, signal?: AbortSignal, allowEmpty = false): Promise<ChunkSet[]> {
   const deadline = Date.now() + TIMING.statusTimeoutMs;
   for (;;) {
     signal?.throwIfAborted();
@@ -104,7 +109,7 @@ export async function waitForPackage(client: SdkClient, env: Env, transferId: st
     );
     if (data?.State === 'Completed') {
       const sets = data.ChunkSetsMetadata ?? [];
-      if (!sets.some((s) => s.ChunkCount > 0)) throw new Error('Source returned no content for the selected paths. Check that they exist.');
+      if (!allowEmpty && !sets.some((s) => s.ChunkCount > 0)) throw new Error('Source returned no content for the selected paths. Check that they exist.');
       return sets;
     }
     if (data?.State === 'Failed') throw new Error('The source environment reported the transfer as Failed.');
@@ -250,30 +255,122 @@ async function completeSets(client: SdkClient, env: Env, transferId: string, chu
   return files;
 }
 
+// Creates the content transfer job for `dataTrees` on `env`, which packages them there.
+async function createJob(client: SdkClient, env: Env, transferId: string, dataTrees: DataTree[], cb: RunCallbacks, signal?: AbortSignal) {
+  signal?.throwIfAborted();
+  await call(client, env, 'mutate', CT + 'createContentTransfer', {
+    body: { transferId, configuration: { dataTrees: await expandTrees(client, env, dataTrees, cb, signal) } },
+  });
+}
+
+// Downloads every chunk of a ready package; `onChunk(n, total)` runs before chunk n (1-based) is fetched.
+async function downloadChunks(
+  client: SdkClient,
+  env: Env,
+  transferId: string,
+  sets: ChunkSet[],
+  onChunk: (n: number, total: number) => void,
+  signal?: AbortSignal,
+): Promise<ChunkData[]> {
+  const total = sets.reduce((n, s) => n + s.ChunkCount, 0);
+  const chunks: ChunkData[] = [];
+  for (const [chunkSet, set] of sets.entries()) {
+    for (let index = 0; index < set.ChunkCount; index++) {
+      signal?.throwIfAborted();
+      onChunk(chunks.length + 1, total);
+      const { blob, isMedia } = await fetchChunk(client, env, transferId, set.ChunkSetId, index);
+      chunks.push({ chunkSet, index, isMedia, data: blob });
+    }
+  }
+  return chunks;
+}
+
+// The package's item list. The ID is only metadata: a failed lookup leaves it empty rather than failing the package.
+async function packageItems(client: SdkClient, env: Env, dataTrees: DataTree[], signal?: AbortSignal): Promise<PackageItem[]> {
+  const items: PackageItem[] = [];
+  for (const t of dataTrees) {
+    signal?.throwIfAborted();
+    const id = (await fetchItemId(client, env, t.itemPath).catch(() => null)) ?? '';
+    items.push({ path: t.itemPath, id, scope: t.scope, mergeStrategy: t.mergeStrategy });
+  }
+  return items;
+}
+
+/**
+ * What to back up from the target before a transfer, so that installing the backup puts it back: every row that can
+ * overwrite (not "Keep what's there"), and with a pre-flight check only items the target has as the same item.
+ * A tree comes back with "Replace it and everything below", which also removes what the transfer added under it.
+ */
+export function backupTreesFor(trees: DataTree[], checks?: Map<string, ItemCheck>): DataTree[] {
+  return trees.flatMap((t): DataTree[] => {
+    if (t.mergeStrategy === 'KeepExistingItem') return [];
+    if (checks && checks.get(t.itemPath)?.onTarget !== 'same') return [];
+    return t.scope === 'ItemAndDescendants'
+      ? [{ itemPath: t.itemPath, scope: 'ItemAndDescendants', mergeStrategy: 'OverrideExistingTree' }]
+      : [{ itemPath: t.itemPath, scope: t.scope, mergeStrategy: 'OverrideExistingItem' }];
+  });
+}
+
+// Exports `trees` from the target under a job of its own, which is always cleaned up: it is never imported anywhere.
+// Returns null when the target has none of them.
+async function backUp(client: SdkClient, target: Env, trees: DataTree[], cb: RunCallbacks, signal?: AbortSignal): Promise<Blob | null> {
+  const backupId = crypto.randomUUID();
+  try {
+    await createJob(client, target, backupId, trees, cb, signal);
+    const sets = await waitForPackage(client, target, backupId, signal, true);
+    if (!sets.some((s) => s.ChunkCount > 0)) return null;
+    const chunks = await downloadChunks(client, target, backupId, sets, (n, total) => {
+      cb.onLog(`Backup chunk ${n} / ${total}`, 'info');
+      cb.onProgress(Math.round((BACKUP_SHARE * (n - 1)) / total));
+    }, signal);
+    const zip = await buildPackage(chunks, await packageItems(client, target, trees, signal));
+    signal?.throwIfAborted();
+    return zip;
+  } finally {
+    await cleanup(client, [target], backupId, cb);
+  }
+}
+
 export async function runTransfer(
   client: SdkClient,
-  opts: { source: Env; target: Env; database: string; dataTrees: DataTree[] },
+  /** `backup`: what to export from the target first (see backupTreesFor); empty or left out for no backup step. */
+  opts: { source: Env; target: Env; database: string; dataTrees: DataTree[]; backup?: DataTree[] },
   cb: RunCallbacks,
   signal?: AbortSignal,
 ): Promise<boolean> {
   const { source, target, database, dataTrees } = opts;
+  const backup = opts.backup?.length ? opts.backup : undefined;
+  // With a backup it is step 0 and takes the first part of the progress bar; every other step moves along by one.
+  const o = backup ? 1 : 0;
+  const pct = (p: number) => (backup ? Math.round(BACKUP_SHARE + (p * (100 - BACKUP_SHARE)) / 100) : p);
   const transferId = crypto.randomUUID();
   // Set once the target accepts an import: from then on it may finish even if this run fails.
   let importing = false;
   return runSteps(client, [source, target], transferId, cb, signal, false, async ({ begin, done }) => {
-    begin(0, `Creating transfer job on ${source.name}.`);
-    signal?.throwIfAborted();
-    await call(client, source, 'mutate', CT + 'createContentTransfer', {
-      body: { transferId, configuration: { dataTrees: await expandTrees(client, source, dataTrees, cb, signal) } },
-    });
-    done(5);
+    if (backup) {
+      begin(0, `Backing up ${target.name}.`);
+      const zip = await backUp(client, target, backup, cb, signal).catch((e) => {
+        if (signal?.aborted) throw e;
+        const reason = (e instanceof Error ? e.message : String(e)).replace(/\.?$/, '.');
+        throw new Error(`Backup of ${target.name} failed: ${reason} Nothing was written to ${target.name}; to transfer without a backup, untick it on Review.`);
+      });
+      if (zip) {
+        cb.onBackup?.(zip);
+        cb.onLog(`Backed up ${target.name}.`, 'success');
+      } else cb.onLog(`Nothing on ${target.name} to back up.`, 'info');
+      done(BACKUP_SHARE);
+    }
 
-    begin(1, `Waiting for ${source.name} to build the package.`);
+    begin(o, `Creating transfer job on ${source.name}.`);
+    await createJob(client, source, transferId, dataTrees, cb, signal);
+    done(pct(5));
+
+    begin(o + 1, `Waiting for ${source.name} to build the package.`);
     const sets = await waitForPackage(client, source, transferId, signal);
     cb.onInfo?.(infoOf(sets));
-    done(15);
+    done(pct(15));
 
-    begin(2, `Copying chunks from ${source.name} to ${target.name}.`);
+    begin(o + 2, `Copying chunks from ${source.name} to ${target.name}.`);
     const total = sets.reduce((n, s) => n + s.ChunkCount, 0);
     let copied = 0;
     for (const set of sets) {
@@ -285,20 +382,20 @@ export async function runTransfer(
         signal?.throwIfAborted();
         await call(client, target, 'mutate', CT + 'saveChunk', { path, query: { isMedia }, body: blob });
         copied++;
-        cb.onProgress(Math.round(15 + (60 * copied) / total));
+        cb.onProgress(pct(Math.round(15 + (60 * copied) / total)));
       }
     }
-    done(75);
+    done(pct(75));
 
-    begin(3, `Assembling the package on ${target.name}.`);
+    begin(o + 3, `Assembling the package on ${target.name}.`);
     const files = await completeSets(client, target, transferId, sets.map((s) => s.ChunkSetId), signal);
-    done(80);
+    done(pct(80));
 
-    begin(4, `Importing into ${database} on ${target.name}.`);
+    begin(o + 4, `Importing into ${database} on ${target.name}.`);
     await consumeFiles(client, target, database, files, signal, () => (importing = true));
-    done(88);
+    done(pct(88));
 
-    begin(5, `Verifying the import on ${target.name}.`);
+    begin(o + 5, `Verifying the import on ${target.name}.`);
     await verifyFiles(client, target, files, cb, signal);
     done(100);
     cb.onLog('Transfer complete.', 'success');
@@ -316,10 +413,7 @@ export async function runExport(
   const transferId = crypto.randomUUID();
   return runSteps<Blob | null>(client, [source], transferId, cb, signal, null, async ({ begin, done }) => {
     begin(0, `Creating transfer job on ${source.name}.`);
-    signal?.throwIfAborted();
-    await call(client, source, 'mutate', CT + 'createContentTransfer', {
-      body: { transferId, configuration: { dataTrees: await expandTrees(client, source, dataTrees, cb, signal) } },
-    });
+    await createJob(client, source, transferId, dataTrees, cb, signal);
     done(10);
 
     begin(1, `Waiting for ${source.name} to build the package.`);
@@ -328,25 +422,11 @@ export async function runExport(
     done(30);
 
     begin(2, `Downloading the package from ${source.name}.`);
-    const total = sets.reduce((n, s) => n + s.ChunkCount, 0);
-    const chunks: ChunkData[] = [];
-    for (const [chunkSet, set] of sets.entries()) {
-      for (let index = 0; index < set.ChunkCount; index++) {
-        signal?.throwIfAborted();
-        cb.onLog(`Downloading chunk ${chunks.length + 1} / ${total}`, 'info');
-        const { blob, isMedia } = await fetchChunk(client, source, transferId, set.ChunkSetId, index);
-        chunks.push({ chunkSet, index, isMedia, data: blob });
-        cb.onProgress(Math.round(30 + (65 * chunks.length) / total));
-      }
-    }
-    const items: PackageItem[] = [];
-    for (const t of dataTrees) {
-      signal?.throwIfAborted();
-      // The ID is only metadata in the package: a failed lookup shouldn't fail the export.
-      const id = (await fetchItemId(client, source, t.itemPath).catch(() => null)) ?? '';
-      items.push({ path: t.itemPath, id, scope: t.scope, mergeStrategy: t.mergeStrategy });
-    }
-    const zip = await buildPackage(chunks, items);
+    const chunks = await downloadChunks(client, source, transferId, sets, (n, total) => {
+      cb.onLog(`Downloading chunk ${n} / ${total}`, 'info');
+      cb.onProgress(Math.round(30 + (65 * (n - 1)) / total));
+    }, signal);
+    const zip = await buildPackage(chunks, await packageItems(client, source, dataTrees, signal));
     signal?.throwIfAborted();
     done(100);
     cb.onLog('Export complete.', 'success');

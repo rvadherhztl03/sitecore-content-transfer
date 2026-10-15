@@ -16,11 +16,14 @@ const CT = 'xmc.contentTransfer.';
 type Handler = (params: any) => FakeReply | Promise<FakeReply>;
 
 type Find = Parameters<typeof preflightReply>[0];
-// By default every path is on both environments as the same item, so the pre-flight check finds nothing.
+// Every path is on both environments as the same item.
 const EVERYWHERE: Find = (_, path) => ({ id: path });
+// The default: like EVERYWHERE, except QA doesn't have Home yet. The check finds nothing wrong, and with nothing on QA
+// to overwrite there is no backup step.
+const NEW_ON_QA: Find = (ctx, path) => (ctx === 'ctx-qa' && path === HOME ? undefined : { id: path });
 
 // Modelled on happyHandlers in src/lib/transfer.test.ts, plus the tree query and the pre-flight check.
-function handlers(overrides: Record<string, Handler> = {}, find: Find | Handler = EVERYWHERE): Record<string, Handler> {
+function handlers(overrides: Record<string, Handler> = {}, find: Find | Handler = NEW_ON_QA): Record<string, Handler> {
   let statusCalls = 0;
   const check: Handler = find.length === 2 ? preflightReply(find as Find) : (find as Handler);
   return {
@@ -72,10 +75,13 @@ function addPath(path = HOME) {
   fireEvent.change(screen.getByLabelText('Add by path'), { target: { value: path } });
   click('Add');
 }
+// Waits for a transfer's pre-flight check to finish, so Start runs with its result.
+const checked = () => waitFor(() => expect(screen.queryAllByText(/^Checking/)).toHaveLength(0));
 async function toReview(review = 'Review transfer') {
   await toContent();
   addPath();
   click(review);
+  if (review === 'Review transfer') await checked();
 }
 
 describe('Flow', () => {
@@ -232,8 +238,10 @@ describe('Flow', () => {
     const GQL = 'xmc.authoring.graphql';
 
     it('checks the target on Review and shows what it holds for each item', async () => {
-      setup();
-      await toReview();
+      setup({ find: EVERYWHERE });
+      await toContent();
+      addPath();
+      click('Review transfer');
       expect(screen.getByRole('status')).toHaveTextContent('Checking Acme · QA…');
       expect(await screen.findByText('Pre-flight check: everything is in place on Acme · QA.')).toBeInTheDocument();
       expect(screen.getByRole('columnheader', { name: 'On Acme · QA' })).toBeInTheDocument();
@@ -282,6 +290,85 @@ describe('Flow', () => {
       await toReview('Review export');
       expect(screen.queryByRole('status')).not.toBeInTheDocument();
       expect(calls.filter((c) => c.key === GQL && isPreflight(c.params))).toHaveLength(0);
+    });
+  });
+
+  describe('Backup', () => {
+    // Counts downloads by file name.
+    function downloads() {
+      Object.assign(URL, { createObjectURL: vi.fn(() => 'blob:b'), revokeObjectURL: vi.fn() });
+      const names: string[] = [];
+      vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (this: HTMLAnchorElement) {
+        names.push(this.download);
+      });
+      return names;
+    }
+    const box = () => screen.getByRole('checkbox', { name: 'Back up Acme · QA first' });
+    const creates = (calls: { key: string }[]) => ofKey(calls, 'createContentTransfer').map((c) => c.params.query.sitecoreContextId);
+
+    it('is offered, ticked, when the transfer overwrites items on the target', async () => {
+      setup({ find: EVERYWHERE });
+      await toReview();
+      expect(box()).toBeChecked();
+      expect(box()).toHaveAccessibleDescription(
+        'Saves what this transfer overwrites on Acme · QA as a package, so you can restore it with Install a package. Large trees take longer.',
+      );
+    });
+
+    it('says so when nothing on the target would be overwritten', async () => {
+      setup();
+      await toReview();
+      expect(screen.getByText('Nothing on Acme · QA to back up.')).toBeInTheDocument();
+      expect(screen.queryByRole('checkbox', { name: /Back up/ })).not.toBeInTheDocument();
+    });
+
+    it('backs up the target first, downloads it, and offers it again with how to restore it', async () => {
+      const names = downloads();
+      const { calls } = setup({ find: EVERYWHERE });
+      await toReview();
+      click('Start transfer');
+      expect(await screen.findByText('Transfer complete')).toBeInTheDocument();
+      expect(creates(calls)).toEqual(['ctx-qa', 'ctx-dev']);
+      expect(ofKey(calls, 'createContentTransfer')[0].params.body.configuration.dataTrees).toEqual([
+        { itemPath: HOME, scope: 'ItemAndDescendants', mergeStrategy: 'OverrideExistingTree' },
+      ]);
+      expect(names).toHaveLength(1);
+      expect(names[0]).toMatch(/^backup-Acme · QA-\d{4}-\d{2}-\d{2}-\d{4}\.zip$/);
+      expect(screen.getByText('A backup of Acme · QA from before this transfer was downloaded. Install it into Acme · QA to undo the transfer.')).toBeInTheDocument();
+      click('Download backup');
+      expect(names).toEqual([names[0], names[0]]);
+    });
+
+    it('unticked, transfers without a backup', async () => {
+      const { calls } = setup({ find: EVERYWHERE });
+      await toReview();
+      fireEvent.click(box());
+      click('Start transfer');
+      expect(await screen.findByText('Transfer complete')).toBeInTheDocument();
+      expect(creates(calls)).toEqual(['ctx-dev']);
+      expect(screen.queryByRole('button', { name: 'Download backup' })).not.toBeInTheDocument();
+    });
+
+    it('keeps Cancel up to the import step, which the backup step moves along by one', async () => {
+      let release!: () => void;
+      setup({ find: EVERYWHERE, overrides: { completeChunkSetTransfer: (p) => new Promise<FakeReply>((r) => (release = () => r({ data: { ContentTransferFileName: `f-${p.path.chunksetId}.raif` } }))) } });
+      await toReview();
+      click('Start transfer');
+      await waitFor(() => expect(release).toBeTypeOf('function'));
+      // Assembling on the target: nothing imported yet.
+      expect(screen.getByRole('button', { name: 'Cancel transfer' })).toBeInTheDocument();
+      release();
+      expect(await screen.findByText('Transfer complete')).toBeInTheDocument();
+    });
+
+    it('a failed transfer offers the backup to put the target back', async () => {
+      downloads();
+      setup({ find: EVERYWHERE, overrides: { consumeFile: () => ({ status: 500 }) } });
+      await toReview();
+      click('Start transfer');
+      expect(await screen.findByRole('heading', { level: 1, name: 'Transfer failed' })).toBeInTheDocument();
+      expect(screen.getByText('A backup of Acme · QA from before this transfer was downloaded. Install it into Acme · QA to put it back as it was.')).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Download backup' })).toBeInTheDocument();
     });
   });
 
