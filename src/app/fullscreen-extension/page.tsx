@@ -5,6 +5,7 @@ import { useState, useEffect } from "react";
 import type { ApplicationContext } from "@sitecore-marketplace-sdk/client";
 import { useMarketplaceClient } from "@/src/utils/hooks/useMarketplaceClient";
 import MigrationDashboard from "@/src/components/MigrationDashboard";
+import Spike from "./Spike";
 
 function FullscreenExtension() {
 	const { client, error, isInitialized } = useMarketplaceClient();
@@ -25,6 +26,8 @@ function FullscreenExtension() {
 			console.error("Error initializing Marketplace client:", error);
 		}
 	}, [client, error, isInitialized]);
+
+	if (process.env.NEXT_PUBLIC_SPIKE === "1") return <Spike client={client} />;
 
 	return (
 		<div style={{ padding: "20px", minHeight: "100vh" }}>
