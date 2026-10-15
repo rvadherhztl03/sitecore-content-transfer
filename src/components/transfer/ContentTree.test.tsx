@@ -43,6 +43,15 @@ describe('ContentTree', () => {
     expect(expand).toHaveAccessibleName('Collapse content');
   });
 
+  it("keeps Radix's scroll content a block so long names can truncate", async () => {
+    const { container } = setup();
+    await screen.findByText('content');
+    const root = container.querySelector('[data-slot=scroll-area]');
+    // jsdom has no stylesheet: assert the DOM shape and class the override selector depends on.
+    expect(root?.querySelector(':scope > [data-slot=scroll-area-viewport] > div')).toBeInTheDocument();
+    expect(root).toHaveClass('[&>[data-slot=scroll-area-viewport]>div]:!block');
+  });
+
   it('shows an expand button only for nodes with children', async () => {
     setup();
     await screen.findByText('media library');
@@ -81,8 +90,17 @@ describe('ContentTree', () => {
       'xmc.authoring.graphql': (p) => (n++ === 0 ? { status: 500 } : byPath(p)),
     });
     render(<ContentTree client={client} env={ENV} selectedPaths={[]} onToggle={vi.fn()} />);
-    fireEvent.click(await screen.findByRole('button', { name: 'Retry' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('HTTP 500');
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
     expect(await screen.findByText('content')).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it('falls back to a generic message when the error has no text', async () => {
+    const { client } = fakeClient({ 'xmc.authoring.graphql': () => ({ data: { errors: [{ message: '' }] } }) });
+    render(<ContentTree client={client} env={ENV} selectedPaths={[]} onToggle={vi.fn()} />);
+    expect(await screen.findByRole('alert')).toHaveTextContent("Couldn't load items.");
+    expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument();
   });
 
   it('retries a failed child without touching its siblings', async () => {

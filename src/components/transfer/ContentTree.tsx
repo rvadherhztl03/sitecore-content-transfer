@@ -1,7 +1,7 @@
+import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
-import { ErrorStates } from '@/components/ui/error-states';
 import { Input } from '@/components/ui/input';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -110,17 +110,15 @@ function Tree({ client, env, selectedPaths, onToggle }: Props) {
     }
     if (!Array.isArray(entry)) {
       return (
-        <div style={indent}>
-          <ErrorStates
-            className="py-2"
-            title="Couldn't load items"
-            description={entry.error}
-            actions={
-              <Button type="button" variant="link" onClick={() => void load(path)}>
+        <div className="py-1 pr-2" style={indent}>
+          <Alert variant="danger" className="py-2">
+            <AlertDescription className="flex flex-wrap items-center gap-x-2">
+              <span className="min-w-0 break-words">{entry.error || "Couldn't load items."}</span>
+              <Button type="button" variant="link" size="xs" onClick={() => void load(path)}>
                 Retry
               </Button>
-            }
-          />
+            </AlertDescription>
+          </Alert>
         </div>
       );
     }
@@ -156,7 +154,8 @@ function Tree({ client, env, selectedPaths, onToggle }: Props) {
         value={filter}
         onChange={(e) => setFilter(e.target.value)}
       />
-      <ScrollArea className="h-96 rounded-md border">
+      {/* Radix wraps the content in a `display: table` div (inline style), which grows to the widest row and defeats `truncate`; force it to a block. */}
+      <ScrollArea className="h-96 rounded-md border [&>[data-slot=scroll-area-viewport]>div]:!block">
         <div className="p-1">
           {!query ? (
             branch(ROOT, 0)
@@ -168,7 +167,9 @@ function Tree({ client, env, selectedPaths, onToggle }: Props) {
                 <li key={n.path} className="flex items-center gap-1.5 px-2 py-1">
                   {check(n)}
                   {nodeIcon(n)}
-                  <span className="shrink-0 text-sm">{n.name}</span>
+                  <span className="min-w-0 truncate text-sm" title={n.name}>
+                    {n.name}
+                  </span>
                   <span className="text-muted-foreground min-w-0 truncate font-mono text-xs" title={n.path}>
                     {n.path}
                   </span>
