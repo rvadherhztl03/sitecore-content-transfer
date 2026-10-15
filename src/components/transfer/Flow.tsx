@@ -12,7 +12,8 @@ import { Button } from '@/components/ui/button';
 import { Icon } from '@/lib/icon';
 import { mergeTrees, newTree } from '@/lib/queue';
 import type { Env, SdkClient } from '@/lib/sdk';
-import { DATABASE, IMPORT_STEP, backupTreesFor, runExport, runTransfer, type DataTree } from '@/lib/transfer';
+import { readPackage } from '@/lib/package';
+import { DATABASE, IMPORT_STEP, backupTreesFor, runExport, runImport, runTransfer, type DataTree } from '@/lib/transfer';
 import { mdiArrowRight, mdiSwapHorizontal } from '@mdi/js';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 
@@ -42,6 +43,8 @@ export function Flow({ client, mode, envs, onHome }: Props) {
   const [backupOn, setBackupOn] = useState(true);
   const [backupZip, setBackupZip] = useState<{ blob: Blob; name: string }>();
   const [withBackup, setWithBackup] = useState(false);
+  // Whether the current run is a restore of that backup rather than the transfer itself.
+  const [restoring, setRestoring] = useState(false);
 
   // An id that is no longer in `envs` (e.g. after a Retry) counts as unselected.
   const source = envs.find((e) => e.id === sourceId);
@@ -68,6 +71,7 @@ export function Flow({ client, mode, envs, onHome }: Props) {
 
   const go = (i: number) => {
     runner.reset();
+    setRestoring(false);
     setProdFor(null);
     setStep(i);
   };
@@ -93,6 +97,7 @@ export function Flow({ client, mode, envs, onHome }: Props) {
     setZip(undefined);
     setBackupZip(undefined);
     setWithBackup(backup.length > 0);
+    setRestoring(false);
     void runner.start({ labels: stepLabels(mode, src, target, backup.length > 0), source: src, target }, async (cb, signal) => {
       if (transfer) {
         const onBackup = (blob: Blob) => {
@@ -125,11 +130,26 @@ export function Flow({ client, mode, envs, onHome }: Props) {
   let footer: ReactNode = null;
   if (run) {
     // Export has no import phase; a transfer can be cancelled until the target starts importing.
-    const cancellable = !transfer || runner.canCancelUntil(IMPORT_STEP.transfer + (withBackup ? 1 : 0));
+    // From this step on the target may be importing: Cancel goes, and a failed run may have changed the target.
+    const importStep = restoring ? IMPORT_STEP.import : IMPORT_STEP.transfer + (withBackup ? 1 : 0);
+    const cancellable = !transfer || runner.canCancelUntil(importStep);
+    const changed = run.result === 'success' || (run.result === 'fail' && !runner.canCancelUntil(importStep));
+    // Installs the backup into the target the transfer wrote to, as a fresh run.
+    const restore = () => {
+      const pkg = backupZip!;
+      const tgt = run.target!;
+      runner.reset();
+      setRestoring(true);
+      const labels = [`Upload backup to ${tgt.name}`, `Assemble package on ${tgt.name}`, `Import into ${DATABASE}`, 'Verify'];
+      void runner.start({ labels, target: tgt }, async (cb, signal) => {
+        const { parts } = await readPackage(new File([pkg.blob], pkg.name));
+        return runImport(client, { target: tgt, database: DATABASE, parts }, cb, signal);
+      });
+    };
     body = (
       <div ref={runner.headingRef} className="flex flex-1 flex-col [&_h1]:outline-none">
         <RunView
-          kind={mode}
+          kind={restoring ? 'restore' : mode}
           source={run.source}
           target={run.target}
           steps={run.steps}
@@ -142,12 +162,14 @@ export function Flow({ client, mode, envs, onHome }: Props) {
           onCancel={cancellable ? runner.cancel : undefined}
           onAgain={() => {
             const failed = run.result === 'fail';
+            if (restoring && failed) return restore();
             if (!failed) setTrees([]);
             go(failed ? 2 : 0);
           }}
           onHome={onHome}
           onDownload={zip ? () => download(zip.blob, zip.name) : undefined}
           onDownloadBackup={backupZip ? () => download(backupZip.blob, backupZip.name) : undefined}
+          onRestore={backupZip && !restoring && changed ? restore : undefined}
         />
       </div>
     );

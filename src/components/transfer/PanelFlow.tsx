@@ -13,10 +13,11 @@ import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Icon } from '@/lib/icon';
+import { readPackage } from '@/lib/package';
 import { addMissingParents } from '@/lib/preflight';
 import { MERGES, labelOf, mergesFor, nameOf, withScope } from '@/lib/queue';
 import type { Env, SdkClient } from '@/lib/sdk';
-import { DATABASE, IMPORT_STEP, TRANSFER_STEPS, backupTreesFor, runTransfer, type DataTree, type MergeStrategy, type Scope } from '@/lib/transfer';
+import { DATABASE, IMPORT_STEP, IMPORT_STEPS, TRANSFER_STEPS, backupTreesFor, runImport, runTransfer, type DataTree, type MergeStrategy, type Scope } from '@/lib/transfer';
 import { cn } from '@/lib/utils';
 import { useEnvironments } from '@/utils/hooks/useEnvironments';
 import { mdiArrowRight, mdiSwapHorizontal } from '@mdi/js';
@@ -141,6 +142,8 @@ export function PanelFlow({ client, pageName, pagePath }: Props) {
   const [backupOn, setBackupOn] = useState(true);
   const [backupZip, setBackupZip] = useState<{ blob: Blob; name: string }>();
   const [withBackup, setWithBackup] = useState(false);
+  // Whether the current run is a restore of that backup rather than the send itself.
+  const [restoring, setRestoring] = useState(false);
   const runner = useRun();
   const { run } = runner;
 
@@ -169,6 +172,7 @@ export function PanelFlow({ client, pageName, pagePath }: Props) {
   };
   const close = () => {
     runner.reset();
+    setRestoring(false);
     setHeld(undefined);
   };
   const changeScope = (value: Scope) => {
@@ -181,6 +185,7 @@ export function PanelFlow({ client, pageName, pagePath }: Props) {
     const backup = backupOn ? backupTrees : [];
     setBackupZip(undefined);
     setWithBackup(backup.length > 0);
+    setRestoring(false);
     const onBackup = (blob: Blob) => {
       const pkg = { blob, name: backupName(target.name) };
       setBackupZip(pkg);
@@ -195,11 +200,25 @@ export function PanelFlow({ client, pageName, pagePath }: Props) {
   let body: ReactNode;
   let footer: ReactNode;
   if (run) {
+    // From this step on the target may be importing: Cancel goes, and a failed run may have changed the target.
+    const importStep = restoring ? IMPORT_STEP.import : IMPORT_STEP.transfer + (withBackup ? 1 : 0);
+    const changed = run.result === 'success' || (run.result === 'fail' && !runner.canCancelUntil(importStep));
+    // Installs the backup into the target the send wrote to, as a fresh run.
+    const restore = () => {
+      const pkg = backupZip!;
+      const tgt = run.target!;
+      runner.reset();
+      setRestoring(true);
+      void runner.start({ labels: IMPORT_STEPS, target: tgt }, async (cb, signal) => {
+        const { parts } = await readPackage(new File([pkg.blob], pkg.name));
+        return runImport(client!, { target: tgt, database: DATABASE, parts }, cb, signal);
+      });
+    };
     body = (
       <section ref={runner.headingRef} className="[&_h2]:outline-none">
         <RunView
           compact
-          kind="transfer"
+          kind={restoring ? 'restore' : 'transfer'}
           source={run.source}
           target={run.target}
           steps={run.steps}
@@ -210,9 +229,10 @@ export function PanelFlow({ client, pageName, pagePath }: Props) {
           tookMs={run.tookMs}
           info={run.info}
           // Cancel is only safe until the target starts importing.
-          onCancel={runner.canCancelUntil(IMPORT_STEP.transfer + (withBackup ? 1 : 0)) ? runner.cancel : undefined}
+          onCancel={runner.canCancelUntil(importStep) ? runner.cancel : undefined}
           onAgain={() => {
-            if (run.result === 'fail') {
+            if (restoring && run.result === 'fail') restore();
+            else if (run.result === 'fail') {
               // Back to a fresh review of the same page.
               runner.reset();
               setProdFor(null);
@@ -220,6 +240,7 @@ export function PanelFlow({ client, pageName, pagePath }: Props) {
           }}
           onHome={close}
           onDownloadBackup={backupZip ? () => download(backupZip.blob, backupZip.name) : undefined}
+          onRestore={backupZip && !restoring && changed ? restore : undefined}
         />
       </section>
     );

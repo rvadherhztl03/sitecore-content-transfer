@@ -325,6 +325,17 @@ describe('PanelFlow', () => {
       expect(screen.getByRole('button', { name: 'Download backup' })).toBeInTheDocument();
     });
 
+    it('Restore puts the backup back into the target', async () => {
+      Object.assign(URL, { createObjectURL: () => 'blob:b', revokeObjectURL: () => {} });
+      const { calls } = await toReview(DEV, QA, { find: EVERYWHERE });
+      click('Start');
+      await screen.findByRole('heading', { name: 'Transfer complete' });
+      click('Restore Acme · QA');
+      click('Restore now');
+      expect(await screen.findByRole('heading', { name: 'Restore complete' })).toBeInTheDocument();
+      expect(ofKey(calls, 'consumeFile').map((c) => c.params.query.sitecoreContextId)).toEqual([`ctx-${QA}`, `ctx-${QA}`]);
+    });
+
     it('says there is nothing to back up for a page the target does not have', async () => {
       await toReview();
       expect(screen.getByText('Nothing on Acme · QA to back up.')).toBeInTheDocument();

@@ -369,6 +369,60 @@ describe('Flow', () => {
       expect(await screen.findByRole('heading', { level: 1, name: 'Transfer failed' })).toBeInTheDocument();
       expect(screen.getByText('A backup of Acme · QA from before this transfer was downloaded. Install it into Acme · QA to put it back as it was.')).toBeInTheDocument();
       expect(screen.getByRole('button', { name: 'Download backup' })).toBeInTheDocument();
+      // The import had started, so QA may have changed: it can be restored.
+      expect(screen.getByRole('button', { name: 'Restore Acme · QA' })).toBeInTheDocument();
+    });
+
+    it('a transfer that failed before the import offers no Restore: QA was not written', async () => {
+      downloads();
+      setup({ find: EVERYWHERE, overrides: { saveChunk: () => ({ status: 500 }) } });
+      await toReview();
+      click('Start transfer');
+      expect(await screen.findByRole('heading', { level: 1, name: 'Transfer failed' })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Download backup' })).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Restore Acme · QA' })).not.toBeInTheDocument();
+    });
+
+    // Runs a backed-up transfer to the end and confirms the restore.
+    async function restore(options: Parameters<typeof setup>[0] = {}) {
+      downloads();
+      const view = setup({ find: EVERYWHERE, ...options });
+      await toReview();
+      click('Start transfer');
+      await screen.findByText('Transfer complete');
+      click('Restore Acme · QA');
+      click('Restore now');
+      return view;
+    }
+
+    it('Restore installs the backup back into the target', async () => {
+      const { calls } = await restore();
+      expect(await screen.findByRole('heading', { level: 1, name: 'Restore complete' })).toBeInTheDocument();
+      expect(screen.getByText('Acme · QA is back as it was before the transfer.')).toBeInTheDocument();
+      // The transfer saved its two chunks on QA, then the restore uploaded the backup's two.
+      const saves = ofKey(calls, 'saveChunk');
+      expect(saves.map((c) => c.params.query.sitecoreContextId)).toEqual(['ctx-qa', 'ctx-qa', 'ctx-qa', 'ctx-qa']);
+      expect(await Promise.all(saves.slice(2).map((c) => c.params.body.text()))).toEqual(['c0', 'c1']);
+      expect(saves[2].params.path.transferId).not.toBe(saves[0].params.path.transferId);
+      expect(ofKey(calls, 'consumeFile').map((c) => c.params.query.sitecoreContextId)).toEqual(['ctx-qa', 'ctx-qa']);
+      expect(screen.getByRole('button', { name: 'Download backup' })).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Restore Acme · QA' })).not.toBeInTheDocument();
+    });
+
+    it('a failed restore offers Try again, which restores again', async () => {
+      let consumes = 0;
+      await restore({ overrides: { consumeFile: () => (consumes++ === 1 ? { status: 500 } : {}) } });
+      expect(await screen.findByRole('heading', { level: 1, name: 'Restore failed' })).toBeInTheDocument();
+      click('Try again');
+      expect(await screen.findByRole('heading', { level: 1, name: 'Restore complete' })).toBeInTheDocument();
+      expect(consumes).toBe(3);
+    });
+
+    it('Start another transfer after a restore starts over at Route', async () => {
+      await restore();
+      await screen.findByRole('heading', { level: 1, name: 'Restore complete' });
+      click('Start another transfer');
+      expect(screen.getByRole('heading', { level: 1, name: 'Where is the content going?' })).toBeInTheDocument();
     });
   });
 

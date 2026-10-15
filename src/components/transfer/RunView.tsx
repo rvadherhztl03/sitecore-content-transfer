@@ -1,4 +1,5 @@
 import { ActionBar } from '@/components/transfer/Layout';
+import { ProdConfirm, needsProdConfirm } from '@/components/transfer/ReviewStep';
 import { Button } from '@/components/ui/button';
 import { Progress } from '@/components/ui/progress';
 import { Spinner } from '@/components/ui/spinner';
@@ -7,10 +8,10 @@ import type { Env } from '@/lib/sdk';
 import type { LogType, StepStatus } from '@/lib/transfer';
 import { cn } from '@/lib/utils';
 import { mdiAlertCircle, mdiCheck, mdiChevronDown } from '@mdi/js';
-import { useEffect, useRef, useState, type ElementType } from 'react';
+import { useEffect, useId, useRef, useState, type ElementType } from 'react';
 
 export type LogLine = { text: string; type: LogType; time: string };
-export type RunKind = 'transfer' | 'export' | 'install';
+export type RunKind = 'transfer' | 'export' | 'install' | 'restore';
 /** What the package holds; leave out `itemCount` when it isn't known (a bare .raif has no item list). */
 export type RunInfo = { chunkCount: number; itemCount?: number };
 
@@ -34,6 +35,8 @@ type Props = {
   onDownload?(): void;
   /** Set when the run backed up the target first: offers the backup again, with how to restore it. */
   onDownloadBackup?(): void;
+  /** Set when the target can be put back from that backup: offers Restore, which asks first. */
+  onRestore?(): void;
 };
 
 export function formatDuration(ms: number): string {
@@ -87,6 +90,16 @@ const WORDS: Record<RunKind, Words> = {
     failed: 'Install failed',
     cancel: 'Cancel install',
     again: 'Install another package',
+  },
+  restore: {
+    label: 'Restore',
+    noun: 'restore',
+    running: (_s, t) => `Restoring ${t}`,
+    summary: (_s, t) => `${t} is back as it was before the transfer.`,
+    done: 'Restore complete',
+    failed: 'Restore failed',
+    cancel: 'Cancel restore',
+    again: 'Start another transfer',
   },
 };
 
@@ -162,6 +175,7 @@ export function RunView({
   onHome,
   onDownload,
   onDownloadBackup,
+  onRestore,
 }: Props) {
   const logRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -281,6 +295,52 @@ export function RunView({
       </p>
     );
 
+  // Restore writes to the target again, so it asks first, with the production box for a production target.
+  const [asking, setAsking] = useState(false);
+  const [prodOk, setProdOk] = useState(false);
+  const questionId = useId();
+  const prod = needsProdConfirm(target);
+  const restoreButton = onRestore && !asking && (
+    <Button
+      type="button"
+      variant="outline"
+      className={BTN}
+      onClick={() => {
+        setProdOk(false);
+        setAsking(true);
+      }}
+    >
+      {`Restore ${to}`}
+    </Button>
+  );
+  const restoreQuestion = onRestore && asking && (
+    <div role="group" aria-labelledby={questionId} className="border-warning-200 bg-warning-50 flex w-full flex-col gap-3 rounded-xl border p-4 text-left">
+      <strong id={questionId} className="text-[15px] font-semibold break-words">
+        {`Restore ${to} to how it was before this transfer?`}
+      </strong>
+      <p className="text-neutral-fg text-sm leading-normal break-words">
+        {`This writes the backup back into ${to}: items in it are replaced, and trees backed up with + Everything below lose anything the transfer added under them. Changes made on ${to} since the transfer are overwritten.`}
+      </p>
+      {prod && target && <ProdConfirm target={target} checked={prodOk} onChange={setProdOk} />}
+      <div className="flex flex-wrap gap-2.5">
+        <Button
+          type="button"
+          className={BTN}
+          disabled={prod && !prodOk}
+          onClick={() => {
+            setAsking(false);
+            onRestore();
+          }}
+        >
+          Restore now
+        </Button>
+        <Button type="button" variant="outline" className={BTN} onClick={() => setAsking(false)}>
+          Keep as is
+        </Button>
+      </div>
+    </div>
+  );
+
   if (result === 'success') {
     const stats = [
       info?.itemCount !== undefined && (['Items', info.itemCount] as const),
@@ -316,8 +376,10 @@ export function RunView({
               {w.again}
             </Button>
             {backupButton}
+            {restoreButton}
             {homeButton}
           </div>
+          {restoreQuestion}
         </section>
         <details className={cn(CARD, 'group px-4')}>
           <summary className="flex min-h-12 cursor-pointer items-center justify-between gap-3 text-[15px] font-semibold">
@@ -393,9 +455,11 @@ export function RunView({
                 Try again
               </Button>
               {backupButton}
+              {restoreButton}
               {homeButton}
             </div>
           )}
+          {failed && restoreQuestion}
           {compact && (cancel || note) && (
             <div className="flex flex-wrap items-center justify-between gap-3">
               <span className="text-neutral-fg text-sm">{note}</span>

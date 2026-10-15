@@ -208,6 +208,7 @@ describe('RunView complete', () => {
     ['transfer', 'Transfer complete', 'Content from Acme · Development is now in Acme · QA.'],
     ['export', 'Package ready', 'Your package is ready to download.'],
     ['install', 'Package installed', 'The package is now in Acme · QA.'],
+    ['restore', 'Restore complete', 'Acme · QA is back as it was before the transfer.'],
   ] as const)('titles and summarises a %s', (kind, title, summary) => {
     done(kind);
     expect(screen.getByRole('heading', { level: 1, name: title })).toBeInTheDocument();
@@ -285,6 +286,7 @@ describe('RunView failed', () => {
     ['transfer', 'Transfer failed'],
     ['export', 'Export failed'],
     ['install', 'Install failed'],
+    ['restore', 'Restore failed'],
   ] as const)('titles a failed %s', (kind, title) => {
     setup({ kind, running: false, result: 'fail' });
     expect(screen.getByRole('heading', { level: 1, name: title })).toBeInTheDocument();
@@ -426,5 +428,52 @@ describe('RunView layout', () => {
     expect(screen.getByRole('button', { name: 'Back to home' })).toBeInTheDocument();
     fireEvent.click(screen.getAllByRole('button').find((b) => /another transfer|Try again/.test(b.textContent ?? ''))!);
     expect(onAgain).toHaveBeenCalledOnce();
+  });
+});
+
+describe('RunView restore', () => {
+  const PROD: Env = { id: 'prod', name: 'Acme · Production', contextId: 'c3', tenantName: 'acme-prod' };
+  const QUESTION = 'Restore Acme · QA to how it was before this transfer?';
+
+  it('asks first; Keep as is closes the question without restoring, Restore now restores', () => {
+    const onRestore = vi.fn();
+    done('transfer', { onRestore });
+    expect(screen.queryByRole('group', { name: QUESTION })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Restore Acme · QA' }));
+    const question = screen.getByRole('group', { name: QUESTION });
+    expect(question).toHaveTextContent(
+      'This writes the backup back into Acme · QA: items in it are replaced, and trees backed up with + Everything below lose anything the transfer added under them. Changes made on Acme · QA since the transfer are overwritten.',
+    );
+    expect(screen.queryByRole('button', { name: 'Restore Acme · QA' })).not.toBeInTheDocument();
+    fireEvent.click(within(question).getByRole('button', { name: 'Keep as is' }));
+    expect(screen.queryByRole('group', { name: QUESTION })).not.toBeInTheDocument();
+    expect(onRestore).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Restore Acme · QA' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Restore now' }));
+    expect(onRestore).toHaveBeenCalledOnce();
+    expect(screen.queryByRole('group', { name: QUESTION })).not.toBeInTheDocument();
+  });
+
+  it('a production target needs the checkbox before Restore now, every time it asks', () => {
+    done('transfer', { target: PROD, onRestore: vi.fn() });
+    const ask = () => fireEvent.click(screen.getByRole('button', { name: 'Restore Acme · Production' }));
+    ask();
+    expect(screen.getByRole('button', { name: 'Restore now' })).toBeDisabled();
+    fireEvent.click(screen.getByRole('checkbox', { name: 'I understand this writes to Acme · Production' }));
+    expect(screen.getByRole('button', { name: 'Restore now' })).toBeEnabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Keep as is' }));
+    ask();
+    expect(screen.getByRole('button', { name: 'Restore now' })).toBeDisabled();
+  });
+
+  it('a failed run offers it too', () => {
+    setup({ running: false, result: 'fail', onRestore: vi.fn() });
+    expect(screen.getByRole('button', { name: 'Restore Acme · QA' })).toBeInTheDocument();
+  });
+
+  it('is not offered without onRestore', () => {
+    done('transfer');
+    expect(screen.queryByRole('button', { name: /^Restore/ })).not.toBeInTheDocument();
   });
 });
