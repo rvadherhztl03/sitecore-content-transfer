@@ -38,10 +38,24 @@ describe('ImportPanel', () => {
     expect(screen.getByRole('columnheader', { name: 'If it exists' })).toBeInTheDocument();
     expect(screen.getByText('p.zip')).toHaveClass('font-mono');
     expect(screen.getByText(/1 chunk · 0 media/)).toBeInTheDocument();
-    expect(onPackage).toHaveBeenCalledOnce();
-    const pkg = onPackage.mock.calls[0][0];
+    expect(onPackage).toHaveBeenCalledTimes(2);
+    const pkg = onPackage.mock.lastCall![0];
     expect(pkg.fileName).toBe('p.zip');
     expect(pkg.parts).toHaveLength(1);
+  });
+
+  it('reports null while a replacement is parsing, then the new package', async () => {
+    const { onPackage, input } = setup();
+    fireEvent.change(input, { target: { files: [await zipFile('p.zip')] } });
+    await screen.findByText('p.zip');
+    onPackage.mockClear();
+    fireEvent.change(input, { target: { files: [await zipFile('r.zip')] } });
+    // Synchronously, before the file is read: nothing is loaded.
+    expect(onPackage).toHaveBeenCalledOnce();
+    expect(onPackage).toHaveBeenCalledWith(null);
+    await screen.findByText('r.zip');
+    expect(onPackage).toHaveBeenCalledTimes(2);
+    expect(onPackage).toHaveBeenLastCalledWith(expect.objectContaining({ fileName: 'r.zip' }));
   });
 
   it('accepts a dropped file', async () => {

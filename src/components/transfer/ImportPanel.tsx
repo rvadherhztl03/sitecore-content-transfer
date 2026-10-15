@@ -27,6 +27,8 @@ export function ImportPanel({ disabled, onPackage }: Props) {
     if (!file || locked) return;
     setBusy(true);
     setError(null);
+    // Nothing is loaded while the replacement is read, so the parent can't act on the old package.
+    onPackage(null);
     try {
       const next = { fileName: file.name, size: file.size, ...(await readPackage(file)) };
       setPkg(next);
