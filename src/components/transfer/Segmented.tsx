@@ -10,12 +10,6 @@ type Props = {
   disabled?: boolean;
 };
 
-/** The options of a database picker. */
-export const DATABASES = [
-  { value: 'master', label: 'master' },
-  { value: 'web', label: 'web' },
-];
-
 const ARROWS: Record<string, number> = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 };
 
 export function Segmented({ label, value, options, onChange, size = 'md', disabled }: Props) {

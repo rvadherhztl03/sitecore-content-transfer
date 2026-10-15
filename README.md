@@ -10,7 +10,7 @@ The app opens on **Home** ("What would you like to do?"): three actions, plus th
 
 | Action | What it does |
 |---|---|
-| **Transfer between environments** | Copies items from a source environment into a target environment's `master` or `web` database. |
+| **Transfer between environments** | Copies items from a source environment into a target environment's `master` database. |
 | **Export a package** | Packages items from one environment into a `.zip` download. |
 | **Install a package** | Installs a `.zip` or `.raif` package into an environment. |
 
@@ -25,7 +25,7 @@ Options are shown in plain language. Each item has what it includes, `This item`
 
 ### Transfer
 
-1. **Route:** pick the environment to copy **From** and the one to copy **To** (cards, with a swap button; the source can't also be the target) and the database to write to. Items are always read from `master` on the source.
+1. **Route:** pick the environment to copy **From** and the one to copy **To** (cards, with a swap button; the source can't also be the target). Items are read from `master` on the source and always written to `master` on the target.
 2. **Content:** tick items in the source tree, add them by path, or import a JSON list. New items start as `+ Everything below` and `Replace it and everything below`; change either per item.
 3. **Review:** "Ready to transfer. Nothing has been written yet." It shows the route and every item, and warns when an item replaces everything below it on the target. If the target's name looks like production, you must tick `I understand this writes to <target>` before **Start transfer** is enabled.
 4. **Live progress:** percentage, chunk counter, a step timeline with durations and an activity log. You can cancel until the import into the target starts; after that the target finishes on its own and the app says so.
@@ -33,11 +33,11 @@ Options are shown in plain language. Each item has what it includes, `This item`
 
 ### Export
 
-The same steps, with **From** only (no target or database). Review ends in **Create package**; **Package ready** downloads `contentTransfer-<source>-<date>.zip` automatically, and **Download package** saves it again.
+The same steps, with **From** only (no target). Review ends in **Create package**; **Package ready** downloads `contentTransfer-<source>-<date>.zip` automatically, and **Download package** saves it again.
 
 ### Install a package
 
-One screen: choose a `.zip` or `.raif` file, check **What's inside** (items, what each includes and its "if it exists" rule; a bare `.raif` has no list), pick the environment and database to **Install into**, and confirm production if needed. **Install package** runs the same live progress, then **Package installed**.
+One screen: choose a `.zip` or `.raif` file, check **What's inside** (items, what each includes and its "if it exists" rule; a bare `.raif` has no list), pick the environment to **Install into** (always written to `master`), and confirm production if needed. **Install package** runs the same live progress, then **Package installed**.
 
 ### Pages editor: Send this page
 
@@ -77,9 +77,9 @@ Everything runs in the browser through the Marketplace SDK: `xmc.contentTransfer
 
 The pipelines live in `src/lib/transfer.ts`:
 
-- **Transfer:** create job on the source, wait for the package, copy every chunk to the target, assemble, import into the database, verify, then clean up both sides.
+- **Transfer:** create job on the source, wait for the package, copy every chunk to the target, assemble, import into `master`, verify, then clean up both sides.
 - **Export:** create job, wait for the package, download the chunks and zip them.
-- **Import:** upload the package chunks, assemble, import into the database, verify.
+- **Import:** upload the package chunks, assemble, import into `master`, verify.
 
 ---
 

@@ -15,6 +15,9 @@ export interface RunCallbacks {
   onInfo?(info: { chunkCount: number; itemCount: number }): void;
 }
 
+/** Every import writes into this database; there is no choice. */
+export const DATABASE = 'master';
+
 export const TRANSFER_STEPS = ['Create job', 'Wait for package', 'Copy chunks', 'Assemble on target', 'Import into database', 'Verify'];
 export const IMPORT_STEPS = ['Upload package', 'Assemble on target', 'Import into database', 'Verify'];
 // Index of 'Import into database' in each step list; from here on a failure or cancel may leave the target importing.

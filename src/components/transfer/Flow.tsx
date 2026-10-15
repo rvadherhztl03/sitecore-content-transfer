@@ -3,7 +3,6 @@ import { EnvironmentCards } from '@/components/transfer/EnvironmentCards';
 import { ActionBar, AppHeader, BTN, MAIN, PageHeading } from '@/components/transfer/Layout';
 import { ReviewStep, needsProdConfirm } from '@/components/transfer/ReviewStep';
 import { RunView } from '@/components/transfer/RunView';
-import { DATABASES, Segmented } from '@/components/transfer/Segmented';
 import { SelectionQueue } from '@/components/transfer/SelectionQueue';
 import { Stepper } from '@/components/transfer/Stepper';
 import { useRun } from '@/components/transfer/useRun';
@@ -11,7 +10,7 @@ import { Button } from '@/components/ui/button';
 import { Icon } from '@/lib/icon';
 import { mergeTrees, newTree } from '@/lib/queue';
 import type { Env, SdkClient } from '@/lib/sdk';
-import { IMPORT_STEP, runExport, runTransfer, type DataTree } from '@/lib/transfer';
+import { DATABASE, IMPORT_STEP, runExport, runTransfer, type DataTree } from '@/lib/transfer';
 import { mdiArrowRight, mdiSwapHorizontal } from '@mdi/js';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 
@@ -33,9 +32,9 @@ function download(blob: Blob, fileName: string) {
 const localDate = (d = new Date()) =>
   [d.getFullYear(), d.getMonth() + 1, d.getDate()].map((n) => String(n).padStart(2, '0')).join('-');
 
-const stepLabels = (mode: Mode, source: Env, target: Env | undefined, database: string) =>
+const stepLabels = (mode: Mode, source: Env, target: Env | undefined) =>
   mode === 'transfer'
-    ? [`Create job on ${source.name}`, 'Package content', `Copy chunks to ${target!.name}`, `Assemble package on ${target!.name}`, `Import into ${database}`, 'Verify']
+    ? [`Create job on ${source.name}`, 'Package content', `Copy chunks to ${target!.name}`, `Assemble package on ${target!.name}`, `Import into ${DATABASE}`, 'Verify']
     : [`Create job on ${source.name}`, 'Package content', 'Download & zip'];
 
 /** The transfer and export flow: Route ▸ Content ▸ Review ▸ Run. Owns the route, the queue and the run. */
@@ -44,7 +43,6 @@ export function Flow({ client, mode, envs, onHome }: Props) {
   const [step, setStep] = useState(0);
   const [sourceId, setSourceId] = useState<string | undefined>(envs[0]?.id);
   const [targetId, setTargetId] = useState<string | undefined>(envs[1]?.id);
-  const [database, setDatabase] = useState('master');
   const [trees, setTrees] = useState<DataTree[]>([]);
   // The target id the production box was ticked for: another target, or a fresh visit to Review, needs it ticked again.
   const [prodFor, setProdFor] = useState<string | null>(null);
@@ -97,8 +95,8 @@ export function Flow({ client, mode, envs, onHome }: Props) {
     if (!canStart) return;
     const src = source!;
     setZip(undefined);
-    void runner.start({ labels: stepLabels(mode, src, target, database), source: src, target }, async (cb, signal) => {
-      if (transfer) return runTransfer(client, { source: src, target: target!, database, dataTrees: trees }, cb, signal);
+    void runner.start({ labels: stepLabels(mode, src, target), source: src, target }, async (cb, signal) => {
+      if (transfer) return runTransfer(client, { source: src, target: target!, database: DATABASE, dataTrees: trees }, cb, signal);
       const blob = await runExport(client, { source: src, dataTrees: trees }, cb, signal);
       if (!blob) return false;
       const pkg = { blob, name: `contentTransfer-${src.name}-${localDate()}.zip` };
@@ -110,7 +108,7 @@ export function Flow({ client, mode, envs, onHome }: Props) {
 
   const count = `${trees.length} ${trees.length === 1 ? 'item' : 'items'}`;
   const pair = transfer ? `${source?.name} → ${target?.name}` : (source?.name ?? '');
-  const routeText = transfer ? `${pair} · ${database}` : pair;
+  const routeText = transfer ? `${pair} · ${DATABASE}` : pair;
   const steps = [
     { label: 'Route', hint: routeOk ? routeText : transfer ? 'Source and target' : 'Source' },
     { label: 'Content', hint: count },
@@ -189,15 +187,6 @@ export function Flow({ client, mode, envs, onHome }: Props) {
             </>
           )}
         </div>
-        {transfer && (
-          <section className="flex flex-wrap items-center justify-between gap-4 rounded-[14px] border bg-white px-5 py-[18px]">
-            <div className="flex min-w-0 flex-[1_1_320px] flex-col gap-0.5">
-              <h2 className="text-[15px] font-semibold">Write into database</h2>
-              <p className="text-muted-foreground text-sm">Items are read from master on the source and written to this database on the target.</p>
-            </div>
-            <Segmented label="Write into database" value={database} options={DATABASES} onChange={setDatabase} />
-          </section>
-        )}
       </main>
     );
     footer = (
@@ -210,7 +199,7 @@ export function Flow({ client, mode, envs, onHome }: Props) {
                 <Icon path={mdiArrowRight} className="text-primary size-[18px] shrink-0" aria-hidden="true" />
                 <span className="sr-only">to</span>
                 <strong className="text-foreground font-semibold break-words">{target.name}</strong>
-                <span className="text-muted-foreground">{`· ${database}`}</span>
+                <span className="text-muted-foreground">{`· ${DATABASE}`}</span>
               </>
             )}
           </>
@@ -268,7 +257,7 @@ export function Flow({ client, mode, envs, onHome }: Props) {
             mode={mode}
             source={source!}
             target={target}
-            database={database}
+            database={DATABASE}
             trees={trees}
             prodChecked={prodChecked}
             onProdChecked={(v) => setProdFor(v ? target!.id : null)}

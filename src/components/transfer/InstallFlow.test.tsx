@@ -87,7 +87,9 @@ describe('InstallFlow', () => {
     expect(within(screen.getByRole('banner')).getByText('Install a package')).toBeInTheDocument();
     expect(screen.getByText('Drop a .zip or .raif here, or browse')).toBeInTheDocument();
     expect(within(screen.getByRole('group', { name: 'Install into' })).queryByRole('radio', { checked: true })).not.toBeInTheDocument();
-    expect(screen.getByRole('radio', { name: 'master' })).toBeChecked();
+    // The database is not a choice: imports always write to master.
+    expect(screen.queryByRole('radiogroup', { name: /database/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('radio', { name: 'web' })).not.toBeInTheDocument();
     expect(install()).toBeDisabled();
   });
 
@@ -99,8 +101,6 @@ describe('InstallFlow', () => {
     await load();
     expect(install()).toBeEnabled();
     expect(screen.getByRole('contentinfo')).toHaveTextContent(/2 items.*Acme · QA.*· master/);
-    fireEvent.click(screen.getByRole('radio', { name: 'web' }));
-    expect(screen.getByRole('contentinfo')).toHaveTextContent(/Acme · QA.*· web/);
 
     // An unusable file replaces the package, so there is nothing to install.
     fireEvent.change(screen.getByLabelText('Package file'), { target: { files: [new File(['x'], 'q.txt')] } });
@@ -143,11 +143,10 @@ describe('InstallFlow', () => {
     expect(install()).toBeDisabled();
   });
 
-  it('installs into the chosen target and database, then shows Package installed', async () => {
+  it('installs into the chosen target on master, then shows Package installed', async () => {
     const { calls } = setup();
     await load(NAME, true);
     pick(QA);
-    fireEvent.click(screen.getByRole('radio', { name: 'web' }));
     click('Install package');
 
     // The screen steps aside for the run view.
@@ -155,7 +154,7 @@ describe('InstallFlow', () => {
     expect(screen.queryByRole('heading', { name: "What's inside" })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Install package' })).not.toBeInTheDocument();
     const steps = within(screen.getByRole('list', { name: 'Steps' }));
-    for (const label of ['Upload package', 'Assemble package on Acme · QA', 'Import into web', 'Verify']) {
+    for (const label of ['Upload package', 'Assemble package on Acme · QA', 'Import into master', 'Verify']) {
       expect(steps.getByText(label)).toBeInTheDocument();
     }
 
@@ -166,7 +165,7 @@ describe('InstallFlow', () => {
     for (const c of calls) expect(c.params.query.sitecoreContextId).toBe('ctx-qa');
     const saves = ofKey(calls, 'saveChunk');
     expect(saves.map((c) => c.params.query.isMedia)).toEqual([false, true]);
-    expect(ofKey(calls, 'consumeFile')[0].params.query).toMatchObject({ databaseName: 'web', sitecoreContextId: 'ctx-qa' });
+    expect(ofKey(calls, 'consumeFile')[0].params.query).toMatchObject({ databaseName: 'master', sitecoreContextId: 'ctx-qa' });
     expect(ofKey(calls, 'deleteContentTransfer')).toHaveLength(1);
     expect(screen.getByText('Items').parentElement).toHaveTextContent('Items2');
     expect(screen.getByText('Chunks').parentElement).toHaveTextContent('Chunks2');
@@ -309,12 +308,11 @@ describe('InstallFlow', () => {
     expect(install()).toBeDisabled();
   });
 
-  it('Try again after a failure keeps the package, target and database, but asks for the tick again', async () => {
+  it('Try again after a failure keeps the package and target, but asks for the tick again', async () => {
     const { calls } = setup({ envs: [DEV, PROD], overrides: { saveChunk: () => ({ status: 500 }) } });
     await load();
     pick(PROD);
     fireEvent.click(prodBox());
-    fireEvent.click(screen.getByRole('radio', { name: 'web' }));
     click('Install package');
     const heading = await screen.findByRole('heading', { level: 1, name: 'Install failed' });
     await waitFor(() => expect(heading).toHaveFocus());
@@ -324,7 +322,6 @@ describe('InstallFlow', () => {
     expect(screen.getByText(NAME)).toBeInTheDocument();
     expect(screen.getByText('/sitecore/content/A')).toBeInTheDocument();
     expect(target(PROD)).toBeChecked();
-    expect(screen.getByRole('radio', { name: 'web' })).toBeChecked();
     expect(prodBox()).not.toBeChecked();
     expect(install()).toBeDisabled();
 

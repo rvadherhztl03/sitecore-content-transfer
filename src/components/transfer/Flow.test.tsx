@@ -89,6 +89,13 @@ describe('Flow', () => {
       expect(within(stepBar()).getByText('Acme · Development → Acme · QA · master')).toBeInTheDocument();
     });
 
+    it('has no database choice: a transfer always writes to master', () => {
+      setup();
+      expect(screen.queryByRole('radiogroup', { name: /database/i })).not.toBeInTheDocument();
+      expect(screen.queryByRole('heading', { name: /database/i })).not.toBeInTheDocument();
+      expect(within(screen.getByRole('contentinfo')).getByText('· master')).toBeInTheDocument();
+    });
+
     it('disables the source in To and the target in From', () => {
       setup();
       expect(radio('To', DEV)).toBeDisabled();

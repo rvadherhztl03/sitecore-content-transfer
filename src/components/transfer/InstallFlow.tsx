@@ -3,12 +3,11 @@ import { ImportPanel, type LoadedPackage } from '@/components/transfer/ImportPan
 import { ActionBar, AppHeader, BTN, MAIN, PageHeading } from '@/components/transfer/Layout';
 import { ProdConfirm, needsProdConfirm } from '@/components/transfer/ReviewStep';
 import { RunView } from '@/components/transfer/RunView';
-import { DATABASES, Segmented } from '@/components/transfer/Segmented';
 import { useRun } from '@/components/transfer/useRun';
 import { Button } from '@/components/ui/button';
 import { Icon } from '@/lib/icon';
 import type { Env, SdkClient } from '@/lib/sdk';
-import { IMPORT_STEP, runImport } from '@/lib/transfer';
+import { DATABASE, IMPORT_STEP, runImport } from '@/lib/transfer';
 import { mdiArrowRight } from '@mdi/js';
 import { useState } from 'react';
 
@@ -20,7 +19,6 @@ export function InstallFlow({ client, envs, onHome }: Props) {
   // Bumped to give ImportPanel a fresh, empty state; it owns what its file card shows.
   const [fresh, setFresh] = useState(0);
   const [targetId, setTargetId] = useState<string>();
-  const [database, setDatabase] = useState('master');
   // The target id the production box was ticked for, cleared whenever the target changes.
   const [prodFor, setProdFor] = useState<string | null>(null);
   // `run` is null until Install package is clicked.
@@ -43,12 +41,12 @@ export function InstallFlow({ client, envs, onHome }: Props) {
     const { parts, items } = pkg!;
     void runner.start(
       {
-        labels: ['Upload package', `Assemble package on ${tgt.name}`, `Import into ${database}`, 'Verify'],
+        labels: ['Upload package', `Assemble package on ${tgt.name}`, `Import into ${DATABASE}`, 'Verify'],
         target: tgt,
         // A bare .raif has no item list, so there is no count to show.
         info: { chunkCount: parts.reduce((n, p) => n + p.chunks.length, 0), itemCount: items.length || undefined },
       },
-      (cb, signal) => runImport(client, { target: tgt, database, parts }, cb, signal),
+      (cb, signal) => runImport(client, { target: tgt, database: DATABASE, parts }, cb, signal),
     );
   };
 
@@ -86,10 +84,6 @@ export function InstallFlow({ client, envs, onHome }: Props) {
             {target && needsProdConfirm(target) && (
               <ProdConfirm target={target} checked={prodChecked} onChange={(v) => setProdFor(v ? target.id : null)} />
             )}
-            <section className="flex flex-wrap items-center justify-between gap-3 rounded-[14px] border bg-white px-5 py-4">
-              <h2 className="text-md font-medium">Database</h2>
-              <Segmented label="Database" value={database} options={DATABASES} onChange={setDatabase} />
-            </section>
           </div>
         </div>
       </main>
@@ -121,7 +115,7 @@ export function InstallFlow({ client, envs, onHome }: Props) {
                   <Icon path={mdiArrowRight} className="text-primary size-[18px] shrink-0" aria-hidden="true" />
                   <span className="sr-only">to</span>
                   <strong className="text-foreground font-semibold break-words">{target.name}</strong>
-                  <span className="text-muted-foreground">{`· ${database}`}</span>
+                  <span className="text-muted-foreground">{`· ${DATABASE}`}</span>
                 </>
               )}
             </>

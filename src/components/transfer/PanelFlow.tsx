@@ -13,7 +13,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { Icon } from '@/lib/icon';
 import { MERGES, SCOPES, labelOf, nameOf } from '@/lib/queue';
 import type { Env, SdkClient } from '@/lib/sdk';
-import { IMPORT_STEP, TRANSFER_STEPS, runTransfer, type DataTree, type MergeStrategy } from '@/lib/transfer';
+import { DATABASE, IMPORT_STEP, TRANSFER_STEPS, runTransfer, type DataTree, type MergeStrategy } from '@/lib/transfer';
 import { cn } from '@/lib/utils';
 import { useEnvironments } from '@/utils/hooks/useEnvironments';
 import { mdiArrowRight, mdiSwapHorizontal } from '@mdi/js';
@@ -22,8 +22,6 @@ import { useId, useState, type ReactNode } from 'react';
 const NO_PAGE = 'Open a page in the Pages editor to send it.';
 // The Pages panel is about one page, so "item" becomes "page" here.
 const PANEL_MERGES = MERGES.map((m) => (m.value === 'OverrideExistingItem' ? { ...m, label: 'Replace this page only', long: 'Replace this page only' } : m));
-// Nothing in the panel picks a database: content is written to master, as in the home flow's default.
-const DATABASE = 'master';
 
 const BTN = 'h-[46px] rounded-[10px] px-5';
 const EYEBROW = 'text-muted-foreground text-xs font-semibold tracking-wider uppercase';
