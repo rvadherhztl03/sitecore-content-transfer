@@ -1,9 +1,11 @@
+import { CompareView } from '@/components/transfer/CompareView';
 import { ContentTree } from '@/components/transfer/ContentTree';
 import { backupName, download, localDate } from '@/components/transfer/download';
 import { EnvironmentCards } from '@/components/transfer/EnvironmentCards';
 import { ActionBar, AppHeader, BTN, MAIN, PageHeading } from '@/components/transfer/Layout';
 import { ReviewStep, needsProdConfirm } from '@/components/transfer/ReviewStep';
 import { RunView } from '@/components/transfer/RunView';
+import { Segmented } from '@/components/transfer/Segmented';
 import { SelectionQueue } from '@/components/transfer/SelectionQueue';
 import { Stepper } from '@/components/transfer/Stepper';
 import { usePreflight } from '@/components/transfer/usePreflight';
@@ -43,6 +45,10 @@ export function Flow({ client, mode, envs, onHome }: Props) {
   const [sourceId, setSourceId] = useState<string | undefined>(envs[0]?.id);
   const [targetId, setTargetId] = useState<string | undefined>(envs[1]?.id);
   const [trees, setTrees] = useState<DataTree[]>([]);
+  // The Content step's left panel (transfer only): the tree, or a comparison with the target, opened on first use and
+  // kept while switching.
+  const [view, setView] = useState<'browse' | 'compare'>('browse');
+  const [compared, setCompared] = useState(false);
   // The target id the production box was ticked for: another target, or a fresh visit to Review, needs it ticked again.
   const [prodFor, setProdFor] = useState<string | null>(null);
   // `run` is null unless on the run step.
@@ -274,14 +280,43 @@ export function Flow({ client, mode, envs, onHome }: Props) {
         <main className={MAIN}>
           <PageHeading title="What should be copied?" sub={`Tick items in ${source!.name}, or paste a path. Each item can bring everything under it.`} />
           <div className="flex flex-wrap items-start gap-5">
-            <div className="flex min-w-0 flex-[1_1_400px] flex-col">
-              <ContentTree
-                client={client}
-                env={source!}
-                title={`Browse ${source!.name}`}
-                selectedPaths={trees.map((t) => t.itemPath)}
-                onToggle={toggle}
-              />
+            <div className="flex min-w-0 flex-[1_1_400px] flex-col gap-3">
+              {transfer && (
+                <Segmented
+                  label="Pick items by"
+                  value={view}
+                  options={[
+                    { value: 'browse', label: 'Browse' },
+                    { value: 'compare', label: `Compare with ${target!.name}` },
+                  ]}
+                  onChange={(v) => {
+                    setView(v as 'browse' | 'compare');
+                    if (v === 'compare') setCompared(true);
+                  }}
+                />
+              )}
+              <div hidden={view !== 'browse'} className={view === 'browse' ? 'flex flex-col' : undefined}>
+                <ContentTree
+                  client={client}
+                  env={source!}
+                  title={`Browse ${source!.name}`}
+                  selectedPaths={trees.map((t) => t.itemPath)}
+                  onToggle={toggle}
+                />
+              </div>
+              {transfer && compared && (
+                <div hidden={view !== 'compare'} className={view === 'compare' ? 'flex flex-col' : undefined}>
+                  <CompareView
+                    // Another route is another comparison.
+                    key={`${source!.id}>${target!.id}`}
+                    client={client}
+                    source={source!}
+                    target={target!}
+                    initialPath={trees[0]?.itemPath}
+                    onAdd={(rows) => setTrees((t) => mergeTrees(t, rows))}
+                  />
+                </div>
+              )}
             </div>
             <div className="flex min-w-0 flex-[1_1_440px] flex-col">
               <SelectionQueue trees={trees} onChange={setTrees} />

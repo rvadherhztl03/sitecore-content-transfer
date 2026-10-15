@@ -5,7 +5,17 @@ import { Flow } from '@/components/transfer/Flow';
 import { newTree } from '@/lib/queue';
 import type { Env } from '@/lib/sdk';
 import { TIMING } from '@/lib/transfer';
-import { fakeClient, isPreflight, isRelated, preflightReply, relatedReply, type FakeReply, type RelatedFake } from '@/test/fakeClient';
+import {
+  compareReply,
+  fakeClient,
+  isPreflight,
+  isRelated,
+  preflightReply,
+  relatedReply,
+  type CompareFake,
+  type FakeReply,
+  type RelatedFake,
+} from '@/test/fakeClient';
 
 const DEV: Env = { id: 'dev', name: 'Acme · Development', contextId: 'ctx-dev', tenantName: 'acme-dev' };
 const QA: Env = { id: 'qa', name: 'Acme · QA', contextId: 'ctx-qa', tenantName: 'acme-qa' };
@@ -27,6 +37,7 @@ function handlers(
   overrides: Record<string, Handler> = {},
   find: Find | Handler = NEW_ON_QA,
   related: Record<string, RelatedFake[]> = {},
+  compare: Record<string, Record<string, CompareFake>> = {},
 ): Record<string, Handler> {
   let statusCalls = 0;
   const check: Handler = find.length === 2 ? preflightReply(find as Find) : (find as Handler);
@@ -36,7 +47,9 @@ function handlers(
         ? check(p)
         : isRelated(p)
           ? relatedReply(related)(p)
-          : p.body.query.startsWith('mutation')
+          : p.body.query.startsWith('query Compare')
+            ? compareReply(compare)(p)
+            : p.body.query.startsWith('mutation')
           ? { data: { data: { publishItem: { operationId: 'op-1' } } } }
           : p.body.query.includes('publishingStatus')
             ? { data: { data: { publishingStatus: { state: 'COMPLETED', isDone: true, isFailed: false, processed: 2 } } } }
@@ -63,8 +76,16 @@ function setup({
   overrides = {},
   find,
   related,
-}: { mode?: 'transfer' | 'export'; envs?: Env[]; overrides?: Record<string, Handler>; find?: Find | Handler; related?: Record<string, RelatedFake[]> } = {}) {
-  const { client, calls } = fakeClient(handlers(overrides, find, related));
+  compare,
+}: {
+  mode?: 'transfer' | 'export';
+  envs?: Env[];
+  overrides?: Record<string, Handler>;
+  find?: Find | Handler;
+  related?: Record<string, RelatedFake[]>;
+  compare?: Record<string, Record<string, CompareFake>>;
+} = {}) {
+  const { client, calls } = fakeClient(handlers(overrides, find, related, compare));
   const onHome = vi.fn();
   const view = render(<Flow client={client} mode={mode} envs={envs} onHome={onHome} />);
   return { client, calls, onHome, ...view };
@@ -219,6 +240,52 @@ describe('Flow', () => {
       screen.getByLabelText('Add by path').focus();
       click('Add');
       expect(heading('What should be copied?')).not.toHaveFocus();
+    });
+  });
+
+  describe('Compare', () => {
+    const R = '/sitecore/content/Acme';
+    const tab = (name: string | RegExp) => screen.getByRole('radio', { name });
+
+    it('picks new and changed items from a comparison into the list, and Browse still shows the tree', async () => {
+      setup({
+        compare: {
+          'ctx-dev': { [R]: { id: 'root', rev: '1' }, [`${R}/Home`]: { id: 'home', rev: '2' }, [`${R}/News`]: { id: 'news', rev: '1' } },
+          'ctx-qa': { [R]: { id: 'root', rev: '1' }, [`${R}/Home`]: { id: 'home', rev: '1' } },
+        },
+      });
+      await toContent();
+      expect(tab('Browse')).toBeChecked();
+      fireEvent.click(tab('Compare with Acme · QA'));
+      expect(screen.getByLabelText('Compare from')).toHaveValue('/sitecore/content');
+      fireEvent.change(screen.getByLabelText('Compare from'), { target: { value: R } });
+      click('Compare');
+      await screen.findByRole('list', { name: 'Differences' });
+      click('Select all new and changed');
+      click('Add 2 to the list');
+      expect(screen.getByRole('heading', { name: 'Selected 2' })).toBeInTheDocument();
+      expect(screen.getByLabelText(`If ${R}/Home exists`)).toHaveTextContent('Replace this item only');
+      expect(screen.getByLabelText(`If ${R}/News exists`)).toHaveTextContent("Keep what's there");
+
+      fireEvent.click(tab('Browse'));
+      expect(screen.getByText('content')).toBeVisible();
+      // The comparison is kept while switching.
+      fireEvent.click(tab('Compare with Acme · QA'));
+      expect(screen.getByRole('list', { name: 'Differences' })).toBeInTheDocument();
+    });
+
+    it('starts from the first queued item', async () => {
+      setup();
+      await toContent();
+      addPath(HOME);
+      fireEvent.click(tab('Compare with Acme · QA'));
+      expect(screen.getByLabelText('Compare from')).toHaveValue(HOME);
+    });
+
+    it('export has no target to compare with', async () => {
+      setup({ mode: 'export' });
+      await toContent();
+      expect(screen.queryByRole('radio', { name: /^Compare with/ })).not.toBeInTheDocument();
     });
   });
 

@@ -72,3 +72,24 @@ export const relatedReply = (items: Record<string, RelatedFake[]>) => (p: any): 
   }
   return { data: { data } };
 };
+
+export type CompareFake = { id: string; rev?: string; updated?: string };
+
+/**
+ * Answers the compare walk (src/lib/compare.ts) from per-environment maps of path → item (keyed by context ID); an item's
+ * children are the paths one level below it, in map order. Alias `root` reads the item itself, `c…` its children.
+ */
+export const compareReply = (worlds: Record<string, Record<string, CompareFake>>) => (p: any): FakeReply => {
+  const items = worlds[p.query.sitecoreContextId] ?? {};
+  const node = (path: string) => {
+    const it = items[path];
+    return { itemId: it.id, name: path.split('/').pop(), path, r: it.rev === undefined ? null : { value: it.rev }, u: it.updated === undefined ? null : { value: it.updated } };
+  };
+  const data: Record<string, unknown> = {};
+  for (const [, alias, literal] of (p.body.query as string).matchAll(/(\w+): item\(where: \{ path: ("[^"]*")/g)) {
+    const path: string = JSON.parse(literal);
+    const kids = () => Object.keys(items).filter((k) => k.startsWith(`${path}/`) && !k.slice(path.length + 1).includes('/'));
+    data[alias] = !items[path] ? null : alias === 'root' ? node(path) : { children: { nodes: kids().map(node) } };
+  }
+  return { data: { data } };
+};
