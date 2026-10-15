@@ -1,0 +1,220 @@
+// @vitest-environment node
+/* eslint-disable @typescript-eslint/no-explicit-any */
+import { beforeEach, describe, expect, it } from 'vitest';
+import { TIMING, runTransfer, type DataTree, type LogType, type RunCallbacks, type StepStatus } from '@/lib/transfer';
+import { fakeClient, type FakeReply } from '@/test/fakeClient';
+
+const DEV = { id: 'r1', name: 'Dev', contextId: 'ctx-dev' };
+const QA = { id: 'r2', name: 'QA', contextId: 'ctx-qa' };
+const TREES: DataTree[] = [
+  { itemPath: '/sitecore/media library/Images/Hero Banner', scope: 'SingleItem', mergeStrategy: 'OverrideExistingItem' },
+];
+const OPTS = { source: DEV, target: QA, database: 'master', dataTrees: TREES };
+const CT = 'xmc.contentTransfer.';
+const KIND: Record<string, 'query' | 'mutate'> = {
+  createContentTransfer: 'mutate',
+  getContentTransferStatus: 'query',
+  getChunk: 'query',
+  saveChunk: 'mutate',
+  completeChunkSetTransfer: 'mutate',
+  consumeFile: 'query',
+  getBlobState: 'query',
+  deleteContentTransfer: 'mutate',
+};
+
+type Handler = (params: any) => FakeReply | Promise<FakeReply>;
+
+function happyHandlers(overrides: Record<string, Handler> = {}) {
+  let statusCalls = 0;
+  let blobCalls = 0;
+  const base: Record<string, Handler> = {
+    getContentTransferStatus: () =>
+      statusCalls++ === 0
+        ? { data: { State: 'Processing' } }
+        : { data: { State: 'Completed', ChunkSetsMetadata: [{ ChunkSetId: 'cs1', ChunkCount: 2, TotalItemCount: 3 }] } },
+    getChunk: (p) => ({
+      data: new Blob(['c' + p.path.chunkId]),
+      headers: { 'content-disposition': `attachment; IsMedia=${p.path.chunkId === 1}` },
+    }),
+    completeChunkSetTransfer: (p) => ({ data: { ContentTransferFileName: 'f-' + p.path.chunksetId + '.raif' } }),
+    getBlobState: () => ({ data: { status: blobCalls++ === 0 ? 'NotFound' : 'OK' } }),
+  };
+  const all = { ...base, ...overrides };
+  return Object.fromEntries(Object.keys(KIND).map((k) => [CT + k, all[k] ?? (() => ({}))]));
+}
+
+function recorder() {
+  const logs: [string, LogType][] = [];
+  const progress: number[] = [];
+  const steps: [number, StepStatus][] = [];
+  const cb: RunCallbacks = {
+    onLog: (m, t) => logs.push([m, t]),
+    onProgress: (p) => progress.push(p),
+    onStepChange: (i, s) => steps.push([i, s]),
+  };
+  return { cb, logs, progress, steps };
+}
+
+const short = (key: string) => key.replace(CT, '');
+const ofKey = (calls: { key: string }[], k: string) => calls.filter((c) => c.key === CT + k) as any[];
+const ctxOf = (c: any) => c.params.query.sitecoreContextId;
+
+beforeEach(() => {
+  Object.assign(TIMING, { pollMs: 0, statusTimeoutMs: 50, verifyTimeoutMs: 50 });
+});
+
+describe('runTransfer', () => {
+  it('runs the full pipeline against the right environments', async () => {
+    const { client, calls } = fakeClient(happyHandlers());
+    const r = recorder();
+    expect(await runTransfer(client, OPTS, r.cb)).toBe(true);
+
+    const seq = calls
+      .map((c) => [short(c.key), ctxOf(c)])
+      .filter(([k, ctx], i, a) => i === 0 || k !== a[i - 1][0] || ctx !== a[i - 1][1]);
+    expect(seq).toEqual([
+      ['createContentTransfer', 'ctx-dev'],
+      ['getContentTransferStatus', 'ctx-dev'],
+      ['getChunk', 'ctx-dev'],
+      ['saveChunk', 'ctx-qa'],
+      ['getChunk', 'ctx-dev'],
+      ['saveChunk', 'ctx-qa'],
+      ['completeChunkSetTransfer', 'ctx-qa'],
+      ['consumeFile', 'ctx-qa'],
+      ['getBlobState', 'ctx-qa'],
+      ['deleteContentTransfer', 'ctx-dev'],
+      ['deleteContentTransfer', 'ctx-qa'],
+    ]);
+    for (const c of calls) expect(c.kind).toBe(KIND[short(c.key)]);
+
+    const body = calls[0].params.body;
+    expect(body).toEqual({ transferId: expect.any(String), configuration: { dataTrees: TREES } });
+    const { transferId } = body;
+    for (const c of calls.slice(1)) expect(c.params.path?.transferId ?? transferId).toBe(transferId);
+
+    const saves = ofKey(calls, 'saveChunk');
+    expect(saves.map((c) => c.params.path)).toEqual([
+      { transferId, chunksetId: 'cs1', chunkId: 0 },
+      { transferId, chunksetId: 'cs1', chunkId: 1 },
+    ]);
+    expect(saves.map((c) => c.params.query.isMedia)).toEqual([false, true]);
+    expect(saves[0].params.body).toBeInstanceOf(Blob);
+    expect(await Promise.all(saves.map((c) => c.params.body.text()))).toEqual(['c0', 'c1']);
+
+    expect(ofKey(calls, 'consumeFile')[0].params.query).toEqual({
+      databaseName: 'master',
+      fileName: 'f-cs1.raif',
+      sitecoreContextId: 'ctx-qa',
+    });
+    expect(ofKey(calls, 'getBlobState')[0].params.query).toEqual({ fileName: 'f-cs1.raif', sitecoreContextId: 'ctx-qa' });
+
+    expect(r.progress.at(-1)).toBe(100);
+    for (let i = 0; i < 6; i++) expect(r.steps).toContainEqual([i, 'done']);
+    expect(r.steps.some(([, s]) => s === 'fail')).toBe(false);
+  });
+
+  it('handles every chunk set', async () => {
+    const { client, calls } = fakeClient(
+      happyHandlers({
+        getContentTransferStatus: () => ({
+          data: {
+            State: 'Completed',
+            ChunkSetsMetadata: [
+              { ChunkSetId: 'cs1', ChunkCount: 1, TotalItemCount: 1 },
+              { ChunkSetId: 'cs2', ChunkCount: 1, TotalItemCount: 1 },
+            ],
+          },
+        }),
+      }),
+    );
+    expect(await runTransfer(client, OPTS, recorder().cb)).toBe(true);
+    expect(ofKey(calls, 'saveChunk').map((c) => c.params.path.chunksetId)).toEqual(['cs1', 'cs2']);
+    expect(ofKey(calls, 'completeChunkSetTransfer').map((c) => c.params.path.chunksetId)).toEqual(['cs1', 'cs2']);
+    expect(ofKey(calls, 'consumeFile').map((c) => c.params.query.fileName)).toEqual(['f-cs1.raif', 'f-cs2.raif']);
+    expect([...new Set(ofKey(calls, 'getBlobState').map((c) => c.params.query.fileName))]).toEqual([
+      'f-cs1.raif',
+      'f-cs2.raif',
+    ]);
+  });
+
+  it('treats a 404 status as still processing', async () => {
+    let n = 0;
+    const { client } = fakeClient(
+      happyHandlers({
+        getContentTransferStatus: () =>
+          n++ === 0
+            ? { status: 404 }
+            : { data: { State: 'Completed', ChunkSetsMetadata: [{ ChunkSetId: 'cs1', ChunkCount: 1, TotalItemCount: 1 }] } },
+      }),
+    );
+    expect(await runTransfer(client, OPTS, recorder().cb)).toBe(true);
+  });
+
+  it('fails when the source reports Failed', async () => {
+    const { client, calls } = fakeClient(happyHandlers({ getContentTransferStatus: () => ({ data: { State: 'Failed' } }) }));
+    const r = recorder();
+    expect(await runTransfer(client, OPTS, r.cb)).toBe(false);
+    expect(r.steps).toContainEqual([1, 'fail']);
+    expect(r.logs.some(([, t]) => t === 'error')).toBe(true);
+    expect(ofKey(calls, 'deleteContentTransfer').map(ctxOf)).toEqual(['ctx-dev', 'ctx-qa']);
+  });
+
+  it('fails when the source has no content', async () => {
+    const { client } = fakeClient(
+      happyHandlers({ getContentTransferStatus: () => ({ data: { State: 'Completed', ChunkSetsMetadata: [] } }) }),
+    );
+    const r = recorder();
+    expect(await runTransfer(client, OPTS, r.cb)).toBe(false);
+    expect(r.logs.map(([m]) => m).join('\n')).toContain(
+      'Source returned no content for the selected paths. Check that they exist.',
+    );
+  });
+
+  it('times out waiting for the package', async () => {
+    const { client } = fakeClient(happyHandlers({ getContentTransferStatus: () => ({ data: { State: 'Processing' } }) }));
+    const r = recorder();
+    expect(await runTransfer(client, OPTS, r.cb)).toBe(false);
+    expect(r.logs.map(([m]) => m).join('\n')).toContain('Timed out waiting for the source package.');
+  });
+
+  it('shows the access message on 403', async () => {
+    const { client } = fakeClient(happyHandlers({ saveChunk: () => ({ status: 403 }) }));
+    const r = recorder();
+    expect(await runTransfer(client, OPTS, r.cb)).toBe(false);
+    expect(r.logs.map(([m]) => m).join('\n')).toContain(
+      "The app can't access QA. Grant it in Cloud Portal → app → environment access.",
+    );
+  });
+
+  it('fails when the blob state is Error', async () => {
+    const { client } = fakeClient(happyHandlers({ getBlobState: () => ({ data: { status: 'Error' } }) }));
+    const r = recorder();
+    expect(await runTransfer(client, OPTS, r.cb)).toBe(false);
+    expect(r.steps).toContainEqual([5, 'fail']);
+  });
+
+  it('cancels and still cleans up', async () => {
+    const ctrl = new AbortController();
+    const { client, calls } = fakeClient(
+      happyHandlers({
+        createContentTransfer: () => {
+          ctrl.abort();
+          return {};
+        },
+      }),
+    );
+    const r = recorder();
+    expect(await runTransfer(client, OPTS, r.cb, ctrl.signal)).toBe(false);
+    expect(r.logs).toContainEqual(['Cancelled.', 'warning']);
+    expect(r.logs.some(([, t]) => t === 'error')).toBe(false);
+    expect(ofKey(calls, 'getContentTransferStatus')).toHaveLength(0);
+    expect(ofKey(calls, 'deleteContentTransfer').map(ctxOf)).toEqual(['ctx-dev', 'ctx-qa']);
+  });
+
+  it('treats a cleanup failure as a warning', async () => {
+    const { client } = fakeClient(happyHandlers({ deleteContentTransfer: () => ({ status: 500 }) }));
+    const r = recorder();
+    expect(await runTransfer(client, OPTS, r.cb)).toBe(true);
+    expect(r.logs.some(([m, t]) => t === 'warning' && m.startsWith('Cleanup failed'))).toBe(true);
+  });
+});
