@@ -135,13 +135,39 @@ describe('Workspace', () => {
     expect(screen.getByText('/sitecore/content/Home')).toBeInTheDocument();
   });
 
+  it('keeps Import usable with one environment', async () => {
+    setup(() => context('Dev'));
+    await treeLoaded();
+    fireEvent.mouseDown(screen.getByRole('tab', { name: 'Import' }));
+    expect(screen.getByLabelText('Target')).toHaveTextContent('Dev');
+    expect(screen.getByText('Choose a package to import.')).toBeInTheDocument();
+    expect(screen.queryByText('Choose an environment.')).not.toBeInTheDocument();
+    expect(screen.queryByText(ONE_ENV)).not.toBeInTheDocument();
+  });
+
+  it('holds a new page path until the confirmed run is over', async () => {
+    const { client, calls } = fakeClient(handlers(() => context('Dev', 'QA')));
+    const { rerender } = render(<Workspace client={client} compact initialItemPath="/sitecore/content/A" />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Send to QA' }));
+    rerender(<Workspace client={client} compact initialItemPath="/sitecore/content/B" />);
+    expect(within(screen.getByRole('alertdialog')).getByText('/sitecore/content/A')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Start' }));
+    expect(await screen.findByText('Completed')).toBeInTheDocument();
+    const create = calls.find((c) => c.key === 'xmc.contentTransfer.createContentTransfer');
+    expect(create?.params.body.configuration.dataTrees).toEqual([newTree('/sitecore/content/A')]);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Done' }));
+    expect(screen.getByText('/sitecore/content/B')).toBeInTheDocument();
+    expect(screen.queryByText('/sitecore/content/A')).not.toBeInTheDocument();
+  });
+
   it('runs a transfer end to end and blocks a second start', async () => {
     const { calls } = setup(() => context('Dev', 'QA'), { initialItemPath: '/sitecore/content/Home' });
     await treeLoaded();
     fireEvent.click(screen.getByRole('button', { name: 'Start transfer' }));
-    expect(screen.getByRole('alertdialog')).toHaveTextContent(
-      'Copy 1 item tree from Dev → QA (master). Merge: Override tree.',
-    );
+    const dialog = screen.getByRole('alertdialog');
+    expect(dialog).toHaveTextContent('Copy 1 item tree from Dev → QA (master). Merge: Override tree.');
+    expect(within(dialog).getByText('/sitecore/content/Home')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Start' }));
     // The run sheet is modal, so the page behind it is aria-hidden.
     expect(screen.getByRole('button', { name: 'Start transfer', hidden: true })).toBeDisabled();

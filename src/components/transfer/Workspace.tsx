@@ -91,13 +91,21 @@ export function Workspace({ client, compact, initialItemPath }: Props) {
   const [run, setRun] = useState<Run | null>(null);
   const abort = useRef<AbortController | null>(null);
 
-  useEffect(() => setTrees(initialItemPath ? [newTree(initialItemPath)] : []), [initialItemPath]);
+  const running = !!run?.running;
+  // A new page replaces the queue, but never while a run is being confirmed or is in progress: that would
+  // change what gets copied after the user confirmed it. The latest path is applied once both are over.
+  const appliedPath = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    if (confirming || running || appliedPath.current === initialItemPath) return;
+    appliedPath.current = initialItemPath;
+    setTrees(initialItemPath ? [newTree(initialItemPath)] : []);
+  }, [initialItemPath, confirming, running]);
   // Leaving the page stops the run (the engine still cleans up).
   useEffect(() => () => abort.current?.abort(), []);
 
   const source = envs.find((e) => e.id === sourceId) ?? envs[0];
-  const target = envs.find((e) => e.id === targetId) ?? envs[1];
-  const running = !!run?.running;
+  // With one environment it is the target too, so Import works; Transfer is still blocked by the one-environment rule.
+  const target = envs.find((e) => e.id === targetId) ?? envs[1] ?? envs[0];
   const settled = !loading && !error;
   const reason = blockReason(mode, { envs, source, target, trees, hasPackage: !!pkg });
   const prod = mode !== 'export' && !!target && /prod/i.test(target.name);
@@ -238,6 +246,16 @@ export function Workspace({ client, compact, initialItemPath }: Props) {
             <AlertDialogTitle>{`${action}?`}</AlertDialogTitle>
             <AlertDialogDescription>{summary}</AlertDialogDescription>
           </AlertDialogHeader>
+          {/* Outside the description: Radix renders it as a <p>, which can't hold a list. */}
+          {mode !== 'import' && (
+            <ul aria-label="Queued items" className="max-h-40 overflow-y-auto rounded-md border p-2 font-mono text-xs">
+              {trees.map((t) => (
+                <li key={t.itemPath} className="break-all">
+                  {t.itemPath}
+                </li>
+              ))}
+            </ul>
+          )}
           {prod && (
             <Alert variant="danger">
               <AlertDescription>{`${target!.name} looks like a production environment. Double-check before continuing.`}</AlertDescription>
