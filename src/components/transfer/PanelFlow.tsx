@@ -15,6 +15,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { Icon } from '@/lib/icon';
 import { readPackage } from '@/lib/package';
 import { addMissingParents } from '@/lib/preflight';
+import { addRelated } from '@/lib/related';
 import { MERGES, labelOf, mergesFor, nameOf, withScope } from '@/lib/queue';
 import type { Env, SdkClient } from '@/lib/sdk';
 import { DATABASE, IMPORT_STEP, IMPORT_STEPS, TRANSFER_STEPS, backupTreesFor, runImport, runTransfer, type DataTree, type MergeStrategy, type Scope } from '@/lib/transfer';
@@ -134,8 +135,8 @@ export function PanelFlow({ client, pageName, pagePath }: Props) {
   const [merge, setMerge] = useState<MergeStrategy>('OverrideExistingTree');
   // Set while reviewing or running: the page as it was when Send was pressed.
   const [held, setHeld] = useState<Page>();
-  // Missing parents added from the review's pre-flight notes, sent before the page.
-  const [parents, setParents] = useState<DataTree[]>([]);
+  // Items the review's pre-flight notes added (missing parents, related content), sent along with the page.
+  const [extra, setExtra] = useState<DataTree[]>([]);
   // The target id the production box was ticked for: another target, or a fresh review, needs it ticked again.
   const [prodFor, setProdFor] = useState<string | null>(null);
   // "Back up <target> first" (on by default), the backup the current run made, and whether that run has a backup step.
@@ -161,7 +162,7 @@ export function PanelFlow({ client, pageName, pagePath }: Props) {
   const prodChecked = !!target && prodFor === target.id;
   const merges = mergesFor(scope, PANEL_MERGES, 'Replace it and its child pages');
   const canStart = !!held && routeOk && !(needsProdConfirm(target) && !prodChecked);
-  const dataTrees: DataTree[] = held ? [...parents, { itemPath: held.path, scope, mergeStrategy: merge }] : [];
+  const dataTrees: DataTree[] = held ? [...extra, { itemPath: held.path, scope, mergeStrategy: merge }] : [];
   const preflight = usePreflight(client, held && !run ? source : undefined, target, dataTrees);
   // Without a finished check (still checking, or it failed), the page is backed up whenever it can be overwritten.
   const backupTrees = backupTreesFor(dataTrees, preflight?.status === 'done' ? preflight.checks : undefined);
@@ -171,7 +172,7 @@ export function PanelFlow({ client, pageName, pagePath }: Props) {
   const review = () => {
     if (!routeOk || !pagePath) return;
     setProdFor(null);
-    setParents([]);
+    setExtra([]);
     setHeld({ name: pageName, path: pagePath });
   };
   const close = () => {
@@ -277,9 +278,9 @@ export function PanelFlow({ client, pageName, pagePath }: Props) {
                 <PreflightStatus preflight={preflight} itemPath={held.path} source={source!} />
               </span>
             </Row>
-            {parents.length > 0 && (
+            {extra.length > 0 && (
               <Row label="Also sends">
-                {parents.map((t) => (
+                {extra.map((t) => (
                   <span key={t.itemPath} className="text-muted-foreground font-mono text-xs font-normal [overflow-wrap:anywhere]">
                     {t.itemPath}
                   </span>
@@ -303,7 +304,12 @@ export function PanelFlow({ client, pageName, pagePath }: Props) {
           target={target}
           onAddParents={
             preflight?.status === 'done'
-              ? () => setParents(addMissingParents(dataTrees, preflight.checks).filter((t) => t.itemPath !== held.path))
+              ? () => setExtra(addMissingParents(dataTrees, preflight.checks).filter((t) => t.itemPath !== held.path))
+              : undefined
+          }
+          onAddRelated={
+            preflight?.status === 'done' && preflight.related
+              ? () => setExtra(addRelated(dataTrees, preflight.related!).filter((t) => t.itemPath !== held.path))
               : undefined
           }
         />

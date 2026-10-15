@@ -5,7 +5,7 @@ import { Flow } from '@/components/transfer/Flow';
 import { newTree } from '@/lib/queue';
 import type { Env } from '@/lib/sdk';
 import { TIMING } from '@/lib/transfer';
-import { fakeClient, isPreflight, preflightReply, type FakeReply } from '@/test/fakeClient';
+import { fakeClient, isPreflight, isRelated, preflightReply, relatedReply, type FakeReply, type RelatedFake } from '@/test/fakeClient';
 
 const DEV: Env = { id: 'dev', name: 'Acme · Development', contextId: 'ctx-dev', tenantName: 'acme-dev' };
 const QA: Env = { id: 'qa', name: 'Acme · QA', contextId: 'ctx-qa', tenantName: 'acme-qa' };
@@ -23,14 +23,20 @@ const EVERYWHERE: Find = (_, path) => ({ id: path });
 const NEW_ON_QA: Find = (ctx, path) => (ctx === 'ctx-qa' && path === HOME ? undefined : { id: path });
 
 // Modelled on happyHandlers in src/lib/transfer.test.ts, plus the tree query and the pre-flight check.
-function handlers(overrides: Record<string, Handler> = {}, find: Find | Handler = NEW_ON_QA): Record<string, Handler> {
+function handlers(
+  overrides: Record<string, Handler> = {},
+  find: Find | Handler = NEW_ON_QA,
+  related: Record<string, RelatedFake[]> = {},
+): Record<string, Handler> {
   let statusCalls = 0;
   const check: Handler = find.length === 2 ? preflightReply(find as Find) : (find as Handler);
   return {
     'xmc.authoring.graphql': (p) =>
       isPreflight(p)
         ? check(p)
-        : p.body.query.startsWith('mutation')
+        : isRelated(p)
+          ? relatedReply(related)(p)
+          : p.body.query.startsWith('mutation')
           ? { data: { data: { publishItem: { operationId: 'op-1' } } } }
           : p.body.query.includes('publishingStatus')
             ? { data: { data: { publishingStatus: { state: 'COMPLETED', isDone: true, isFailed: false, processed: 2 } } } }
@@ -56,8 +62,9 @@ function setup({
   envs = [DEV, QA, PROD],
   overrides = {},
   find,
-}: { mode?: 'transfer' | 'export'; envs?: Env[]; overrides?: Record<string, Handler>; find?: Find | Handler } = {}) {
-  const { client, calls } = fakeClient(handlers(overrides, find));
+  related,
+}: { mode?: 'transfer' | 'export'; envs?: Env[]; overrides?: Record<string, Handler>; find?: Find | Handler; related?: Record<string, RelatedFake[]> } = {}) {
+  const { client, calls } = fakeClient(handlers(overrides, find, related));
   const onHome = vi.fn();
   const view = render(<Flow client={client} mode={mode} envs={envs} onHome={onHome} />);
   return { client, calls, onHome, ...view };
@@ -288,6 +295,26 @@ describe('Flow', () => {
       await toReview();
       expect(await screen.findByRole('note', { name: "Couldn't run the pre-flight check: HTTP 500. You can still start." })).toBeInTheDocument();
       expect(screen.getByRole('button', { name: 'Start transfer' })).toBeEnabled();
+    });
+
+    it('Add missing items puts what the item uses into the list, and the transfer sends it', async () => {
+      const HERO = '/sitecore/media library/Acme/Hero';
+      const HERO_ID = '11111111-2222-3333-4444-555555555555';
+      const { calls } = setup({
+        related: { 'ctx-dev': [{ id: 'h', path: HOME, fields: { Image: `<image mediaid="{${HERO_ID}}" />` } }, { id: HERO_ID, path: HERO, name: 'Hero' }], 'ctx-qa': [] },
+      });
+      await toReview();
+      const note = screen.getByRole('note', { name: 'Used by your items but not in the list' });
+      expect(within(note).getByRole('listitem')).toHaveTextContent(`Hero ${HERO} · used by Home`);
+      fireEvent.click(within(note).getByRole('button', { name: 'Add 1 missing item' }));
+      await checked();
+      expect(screen.queryByRole('note', { name: 'Used by your items but not in the list' })).not.toBeInTheDocument();
+      click('Start transfer');
+      await screen.findByText('Transfer complete');
+      expect(ofKey(calls, 'createContentTransfer')[0].params.body.configuration.dataTrees).toEqual([
+        newTree(HOME),
+        { itemPath: HERO, scope: 'SingleItem', mergeStrategy: 'KeepExistingItem' },
+      ]);
     });
 
     it('export runs no check', async () => {

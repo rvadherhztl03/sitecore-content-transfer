@@ -20,6 +20,8 @@ type Child = { itemId: string; name: string };
 
 const key = (path: string) => path.replace(/\/+$/, '').toLowerCase();
 const normId = (id: string) => id.replace(/[{}-]/g, '').toLowerCase();
+/** Whether two item IDs are the same, ignoring braces, dashes and case. */
+export const sameId = (a: string, b: string) => normId(a) === normId(b);
 
 /** The item's parents below /sitecore, top down. */
 export function parentsOf(path: string): string[] {
@@ -27,8 +29,8 @@ export function parentsOf(path: string): string[] {
   return parts.slice(2).map((_, i) => '/' + parts.slice(0, i + 2).join('/'));
 }
 
-// Whether the list itself brings `path` along: it is a row, below a "+ Everything below" row, or a child of a "+ Children" row.
-function brought(path: string, trees: DataTree[]) {
+/** Whether the list itself brings `path` along: it is a row, below a "+ Everything below" row, or a child of a "+ Children" row. */
+export function brought(path: string, trees: DataTree[]) {
   const p = key(path);
   const parent = p.slice(0, p.lastIndexOf('/'));
   return trees.some((t) => {

@@ -1,16 +1,19 @@
 import { runPreflight, type ItemCheck } from '@/lib/preflight';
+import { scanRelated, type RelatedItem } from '@/lib/related';
 import type { Env, SdkClient } from '@/lib/sdk';
 import type { DataTree } from '@/lib/transfer';
 import { useEffect, useState } from 'react';
 
 export type Preflight =
   | { status: 'checking' }
-  | { status: 'done'; checks: Map<string, ItemCheck> }
+  /** `related` is left out when the related-content scan failed; `relatedError` then says why. */
+  | { status: 'done'; checks: Map<string, ItemCheck>; related?: RelatedItem[]; relatedError?: string }
   | { status: 'failed'; error: string };
 
 /**
- * Runs the pre-flight check for the route and list, again whenever either changes. Without a source,
- * target or items it doesn't run and returns undefined; a result for an older route or list is never returned.
+ * Runs the pre-flight check and the related-content scan for the route and list, again whenever either changes; a failed
+ * scan doesn't fail the check. Without a source, target or items it doesn't run and returns undefined; a result for an
+ * older route or list is never returned.
  */
 export function usePreflight(client: SdkClient | null, source: Env | undefined, target: Env | undefined, trees: DataTree[]): Preflight | undefined {
   const key = client && source && target && trees.length ? JSON.stringify([source.id, target.id, trees]) : null;
@@ -19,9 +22,14 @@ export function usePreflight(client: SdkClient | null, source: Env | undefined, 
   useEffect(() => {
     if (!key) return;
     let live = true;
-    runPreflight(client!, source!, target!, trees).then(
-      (checks) => live && setResult({ key, value: { status: 'done', checks } }),
-      (e) => live && setResult({ key, value: { status: 'failed', error: e instanceof Error ? e.message : String(e) } }),
+    const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
+    const scan = scanRelated(client!, source!, target!, trees).then(
+      (related) => ({ related }),
+      (e) => ({ relatedError: message(e) }),
+    );
+    Promise.all([runPreflight(client!, source!, target!, trees), scan]).then(
+      ([checks, found]) => live && setResult({ key, value: { status: 'done', checks, ...found } }),
+      (e) => live && setResult({ key, value: { status: 'failed', error: message(e) } }),
     );
     return () => {
       live = false;

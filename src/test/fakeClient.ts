@@ -43,3 +43,32 @@ export const preflightReply = (find: (contextId: string, path: string) => Found 
 
 /** Whether a GraphQL call is the pre-flight query. */
 export const isPreflight = (p: any) => typeof p?.body?.query === 'string' && p.body.query.startsWith('query Preflight');
+
+export type RelatedFake = { id: string; path: string; name?: string; fields?: Record<string, string>; renderings?: string; final?: string };
+
+/** Whether a GraphQL call is one of the related-content scan's queries (src/lib/related.ts). */
+export const isRelated = (p: any) => typeof p?.body?.query === 'string' && p.body.query.startsWith('query Related');
+
+/**
+ * Answers the related-content scan from per-environment item lists (keyed by context ID). Each alias says what it asks
+ * for: `i…` reads a queued item's fields by path, `r…` resolves an ID or path, `t…` looks a path up on the target.
+ */
+export const relatedReply = (items: Record<string, RelatedFake[]>) => (p: any): FakeReply => {
+  const all = items[p.query.sitecoreContextId] ?? [];
+  const data: Record<string, unknown> = {};
+  for (const [, alias, by, literal] of (p.body.query as string).matchAll(/(\w+): item\(where: \{ (path|itemId): ("[^"]*")/g)) {
+    const value: string = JSON.parse(literal);
+    const it = all.find((i) => (by === 'path' ? i.path === value : i.id.toLowerCase() === value.replace(/[{}]/g, '').toLowerCase()));
+    data[alias] = !it
+      ? null
+      : alias.startsWith('i')
+        ? {
+            itemId: it.id,
+            fields: { nodes: Object.entries(it.fields ?? {}).map(([name, v]) => ({ name, value: v })) },
+            r: it.renderings === undefined ? null : { value: it.renderings },
+            f: it.final === undefined ? null : { value: it.final },
+          }
+        : { itemId: it.id, path: it.path, name: it.name ?? it.path.split('/').pop() };
+  }
+  return { data: { data } };
+};

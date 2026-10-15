@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { PreflightNotes, PreflightStatus } from '@/components/transfer/Preflight';
 import type { Preflight } from '@/components/transfer/usePreflight';
 import type { ItemCheck } from '@/lib/preflight';
+import type { RelatedItem } from '@/lib/related';
 import type { Env } from '@/lib/sdk';
 
 const DEV: Env = { id: 'd', name: 'Acme · Dev', contextId: 'cd' };
@@ -22,7 +23,7 @@ const ok = (itemPath: string, patch: Partial<ItemCheck> = {}): ItemCheck => ({
 });
 const done = (...checks: ItemCheck[]): Preflight => ({ status: 'done', checks: new Map(checks.map((c) => [c.itemPath, c])) });
 
-function notes(preflight: Preflight | undefined, actions: { onAddParents?(): void; onRemoveNotFound?(): void } = {}) {
+function notes(preflight: Preflight | undefined, actions: { onAddParents?(): void; onRemoveNotFound?(): void; onAddRelated?(): void } = {}) {
   return render(<PreflightNotes preflight={preflight} source={DEV} target={QA} {...actions} />);
 }
 
@@ -99,6 +100,54 @@ describe('PreflightNotes', () => {
       'Under Home: Old promo, Test page',
       'Under News: Page 1, Page 2, Page 3, Page 4, Page 5, Page 6, Page 7, Page 8 and 2 more',
     ]);
+  });
+});
+
+describe('PreflightNotes related content', () => {
+  const rel = (itemPath: string, onTarget: RelatedItem['onTarget'], usedBy = [HOME]): RelatedItem => ({ itemPath, name: itemPath.split('/').pop()!, usedBy, onTarget });
+  const withRelated = (extra: { related?: RelatedItem[]; relatedError?: string }): Preflight => ({ status: 'done', checks: new Map([[HOME, ok(HOME)]]), ...extra });
+  const NOTE = 'Used by your items but not in the list';
+
+  it('lists what the items use that the target lacks, who uses it, and adds the missing ones', () => {
+    const onAddRelated = vi.fn();
+    notes(
+      withRelated({
+        related: [
+          rel('/sitecore/media library/Acme/Hero', 'new', [HOME, NEWS]),
+          rel('/sitecore/content/Acme/Data/Promo', 'other'),
+          rel('/sitecore/content/Acme/Data/Shared', 'same'),
+        ],
+      }),
+      { onAddRelated },
+    );
+    const note = screen.getByRole('note', { name: NOTE });
+    expect(note).toHaveTextContent('Missing on Acme · QA, so the items that use them may show gaps:');
+    expect(within(note).getAllByRole('listitem').map((li) => li.textContent)).toEqual([
+      'Hero /sitecore/media library/Acme/Hero · used by Home, News',
+      'Promo /sitecore/content/Acme/Data/Promo · used by Home · a different item has this path on Acme · QA',
+    ]);
+    expect(note).toHaveTextContent('1 more is already on Acme · QA (not added; it may be older there).');
+    fireEvent.click(within(note).getByRole('button', { name: 'Add 1 missing item' }));
+    expect(onAddRelated).toHaveBeenCalledOnce();
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+  });
+
+  it('offers no Add when every missing item is a different item on the target', () => {
+    notes(withRelated({ related: [rel('/sitecore/content/Acme/Data/Promo', 'other')] }), { onAddRelated: vi.fn() });
+    expect(screen.queryByRole('button')).not.toBeInTheDocument();
+  });
+
+  it('with nothing missing, mentions the related items the target already has', () => {
+    notes(withRelated({ related: [rel('/a', 'same'), rel('/b', 'same')] }));
+    expect(screen.getByRole('status')).toHaveTextContent('Pre-flight check: everything is in place on Acme · QA.');
+    expect(screen.getByText('2 related items are already on Acme · QA.')).toBeInTheDocument();
+    expect(screen.queryByRole('note')).not.toBeInTheDocument();
+  });
+
+  it('says when the scan could not run', () => {
+    notes(withRelated({ relatedError: 'HTTP 500' }));
+    expect(screen.getByRole('note', { name: "Couldn't scan for related content: HTTP 500. You can still start." })).toBeInTheDocument();
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
   });
 });
 

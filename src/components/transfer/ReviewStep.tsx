@@ -9,6 +9,7 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { Label } from '@/components/ui/label';
 import { Icon } from '@/lib/icon';
 import { addMissingParents, removeNotFound } from '@/lib/preflight';
+import { addRelated } from '@/lib/related';
 import { SCOPES, labelOf, mergesFor, nameOf } from '@/lib/queue';
 import { envKind, type Env } from '@/lib/sdk';
 import type { DataTree } from '@/lib/transfer';
@@ -148,6 +149,7 @@ export function ReviewStep({ mode, source, target, database, trees, prodChecked,
   const to = mode === 'transfer' ? target : undefined;
   const checks = preflight?.status === 'done' ? preflight.checks : undefined;
   const fix = (f: typeof addMissingParents) => (checks && onTreesChange ? () => onTreesChange(f(trees, checks)) : undefined);
+  const related = preflight?.status === 'done' ? preflight.related : undefined;
   const replacing = trees.filter((t) => t.mergeStrategy === 'OverrideExistingTree').length;
   const detail = (env: Env, text: string) => [env.tenantName, text].filter(Boolean).join(' · ');
 
@@ -183,7 +185,14 @@ export function ReviewStep({ mode, source, target, database, trees, prodChecked,
       )}
 
       {to && (
-        <PreflightNotes preflight={preflight} source={source} target={to} onAddParents={fix(addMissingParents)} onRemoveNotFound={fix(removeNotFound)} />
+        <PreflightNotes
+          preflight={preflight}
+          source={source}
+          target={to}
+          onAddParents={fix(addMissingParents)}
+          onRemoveNotFound={fix(removeNotFound)}
+          onAddRelated={related && onTreesChange ? () => onTreesChange(addRelated(trees, related)) : undefined}
+        />
       )}
 
       {to && backup && <BackupChoice target={to} {...backup} />}

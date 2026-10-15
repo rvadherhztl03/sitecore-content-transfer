@@ -1,7 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { PanelFlow } from '@/components/transfer/PanelFlow';
 import { TIMING } from '@/lib/transfer';
-import { fakeClient, isPreflight, preflightReply, type FakeReply } from '@/test/fakeClient';
+import { fakeClient, isPreflight, isRelated, preflightReply, relatedReply, type FakeReply, type RelatedFake } from '@/test/fakeClient';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
@@ -30,7 +30,7 @@ const EVERYWHERE: Find = (_, path) => ({ id: path });
 const NEW_ON_QA: Find = (ctx, path) => (ctx === `ctx-${QA}` && path === HOME ? undefined : { id: path });
 
 // Modelled on happyHandlers in src/lib/transfer.test.ts.
-function handlers(names: string[], overrides: Record<string, Handler>, find: Find = NEW_ON_QA): Record<string, Handler> {
+function handlers(names: string[], overrides: Record<string, Handler>, find: Find = NEW_ON_QA, related: Record<string, RelatedFake[]> = {}): Record<string, Handler> {
   let statusCalls = 0;
   return {
     'application.context': () => context(...names),
@@ -50,7 +50,9 @@ function handlers(names: string[], overrides: Record<string, Handler>, find: Fin
     'xmc.authoring.graphql': (p) =>
       isPreflight(p)
         ? preflightReply(find)(p)
-        : p.body.query.startsWith('mutation')
+        : isRelated(p)
+          ? relatedReply(related)(p)
+          : p.body.query.startsWith('mutation')
           ? { data: { data: { publishItem: { operationId: 'op-1' } } } }
           : p.body.query.includes('publishingStatus')
             ? { data: { data: { publishingStatus: { state: 'COMPLETED', isDone: true, isFailed: false, processed: 1 } } } }
@@ -67,8 +69,9 @@ function setup({
   overrides = {},
   page = HOME_PAGE,
   find,
-}: { names?: string[]; overrides?: Record<string, Handler>; page?: Page; find?: Find } = {}) {
-  const { client, calls } = fakeClient(handlers(names, overrides, find));
+  related,
+}: { names?: string[]; overrides?: Record<string, Handler>; page?: Page; find?: Find; related?: Record<string, RelatedFake[]> } = {}) {
+  const { client, calls } = fakeClient(handlers(names, overrides, find, related));
   const view = render(<PanelFlow client={client} {...page} />);
   return { calls, ...view, show: (next: Page) => view.rerender(<PanelFlow client={client} {...next} />) };
 }
@@ -306,6 +309,23 @@ describe('PanelFlow', () => {
       await screen.findByRole('heading', { name: 'Transfer complete' });
       expect(ofKey(calls, 'createContentTransfer')[0].params.body.configuration.dataTrees).toEqual([
         { itemPath: ACME, scope: 'SingleItem', mergeStrategy: 'KeepExistingItem' },
+        { itemPath: HOME, scope: 'ItemAndDescendants', mergeStrategy: 'OverrideExistingTree' },
+      ]);
+    });
+
+    it('Add missing items sends what the page uses along with it', async () => {
+      const SHARED = '/sitecore/content/Acme/Data/Shared';
+      const { calls } = await toReview(DEV, QA, {
+        related: { [`ctx-${DEV}`]: [{ id: 'h', path: HOME, renderings: `<r s:ds="${SHARED}" />` }, { id: 's', path: SHARED, name: 'Shared' }] },
+      });
+      const note = screen.getByRole('note', { name: 'Used by your items but not in the list' });
+      fireEvent.click(within(note).getByRole('button', { name: 'Add 1 missing item' }));
+      expect(within(screen.getByRole('region', { name: 'Review' })).getByText('Also sends').closest('div')).toHaveTextContent(SHARED);
+      await waitFor(() => expect(screen.queryAllByText(/^Checking/)).toHaveLength(0));
+      click('Start');
+      await screen.findByRole('heading', { name: 'Transfer complete' });
+      expect(ofKey(calls, 'createContentTransfer')[0].params.body.configuration.dataTrees).toEqual([
+        { itemPath: SHARED, scope: 'SingleItem', mergeStrategy: 'KeepExistingItem' },
         { itemPath: HOME, scope: 'ItemAndDescendants', mergeStrategy: 'OverrideExistingTree' },
       ]);
     });
