@@ -11,6 +11,8 @@ import { useEffect, useRef, useState, type ElementType } from 'react';
 
 export type LogLine = { text: string; type: LogType; time: string };
 export type RunKind = 'transfer' | 'export' | 'install';
+/** What the package holds; leave out `itemCount` when it isn't known (a bare .raif has no item list). */
+export type RunInfo = { chunkCount: number; itemCount?: number };
 
 type Props = {
   kind: RunKind;
@@ -24,7 +26,7 @@ type Props = {
   running: boolean;
   result: 'success' | 'fail' | null;
   tookMs?: number;
-  info?: { chunkCount: number; itemCount: number };
+  info?: RunInfo;
   /** Leave out to hide Cancel, e.g. once the target is importing and can't be stopped. */
   onCancel?(): void;
   onAgain(): void;
@@ -261,7 +263,7 @@ export function RunView({
 
   if (result === 'success') {
     const stats = [
-      info && (['Items', info.itemCount] as const),
+      info?.itemCount !== undefined && (['Items', info.itemCount] as const),
       info && (['Chunks', info.chunkCount] as const),
       tookMs !== undefined && (['Took', formatDuration(tookMs)] as const),
     ].filter((x) => !!x);

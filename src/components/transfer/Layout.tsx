@@ -3,6 +3,11 @@ import { Icon } from '@/lib/icon';
 import { mdiSwapHorizontal } from '@mdi/js';
 import type { ReactNode } from 'react';
 
+/** The page's content column, between the header and the footer. */
+export const MAIN = 'mx-auto flex w-full max-w-[1120px] flex-1 flex-col gap-6 px-4 pt-7 pb-10 sm:px-8';
+/** A footer or page-level button: 44px tall with the 10px radius. */
+export const BTN = 'h-11 rounded-[10px] px-5';
+
 /** Leave out `onHome` to keep the brand button visible but disabled, e.g. while a run is in progress. */
 type HeaderProps = { crumb?: string; envCount?: number; onHome?(): void; onCancel?(): void };
 

@@ -1,42 +1,22 @@
 import { ContentTree } from '@/components/transfer/ContentTree';
 import { EnvironmentCards } from '@/components/transfer/EnvironmentCards';
-import { ActionBar, AppHeader, PageHeading } from '@/components/transfer/Layout';
+import { ActionBar, AppHeader, BTN, MAIN, PageHeading } from '@/components/transfer/Layout';
 import { ReviewStep, needsProdConfirm } from '@/components/transfer/ReviewStep';
-import { RunView, type LogLine } from '@/components/transfer/RunView';
-import { Segmented } from '@/components/transfer/Segmented';
+import { RunView } from '@/components/transfer/RunView';
+import { DATABASES, Segmented } from '@/components/transfer/Segmented';
 import { SelectionQueue } from '@/components/transfer/SelectionQueue';
 import { Stepper } from '@/components/transfer/Stepper';
+import { useRun } from '@/components/transfer/useRun';
 import { Button } from '@/components/ui/button';
 import { Icon } from '@/lib/icon';
 import { mergeTrees, newTree } from '@/lib/queue';
 import type { Env, SdkClient } from '@/lib/sdk';
-import { IMPORT_STEP, runExport, runTransfer, type DataTree, type RunCallbacks, type StepStatus } from '@/lib/transfer';
+import { IMPORT_STEP, runExport, runTransfer, type DataTree } from '@/lib/transfer';
 import { mdiArrowRight, mdiSwapHorizontal } from '@mdi/js';
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
 
 type Mode = 'transfer' | 'export';
 type Props = { client: SdkClient; mode: Mode; envs: Env[]; onHome(): void };
-
-type Run = {
-  // The route as started: what the run writes and what RunView names, even if `envs` changes meanwhile.
-  source: Env;
-  target?: Env;
-  steps: { label: string; status: StepStatus; ms?: number }[];
-  progress: number;
-  logs: LogLine[];
-  running: boolean;
-  result: 'success' | 'fail' | null;
-  tookMs?: number;
-  info?: { chunkCount: number; itemCount: number };
-  zip?: { blob: Blob; name: string };
-};
-
-const DATABASES = [
-  { value: 'master', label: 'master' },
-  { value: 'web', label: 'web' },
-];
-const BTN = 'h-11 rounded-[10px] px-5';
-const MAIN = 'mx-auto flex w-full max-w-[1120px] flex-1 flex-col gap-6 px-4 pt-7 pb-10 sm:px-8';
 
 function download(blob: Blob, fileName: string) {
   const url = URL.createObjectURL(blob);
@@ -68,35 +48,24 @@ export function Flow({ client, mode, envs, onHome }: Props) {
   const [trees, setTrees] = useState<DataTree[]>([]);
   // The target id the production box was ticked for: another target, or a fresh visit to Review, needs it ticked again.
   const [prodFor, setProdFor] = useState<string | null>(null);
-  // Null unless on the run step; a run starts as running, so RunView never sees running=false with no result.
-  const [run, setRun] = useState<Run | null>(null);
-  // Non-null while a run is in progress: blocks a second start, and leaving the flow aborts it.
-  const abort = useRef<AbortController | null>(null);
-  useEffect(() => () => abort.current?.abort(), []);
+  // `run` is null unless on the run step.
+  const runner = useRun();
+  const { run, running } = runner;
+  // The export's package, kept for Download package.
+  const [zip, setZip] = useState<{ blob: Blob; name: string }>();
 
   // An id that is no longer in `envs` (e.g. after a Retry) counts as unselected.
   const source = envs.find((e) => e.id === sourceId);
   const target = transfer ? envs.find((e) => e.id === targetId && e.id !== sourceId) : undefined;
   const routeOk = !!source && (!transfer || !!target);
   const prodChecked = !!target && prodFor === target.id;
-  const running = !!run?.running;
   // Lost the route on a later step (an environment vanished): back to Route, so re-picking a card doesn't
   // jump ahead to the remembered step. Render-phase reset; this pass still shows Route.
   if (!run && !routeOk && step) setStep(0);
   const current = run ? 3 : routeOk ? step : 0;
 
-  // Announce completion or failure: move focus to the run heading.
-  const runRef = useRef<HTMLElement>(null);
-  const result = run?.result;
-  useEffect(() => {
-    const h = result && runRef.current?.querySelector('h1');
-    if (!h) return;
-    h.tabIndex = -1;
-    h.focus();
-  }, [result]);
-
   const go = (i: number) => {
-    setRun(null);
+    runner.reset();
     setProdFor(null);
     setStep(i);
   };
@@ -115,52 +84,19 @@ export function Flow({ client, mode, envs, onHome }: Props) {
 
   const canStart = routeOk && trees.length > 0 && !(transfer && needsProdConfirm(target) && !prodChecked);
 
-  const start = async () => {
-    if (abort.current || !canStart) return;
-    const ctrl = new AbortController();
-    abort.current = ctrl;
-    const began = Date.now();
-    const stepStart: number[] = [];
+  const start = () => {
+    if (!canStart) return;
     const src = source!;
-    setRun({
-      source: src,
-      target,
-      steps: stepLabels(mode, src, target, database).map((label) => ({ label, status: 'pending' })),
-      progress: 0,
-      logs: [],
-      running: true,
-      result: null,
+    setZip(undefined);
+    void runner.start({ labels: stepLabels(mode, src, target, database), source: src, target }, async (cb, signal) => {
+      if (transfer) return runTransfer(client, { source: src, target: target!, database, dataTrees: trees }, cb, signal);
+      const blob = await runExport(client, { source: src, dataTrees: trees }, cb, signal);
+      if (!blob) return false;
+      const pkg = { blob, name: `contentTransfer-${src.name}-${localDate()}.zip` };
+      setZip(pkg);
+      download(pkg.blob, pkg.name);
+      return true;
     });
-    const update = (patch: (r: Run) => Partial<Run>) => setRun((r) => r && { ...r, ...patch(r) });
-    const cb: RunCallbacks = {
-      onLog: (text, type) => update((r) => ({ logs: [...r.logs, { text, type, time: new Date().toLocaleTimeString() }] })),
-      onProgress: (progress) => update(() => ({ progress })),
-      onStepChange: (i, status) => {
-        const now = Date.now();
-        if (status === 'running') stepStart[i] = now;
-        const ms = status === 'running' ? undefined : now - (stepStart[i] ?? now);
-        update((r) => ({ steps: r.steps.map((s, j) => (j === i ? { ...s, status, ms } : s)) }));
-      },
-      onInfo: (info) => update(() => ({ info })),
-    };
-    let ok = false;
-    let zip: Run['zip'];
-    try {
-      if (transfer) {
-        ok = await runTransfer(client, { source: src, target: target!, database, dataTrees: trees }, cb, ctrl.signal);
-      } else {
-        const blob = await runExport(client, { source: src, dataTrees: trees }, cb, ctrl.signal);
-        if (blob) {
-          zip = { blob, name: `contentTransfer-${src.name}-${localDate()}.zip` };
-          download(zip.blob, zip.name);
-          ok = true;
-        }
-      }
-    } catch (e) {
-      cb.onLog(e instanceof Error ? e.message : String(e), 'error');
-    }
-    abort.current = null;
-    update(() => ({ running: false, result: ok ? 'success' : 'fail', tookMs: Date.now() - began, zip }));
   };
 
   const count = `${trees.length} ${trees.length === 1 ? 'item' : 'items'}`;
@@ -176,10 +112,10 @@ export function Flow({ client, mode, envs, onHome }: Props) {
   let body: ReactNode;
   let footer: ReactNode = null;
   if (run) {
-    // Cancel is offered until the target starts importing; after that it finishes on its own.
-    const importing = transfer && ['running', 'done'].includes(run.steps[IMPORT_STEP.transfer]?.status);
+    // Export has no import phase; a transfer can be cancelled until the target starts importing.
+    const cancellable = !transfer || runner.canCancelUntil(IMPORT_STEP.transfer);
     body = (
-      <main ref={runRef} className="flex flex-1 flex-col [&_h1]:outline-none">
+      <main ref={runner.headingRef} className="flex flex-1 flex-col [&_h1]:outline-none">
         <RunView
           kind={mode}
           source={run.source}
@@ -191,14 +127,14 @@ export function Flow({ client, mode, envs, onHome }: Props) {
           result={run.result}
           tookMs={run.tookMs}
           info={run.info}
-          onCancel={importing ? undefined : () => abort.current?.abort()}
+          onCancel={cancellable ? runner.cancel : undefined}
           onAgain={() => {
             const failed = run.result === 'fail';
             if (!failed) setTrees([]);
             go(failed ? 2 : 0);
           }}
           onHome={onHome}
-          onDownload={run.zip ? () => download(run.zip!.blob, run.zip!.name) : undefined}
+          onDownload={zip ? () => download(zip.blob, zip.name) : undefined}
         />
       </main>
     );
@@ -336,7 +272,7 @@ export function Flow({ client, mode, envs, onHome }: Props) {
           <Button type="button" variant="outline" className={BTN} onClick={() => go(1)}>
             Back
           </Button>
-          <Button type="button" className={BTN} disabled={!canStart} onClick={() => void start()}>
+          <Button type="button" className={BTN} disabled={!canStart} onClick={start}>
             <Icon path={mdiArrowRight} aria-hidden="true" />
             {transfer ? 'Start transfer' : 'Create package'}
           </Button>

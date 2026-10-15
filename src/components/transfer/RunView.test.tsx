@@ -230,6 +230,12 @@ describe('RunView complete', () => {
     expect(screen.getByText('Took').nextSibling).toHaveTextContent('45 s');
   });
 
+  it('omits Items when the item count is unknown but still shows Chunks', () => {
+    done('install', { info: { chunkCount: 3 } });
+    expect(screen.queryByText('Items')).not.toBeInTheDocument();
+    expect(screen.getByText('Chunks').nextSibling).toHaveTextContent('3');
+  });
+
   it('omits the stats row entirely when there is nothing to show', () => {
     done('transfer', { info: undefined, tookMs: undefined });
     for (const label of ['Items', 'Chunks', 'Took']) expect(screen.queryByText(label)).not.toBeInTheDocument();

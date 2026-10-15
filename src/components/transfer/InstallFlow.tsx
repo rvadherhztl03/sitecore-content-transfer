@@ -1,41 +1,18 @@
 import { EnvironmentCards } from '@/components/transfer/EnvironmentCards';
 import { ImportPanel, type LoadedPackage } from '@/components/transfer/ImportPanel';
-import { ActionBar, AppHeader, PageHeading } from '@/components/transfer/Layout';
+import { ActionBar, AppHeader, BTN, MAIN, PageHeading } from '@/components/transfer/Layout';
 import { ProdConfirm, needsProdConfirm } from '@/components/transfer/ReviewStep';
-import { RunView, type LogLine } from '@/components/transfer/RunView';
-import { Segmented } from '@/components/transfer/Segmented';
+import { RunView } from '@/components/transfer/RunView';
+import { DATABASES, Segmented } from '@/components/transfer/Segmented';
+import { useRun } from '@/components/transfer/useRun';
 import { Button } from '@/components/ui/button';
 import { Icon } from '@/lib/icon';
 import type { Env, SdkClient } from '@/lib/sdk';
-import { IMPORT_STEP, IMPORT_STEPS, runImport, type RunCallbacks, type StepStatus } from '@/lib/transfer';
+import { IMPORT_STEP, runImport } from '@/lib/transfer';
 import { mdiArrowRight } from '@mdi/js';
-import { useEffect, useRef, useState } from 'react';
+import { useState } from 'react';
 
 type Props = { client: SdkClient; envs: Env[]; onHome(): void };
-
-type Run = {
-  // The target as started: what the run writes and what RunView names, even if `envs` changes meanwhile.
-  target: Env;
-  steps: { label: string; status: StepStatus; ms?: number }[];
-  progress: number;
-  logs: LogLine[];
-  running: boolean;
-  result: 'success' | 'fail' | null;
-  tookMs?: number;
-  info: { chunkCount: number; itemCount: number };
-};
-
-const DATABASES = [
-  { value: 'master', label: 'master' },
-  { value: 'web', label: 'web' },
-];
-const BTN = 'h-11 rounded-[10px] px-5';
-const MAIN = 'mx-auto flex w-full max-w-[1120px] flex-1 flex-col gap-6 px-4 pt-7 pb-10 sm:px-8';
-
-const stepLabels = (target: Env, database: string) =>
-  IMPORT_STEPS.map((label, i) =>
-    i === 1 ? `Assemble package on ${target.name}` : i === IMPORT_STEP.import ? `Import into ${database}` : label,
-  );
 
 /** Install a .zip or .raif package into a chosen environment: one screen, then the run. Owns the package, the target and the run. */
 export function InstallFlow({ client, envs, onHome }: Props) {
@@ -46,69 +23,33 @@ export function InstallFlow({ client, envs, onHome }: Props) {
   const [database, setDatabase] = useState('master');
   // The target id the production box was ticked for, cleared whenever the target changes.
   const [prodFor, setProdFor] = useState<string | null>(null);
-  // Null unless a run exists; a run starts as running, so RunView never sees running=false with no result.
-  const [run, setRun] = useState<Run | null>(null);
-  // Non-null while a run is in progress: blocks a second start, and leaving the flow aborts it.
-  const abort = useRef<AbortController | null>(null);
-  useEffect(() => () => abort.current?.abort(), []);
+  // `run` is null until Install package is clicked.
+  const runner = useRun();
+  const { run, running } = runner;
 
   // An id that is no longer in `envs` counts as unselected.
   const target = envs.find((e) => e.id === targetId);
   const prodChecked = !!target && prodFor === target.id;
-  const running = !!run?.running;
   const canStart = !!pkg && !!target && !(needsProdConfirm(target) && !prodChecked);
-
-  // Announce completion or failure: move focus to the run heading.
-  const runRef = useRef<HTMLElement>(null);
-  const result = run?.result;
-  useEffect(() => {
-    const h = result && runRef.current?.querySelector('h1');
-    if (!h) return;
-    h.tabIndex = -1;
-    h.focus();
-  }, [result]);
 
   const pickTarget = (id: string) => {
     setTargetId(id);
     setProdFor(null);
   };
 
-  const start = async () => {
-    if (abort.current || !canStart) return;
-    const ctrl = new AbortController();
-    abort.current = ctrl;
-    const began = Date.now();
-    const stepStart: number[] = [];
+  const start = () => {
+    if (!canStart) return;
     const tgt = target!;
     const { parts, items } = pkg!;
-    setRun({
-      target: tgt,
-      steps: stepLabels(tgt, database).map((label) => ({ label, status: 'pending' })),
-      progress: 0,
-      logs: [],
-      running: true,
-      result: null,
-      info: { chunkCount: parts.reduce((n, p) => n + p.chunks.length, 0), itemCount: items.length },
-    });
-    const update = (patch: (r: Run) => Partial<Run>) => setRun((r) => r && { ...r, ...patch(r) });
-    const cb: RunCallbacks = {
-      onLog: (text, type) => update((r) => ({ logs: [...r.logs, { text, type, time: new Date().toLocaleTimeString() }] })),
-      onProgress: (progress) => update(() => ({ progress })),
-      onStepChange: (i, status) => {
-        const now = Date.now();
-        if (status === 'running') stepStart[i] = now;
-        const ms = status === 'running' ? undefined : now - (stepStart[i] ?? now);
-        update((r) => ({ steps: r.steps.map((s, j) => (j === i ? { ...s, status, ms } : s)) }));
+    void runner.start(
+      {
+        labels: ['Upload package', `Assemble package on ${tgt.name}`, `Import into ${database}`, 'Verify'],
+        target: tgt,
+        // A bare .raif has no item list, so there is no count to show.
+        info: { chunkCount: parts.reduce((n, p) => n + p.chunks.length, 0), itemCount: items.length || undefined },
       },
-    };
-    let ok = false;
-    try {
-      ok = await runImport(client, { target: tgt, database, parts }, cb, ctrl.signal);
-    } catch (e) {
-      cb.onLog(e instanceof Error ? e.message : String(e), 'error');
-    }
-    abort.current = null;
-    update(() => ({ running: false, result: ok ? 'success' : 'fail', tookMs: Date.now() - began }));
+      (cb, signal) => runImport(client, { target: tgt, database, parts }, cb, signal),
+    );
   };
 
   const again = () => {
@@ -120,12 +61,9 @@ export function InstallFlow({ client, envs, onHome }: Props) {
     }
     // Writing to production again needs a new confirmation either way.
     setProdFor(null);
-    setRun(null);
+    runner.reset();
   };
 
-  // Cancel is offered until the target starts importing; after that it finishes on its own.
-  const importing = ['running', 'done'].includes(run?.steps[IMPORT_STEP.import]?.status ?? '');
-  // A bare .raif has no item list to count.
   const count = !pkg ? 'No package' : pkg.items.length === 1 ? '1 item' : pkg.items.length ? `${pkg.items.length} items` : 'No item list';
 
   return (
@@ -156,7 +94,7 @@ export function InstallFlow({ client, envs, onHome }: Props) {
         </div>
       </main>
       {run ? (
-        <main ref={runRef} className="flex flex-1 flex-col [&_h1]:outline-none">
+        <main ref={runner.headingRef} className="flex flex-1 flex-col [&_h1]:outline-none">
           <RunView
             kind="install"
             target={run.target}
@@ -167,7 +105,8 @@ export function InstallFlow({ client, envs, onHome }: Props) {
             result={run.result}
             tookMs={run.tookMs}
             info={run.info}
-            onCancel={importing ? undefined : () => abort.current?.abort()}
+            // Cancel is offered until the target starts importing; after that it finishes on its own.
+            onCancel={runner.canCancelUntil(IMPORT_STEP.import) ? runner.cancel : undefined}
             onAgain={again}
             onHome={onHome}
           />
@@ -191,7 +130,7 @@ export function InstallFlow({ client, envs, onHome }: Props) {
           <Button type="button" variant="outline" className={BTN} onClick={onHome}>
             Back
           </Button>
-          <Button type="button" className={BTN} disabled={!canStart} onClick={() => void start()}>
+          <Button type="button" className={BTN} disabled={!canStart} onClick={start}>
             Install package
           </Button>
         </ActionBar>

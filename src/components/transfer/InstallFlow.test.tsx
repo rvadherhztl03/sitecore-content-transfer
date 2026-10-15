@@ -108,6 +108,17 @@ describe('InstallFlow', () => {
     expect(install()).toBeDisabled();
   });
 
+  it('Install package is disabled while a replacement package is being read', async () => {
+    setup();
+    await load();
+    pick(QA);
+    expect(install()).toBeEnabled();
+    fireEvent.change(screen.getByLabelText('Package file'), { target: { files: [await zipFile('r.zip')] } });
+    expect(install()).toBeDisabled();
+    await screen.findByText('r.zip');
+    expect(install()).toBeEnabled();
+  });
+
   it('the header Cancel and Back go home', () => {
     const { onHome } = setup();
     click('Cancel');
@@ -160,6 +171,18 @@ describe('InstallFlow', () => {
     expect(screen.getByText('Items').parentElement).toHaveTextContent('Items2');
     expect(screen.getByText('Chunks').parentElement).toHaveTextContent('Chunks2');
     expect(screen.getByText('Took')).toBeInTheDocument();
+  });
+
+  it('leaves out the Items stat for a package without an item list', async () => {
+    setup();
+    fireEvent.change(screen.getByLabelText('Package file'), { target: { files: [new File(['raif'], 'bare.raif')] } });
+    await screen.findByText('No metadata in this package.');
+    expect(screen.getByRole('contentinfo')).toHaveTextContent('No item list');
+    pick(QA);
+    click('Install package');
+    await screen.findByText('Package installed');
+    expect(screen.queryByText('Items')).not.toBeInTheDocument();
+    expect(screen.getByText('Chunks').parentElement).toHaveTextContent('Chunks1');
   });
 
   it('works with a single environment', async () => {
@@ -220,6 +243,21 @@ describe('InstallFlow', () => {
     expect(screen.getByText("The import can't be cancelled once it starts.")).toBeInTheDocument();
     importing.release();
     expect(await screen.findByText('Package installed')).toBeInTheDocument();
+  });
+
+  it('keeps Cancel hidden once the import has failed, while cleanup is still running', async () => {
+    const cleanup = hold();
+    setup({ overrides: { consumeFile: () => ({ status: 500 }), deleteContentTransfer: cleanup.handler } });
+    await load();
+    pick(QA);
+    click('Install package');
+    // The failure is logged, and the import step marked failed, just before cleanup starts.
+    await screen.findByText('HTTP 500');
+    await cleanup.ready();
+    expect(screen.queryByRole('button', { name: 'Cancel install' })).not.toBeInTheDocument();
+    expect(screen.getByText("The import can't be cancelled once it starts.")).toBeInTheDocument();
+    cleanup.release();
+    expect(await screen.findByRole('heading', { level: 1, name: 'Install failed' })).toBeInTheDocument();
   });
 
   it('Cancel stops the upload, cleans up and ends as a failed run', async () => {

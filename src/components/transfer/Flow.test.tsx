@@ -239,6 +239,27 @@ describe('Flow', () => {
       expect(await screen.findByText('Transfer complete')).toBeInTheDocument();
     });
 
+    it('keeps Cancel hidden once the import has failed, while cleanup is still running', async () => {
+      let release!: () => void;
+      let cleanups = 0;
+      setup({
+        overrides: {
+          consumeFile: () => ({ status: 500 }),
+          // Cleanup runs on the source, then the target: hold the first, let the second through.
+          deleteContentTransfer: () => (cleanups++ === 0 ? new Promise<FakeReply>((r) => (release = () => r({}))) : {}),
+        },
+      });
+      await toReview();
+      click('Start transfer');
+      // The failure is logged, and the import step marked failed, just before cleanup starts.
+      await screen.findByText('HTTP 500');
+      await waitFor(() => expect(release).toBeTypeOf('function'));
+      expect(screen.queryByRole('button', { name: 'Cancel transfer' })).not.toBeInTheDocument();
+      expect(screen.getByText("The import can't be cancelled once it starts.")).toBeInTheDocument();
+      release();
+      expect(await screen.findByRole('heading', { level: 1, name: 'Transfer failed' })).toBeInTheDocument();
+    });
+
     it('the header home button is disabled while running and does not abort', async () => {
       let release!: () => void;
       let chunks = 0;
