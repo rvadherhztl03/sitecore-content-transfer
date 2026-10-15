@@ -1,6 +1,6 @@
 "use client";
 
-import { Workspace } from "@/components/transfer/Workspace";
+import { App } from "@/components/transfer/App";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { useMarketplaceClient } from "@/utils/hooks/useMarketplaceClient";
 import Spike from "./Spike";
@@ -17,5 +17,5 @@ export default function FullscreenExtension() {
 			</Alert>
 		);
 	}
-	return <Workspace client={client} />;
+	return <App client={client} />;
 }

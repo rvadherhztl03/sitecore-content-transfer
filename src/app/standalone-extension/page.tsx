@@ -1,6 +1,6 @@
 "use client";
 
-import { Workspace } from "@/components/transfer/Workspace";
+import { App } from "@/components/transfer/App";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { useMarketplaceClient } from "@/utils/hooks/useMarketplaceClient";
 
@@ -13,5 +13,5 @@ export default function StandaloneExtension() {
 			</Alert>
 		);
 	}
-	return <Workspace client={client} />;
+	return <App client={client} />;
 }
