@@ -140,6 +140,17 @@ The user runs it inside XM Cloud and shares the output. Findings update this spe
 - Export the same tree, import the zip into QA.
 - Pages context panel: send the current page to another env.
 
+## Plan-time amendments
+
+Found while writing the implementation plan; these override the sections above.
+
+- **Light theme only.** SDK 0.2 exposes no host theme query (`host.state`, `application.context` and the others carry no theme), so "follows host light/dark theme" is dropped. Add a `.dark` toggle when the SDK exposes the host theme.
+- **Tailwind 3 → 4 and `@/*` → `./src/*`.** The Blok registry ships Tailwind 4 theme variables, and its components import `@/lib/utils`, `@/lib/icon` and `@/components/ui/*`.
+- **Blok theme URL** is `https://blok.sitecore.com/r/theme.json` (`marketplace-sdk.sitecorecloud.io` did not resolve).
+- **Shared helpers get their own files:** `src/lib/sdk.ts` (`call`, `toEnvs`, `fetchChildren`, `fetchItemId`), `src/lib/package.ts` (zip build/read) and `src/lib/queue.ts` (queue defaults, JSON parsing, dedupe). `transfer.ts` keeps only the pipelines.
+- **Export media handling is unconditional:** every export also writes `package-chunks.json` (`[{ chunkSet, index, isMedia, offset, length }]`), an offset map into `package.raif`. Import re-slices the original chunks with their `isMedia` flags when the map is present and falls back to 1 MB slices otherwise. This replaces the Phase 0–conditional `chunks/*.bin` idea: there's no duplicated data, and old zips still import.
+- **The user's uncommitted `MigrationDashboard.tsx` change is stashed** (`pre-redesign JSON button fix`) at the start of implementation rather than left in the working tree.
+
 ## Delivery
 
 - Branch `feat/sdk-transfer-redesign`.
