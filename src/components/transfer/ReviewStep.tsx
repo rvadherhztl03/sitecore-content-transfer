@@ -5,14 +5,12 @@ import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Label } from '@/components/ui/label';
 import { Icon } from '@/lib/icon';
-import { MERGES, SCOPES, labelOf } from '@/lib/queue';
+import { MERGES, SCOPES, labelOf, nameOf } from '@/lib/queue';
 import { envKind, type Env } from '@/lib/sdk';
 import type { DataTree } from '@/lib/transfer';
 import { cn } from '@/lib/utils';
 import { mdiArrowRight, mdiDatabaseOutline } from '@mdi/js';
 import { useId } from 'react';
-
-const nameOf = (path: string) => path.replace(/\/+$/, '').split('/').pop() || path;
 
 export const needsProdConfirm = (target?: Env): boolean => !!target && envKind(target) === 'prod';
 
@@ -47,7 +45,7 @@ const CARD = {
 function RouteCard({ kind, env, detail }: { kind: keyof typeof CARD; env: Env; detail: string }) {
   const tone = CARD[kind];
   return (
-    <div className={cn('flex min-w-0 flex-[1_1_260px] items-center gap-3.5 rounded-xl p-4', tone.box)}>
+    <div className={cn('flex min-w-0 items-center gap-3.5 rounded-xl p-4', tone.box)}>
       <span className={cn('grid size-11 shrink-0 place-items-center rounded-xl', tone.tile)}>
         <Icon path={mdiDatabaseOutline} className="size-[22px]" aria-hidden="true" />
       </span>
@@ -94,11 +92,14 @@ export function ReviewStep({ mode, source, target, database, trees, prodChecked,
         <PageHeading title="Ready to export" sub="Check the items, then create the package." />
       )}
 
-      <section aria-label="Route" className="flex flex-wrap items-center gap-4 rounded-[14px] border bg-white p-5">
+      <section
+        aria-label="Route"
+        className={cn('grid items-center gap-4 rounded-[14px] border bg-white p-5', to && 'sm:grid-cols-[1fr_auto_1fr]')}
+      >
         <RouteCard kind="from" env={source} detail={detail(source, database)} />
         {to && (
           <>
-            <Icon path={mdiArrowRight} className="text-primary size-7 shrink-0 rotate-90 sm:rotate-0" aria-hidden="true" />
+            <Icon path={mdiArrowRight} className="text-primary size-7 shrink-0 justify-self-center rotate-90 sm:rotate-0" aria-hidden="true" />
             <RouteCard kind="to" env={to} detail={detail(to, `writes to ${database}`)} />
           </>
         )}
@@ -106,13 +107,12 @@ export function ReviewStep({ mode, source, target, database, trees, prodChecked,
 
       {to && replacing > 0 && (
         <Alert variant="warning" role="note" className="border-warning-200 bg-warning-50 text-warning-700 items-start rounded-xl border px-4 py-3.5">
-          <AlertDescription className="gap-0.5">
+          <AlertDescription>
             <strong className="font-semibold break-words">
               {replacing === 1
                 ? `1 item replaces everything below it on ${to.name}.`
                 : `${replacing} items replace everything below them on ${to.name}.`}
             </strong>
-            <span className="break-words">{`Existing child items on ${to.name} will be overwritten by the versions from ${source.name}.`}</span>
           </AlertDescription>
         </Alert>
       )}

@@ -91,6 +91,7 @@ describe('ReviewStep', () => {
   it('warns for one tree replacement', () => {
     setup();
     expect(screen.getByText('1 item replaces everything below it on Acme · QA.')).toBeInTheDocument();
+    expect(screen.getByRole('note')).toHaveTextContent(/^1 item replaces everything below it on Acme · QA\.$/);
   });
 
   it('warns for several tree replacements', () => {

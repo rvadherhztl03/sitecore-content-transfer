@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { describe, expect, it } from 'vitest';
-import { MERGES, SCOPES, labelOf, mergeTrees, newTree, parseQueueJson } from '@/lib/queue';
+import { MERGES, SCOPES, labelOf, mergeTrees, nameOf, newTree, parseQueueJson } from '@/lib/queue';
 
 describe('queue', () => {
   it('uses the plain-language labels', () => {
@@ -14,6 +14,12 @@ describe('queue', () => {
       { value: 'KeepExistingItem', label: "Keep what's there", long: "Keep what's there" },
       { value: 'LatestWin', label: 'Keep the newer one', long: 'Keep the newer one' },
     ]);
+  });
+
+  it('nameOf returns the last path segment, ignoring a trailing slash', () => {
+    expect(nameOf('/sitecore/content/Acme/Home')).toBe('Home');
+    expect(nameOf('/sitecore/content/Acme/Home/')).toBe('Home');
+    expect(nameOf('/')).toBe('/');
   });
 
   it('labelOf returns the short label, the long one, or the value itself', () => {

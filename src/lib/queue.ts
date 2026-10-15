@@ -18,6 +18,9 @@ export const labelOf = (options: { value: string; label: string; long?: string }
   return (long && o?.long) || o?.label || value;
 };
 
+/** Last path segment, ignoring a trailing slash; the path itself when there is none. */
+export const nameOf = (path: string): string => path.replace(/\/+$/, '').split('/').pop() || path;
+
 export const newTree = (itemPath: string): DataTree => ({
   itemPath,
   scope: 'ItemAndDescendants',

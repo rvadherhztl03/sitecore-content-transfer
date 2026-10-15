@@ -4,7 +4,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Icon } from '@/lib/icon';
-import { MERGES, SCOPES, labelOf, mergeTrees, newTree, parseQueueJson } from '@/lib/queue';
+import { MERGES, SCOPES, labelOf, mergeTrees, nameOf, newTree, parseQueueJson } from '@/lib/queue';
 import type { DataTree, MergeStrategy, Scope } from '@/lib/transfer';
 import { mdiClose } from '@mdi/js';
 import { useRef, useState } from 'react';
@@ -12,7 +12,6 @@ import { useRef, useState } from 'react';
 type Props = { trees: DataTree[]; onChange(trees: DataTree[]): void; disabled?: boolean };
 
 const BTN = 'h-9 rounded-lg px-3 pointer-coarse:h-11';
-const nameOf = (path: string) => path.replace(/\/+$/, '').split('/').pop() || path;
 
 export function SelectionQueue({ trees, onChange, disabled }: Props) {
   const [path, setPath] = useState('');
