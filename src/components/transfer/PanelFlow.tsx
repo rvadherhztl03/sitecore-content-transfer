@@ -2,7 +2,7 @@ import { ONE_ENV, cancelNote, treeWarning } from '@/components/transfer/copy';
 import { EnvBadge } from '@/components/transfer/EnvironmentCards';
 import { PreflightNotes, PreflightStatus } from '@/components/transfer/Preflight';
 import { backupName, download } from '@/components/transfer/download';
-import { BackupChoice, ProdConfirm, needsProdConfirm } from '@/components/transfer/ReviewStep';
+import { BackupChoice, ProdConfirm, PublishChoice, needsProdConfirm } from '@/components/transfer/ReviewStep';
 import { RunView } from '@/components/transfer/RunView';
 import { usePreflight } from '@/components/transfer/usePreflight';
 import { useRun } from '@/components/transfer/useRun';
@@ -144,6 +144,10 @@ export function PanelFlow({ client, pageName, pagePath }: Props) {
   const [withBackup, setWithBackup] = useState(false);
   // Whether the current run is a restore of that backup rather than the send itself.
   const [restoring, setRestoring] = useState(false);
+  // "Publish to Experience Edge when done" (off by default), and whether the current send publishes: a restore then
+  // publishes too, so the live site goes back as well.
+  const [publishOn, setPublishOn] = useState(false);
+  const [withPublish, setWithPublish] = useState(false);
   const runner = useRun();
   const { run } = runner;
 
@@ -186,14 +190,15 @@ export function PanelFlow({ client, pageName, pagePath }: Props) {
     setBackupZip(undefined);
     setWithBackup(backup.length > 0);
     setRestoring(false);
+    setWithPublish(publishOn);
     const onBackup = (blob: Blob) => {
       const pkg = { blob, name: backupName(target.name) };
       setBackupZip(pkg);
       download(pkg.blob, pkg.name);
     };
-    const labels = backup.length ? ['Back up target', ...TRANSFER_STEPS] : TRANSFER_STEPS;
+    const labels = [...(backup.length ? ['Back up target'] : []), ...TRANSFER_STEPS, ...(publishOn ? ['Publish to Experience Edge'] : [])];
     void runner.start({ labels, source, target }, (cb, signal) =>
-      runTransfer(client, { source, target, database: DATABASE, dataTrees, backup }, { ...cb, onBackup }, signal),
+      runTransfer(client, { source, target, database: DATABASE, dataTrees, backup, publish: publishOn }, { ...cb, onBackup }, signal),
     );
   };
 
@@ -209,9 +214,14 @@ export function PanelFlow({ client, pageName, pagePath }: Props) {
       const tgt = run.target!;
       runner.reset();
       setRestoring(true);
-      void runner.start({ labels: IMPORT_STEPS, target: tgt }, async (cb, signal) => {
-        const { parts } = await readPackage(new File([pkg.blob], pkg.name));
-        return runImport(client!, { target: tgt, database: DATABASE, parts }, cb, signal);
+      const labels = [...IMPORT_STEPS, ...(withPublish ? ['Publish to Experience Edge'] : [])];
+      void runner.start({ labels, target: tgt }, async (cb, signal) => {
+        const { parts, items } = await readPackage(new File([pkg.blob], pkg.name));
+        // The send was published: publish what the backup puts back, so the live site goes back too.
+        const publish = withPublish
+          ? items.map((i): DataTree => ({ itemPath: i.path, scope: i.scope as Scope, mergeStrategy: i.mergeStrategy as MergeStrategy }))
+          : undefined;
+        return runImport(client!, { target: tgt, database: DATABASE, parts, publish }, cb, signal);
       });
     };
     body = (
@@ -298,6 +308,7 @@ export function PanelFlow({ client, pageName, pagePath }: Props) {
           }
         />
         <BackupChoice target={target} available={backupTrees.length > 0} checked={backupOn} onChange={setBackupOn} />
+        <PublishChoice target={target} checked={publishOn} onChange={setPublishOn} />
         {needsProdConfirm(target) && <ProdConfirm target={target} checked={prodChecked} onChange={(v) => setProdFor(v ? target.id : null)} />}
         <p className="text-muted-foreground text-[13px] leading-normal">
           {cancelNote(target.name)}

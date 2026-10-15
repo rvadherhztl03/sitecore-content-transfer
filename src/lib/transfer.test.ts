@@ -97,7 +97,7 @@ describe('IMPORT_STEP', () => {
 });
 
 beforeEach(() => {
-  Object.assign(TIMING, { pollMs: 0, statusTimeoutMs: 50, verifyTimeoutMs: 50 });
+  Object.assign(TIMING, { pollMs: 0, statusTimeoutMs: 50, verifyTimeoutMs: 50, publishTimeoutMs: 50 });
 });
 
 describe('runTransfer', () => {
@@ -488,6 +488,108 @@ describe('backup before the transfer', () => {
     expect(await runTransfer(client, { ...OPTS, backup: [] }, r.cb)).toBe(true);
     expect(ofKey(calls, 'createContentTransfer').map(ctxOf)).toEqual(['ctx-dev']);
     expect(r.steps).not.toContainEqual([TRANSFER_STEPS.length, 'done']);
+  });
+});
+
+describe('publish to Experience Edge', () => {
+  const GQL = 'xmc.authoring.graphql';
+  const LANGS = 'xmc.sites.listLanguages';
+  const C = '/sitecore/content/C';
+  const ROWS: DataTree[] = [
+    { itemPath: '/sitecore/content/A', scope: 'ItemAndDescendants', mergeStrategy: 'OverrideExistingTree' },
+    { itemPath: '/sitecore/content/B', scope: 'SingleItem', mergeStrategy: 'OverrideExistingItem' },
+    { itemPath: C, scope: 'ItemAndChildren', mergeStrategy: 'OverrideExistingItem' },
+  ];
+  // The children lookup, the publish mutation and the status query, answered by what the query asks for.
+  function gql(status: (n: number) => Record<string, unknown>) {
+    let started = 0;
+    let polled = 0;
+    return (p: any): FakeReply => {
+      const q: string = p.body.query;
+      if (q.includes('GetItemChildren')) return { data: { data: { item: { children: { nodes: [{ itemId: 'c1', name: 'C1', path: `${C}/C1`, children: { nodes: [] } }] } } } } };
+      if (q.startsWith('mutation')) return { data: { data: { publishItem: { operationId: `op-${++started}` } } } };
+      return { data: { data: { publishingStatus: status(polled++) } } };
+    };
+  }
+  const RUNNING_THEN_DONE = (n: number) => (n % 2 === 0 ? { state: 'RUNNING', isDone: false, isFailed: false, processed: 3 } : { state: 'COMPLETED', isDone: true, isFailed: false, processed: 7 });
+  const handlers = (status = RUNNING_THEN_DONE) => ({
+    ...happyHandlers(),
+    [GQL]: gql(status),
+    [LANGS]: () => ({ data: [{ name: 'en' }, { name: 'da-DK' }] }),
+  });
+  const mutations = (calls: any[]) => calls.filter((c) => c.key === GQL && c.params.body.query.startsWith('mutation'));
+
+  it('publishes what was sent from master to Experience Edge, in every target language, and waits for each publish', async () => {
+    const { client, calls } = fakeClient(handlers());
+    const r = recorder();
+    expect(await runTransfer(client, { ...OPTS, dataTrees: ROWS, publish: true }, r.cb)).toBe(true);
+
+    const [tree, single] = mutations(calls);
+    for (const m of [tree, single]) {
+      expect(m.params.query.sitecoreContextId).toBe('ctx-qa');
+      const q: string = m.params.body.query;
+      expect(q).toContain('sourceDatabase: "master"');
+      expect(q).toContain('targetDatabases: ["experienceedge"]');
+      expect(q).toContain('publishItemMode: SMART');
+      expect(q).toContain('publishRelatedItems: false');
+      expect(q).toContain('languages: ["en","da-DK"]');
+    }
+    // + Everything below with its subitems; This item and + Children (as sent: the item and each child) without.
+    expect(tree.params.body.query).toContain('rootItemPaths: ["/sitecore/content/A"]');
+    expect(tree.params.body.query).toContain('publishSubItems: true');
+    expect(single.params.body.query).toContain(`rootItemPaths: ["/sitecore/content/B","${C}","${C}/C1"]`);
+    expect(single.params.body.query).toContain('publishSubItems: false');
+    expect(mutations(calls)).toHaveLength(2);
+    expect(calls.find((c) => c.key === LANGS)!.params.query.sitecoreContextId).toBe('ctx-qa');
+
+    const statuses = calls.filter((c) => c.key === GQL && c.params.body.query.includes('publishingStatus')) as any[];
+    expect(statuses.map((c) => c.params.body.query.match(/publishingOperationId: "([^"]+)"/)[1])).toEqual(['op-1', 'op-1', 'op-2', 'op-2']);
+    expect(r.logs).toContainEqual(['Published 7 items', 'info']);
+    expect(r.logs).toContainEqual(['Published to Experience Edge.', 'success']);
+    expect(r.steps).toContainEqual([TRANSFER_STEPS.length, 'done']);
+    expect(r.progress.at(-1)).toBe(100);
+    expect(r.logs.at(-1)).toEqual(['Transfer complete.', 'success']);
+  });
+
+  it('a failed publish leaves the transfer done, marks the step failed and says what to do', async () => {
+    const { client } = fakeClient(handlers(() => ({ state: 'FAILED', isDone: false, isFailed: true, processed: 0 })));
+    const r = recorder();
+    expect(await runTransfer(client, { ...OPTS, publish: true }, r.cb)).toBe(true);
+    expect(r.steps).toContainEqual([TRANSFER_STEPS.length, 'fail']);
+    expect(r.logs).toContainEqual([
+      "Publishing to Experience Edge didn't finish: QA reported the publish as failed (FAILED). Publish the items from Pages instead.",
+      'error',
+    ]);
+    expect(r.logs).not.toContainEqual(STILL_IMPORTING('QA'));
+    expect(r.logs.at(-1)).toEqual(['Transfer complete.', 'success']);
+  });
+
+  it('gives up waiting for a publish that never finishes', async () => {
+    const { client } = fakeClient(handlers(() => ({ state: 'RUNNING', isDone: false, isFailed: false, processed: 1 })));
+    const r = recorder();
+    expect(await runTransfer(client, { ...OPTS, publish: true }, r.cb)).toBe(true);
+    expect(r.logs).toContainEqual([
+      "Publishing to Experience Edge didn't finish: Timed out waiting for the publish to finish. Publish the items from Pages instead.",
+      'error',
+    ]);
+  });
+
+  it('publishes in English when the target lists no languages', async () => {
+    const { client, calls } = fakeClient({ ...handlers(), [LANGS]: () => ({ data: [] }) });
+    expect(await runTransfer(client, { ...OPTS, publish: true }, recorder().cb)).toBe(true);
+    expect(mutations(calls)[0].params.body.query).toContain('languages: ["en"]');
+  });
+
+  it('a restore publishes the backup rows, expanding + Children on the target', async () => {
+    const { client, calls } = fakeClient(handlers());
+    const parts: PackagePart[] = [{ chunks: [{ data: new Blob(['a0']), isMedia: false }] }];
+    const r = recorder();
+    expect(await runImport(client, { target: QA, database: 'master', parts, publish: [ROWS[0], ROWS[2]] }, r.cb)).toBe(true);
+    const [tree, single] = mutations(calls);
+    expect(tree.params.body.query).toContain('rootItemPaths: ["/sitecore/content/A"]');
+    expect(single.params.body.query).toContain(`rootItemPaths: ["${C}","${C}/C1"]`);
+    expect(calls.filter((c) => c.key === GQL).every((c: any) => c.params.query.sitecoreContextId === 'ctx-qa')).toBe(true);
+    expect(r.steps).toContainEqual([IMPORT_STEPS.length, 'done']);
   });
 });
 

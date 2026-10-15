@@ -342,6 +342,8 @@ export function RunView({
   );
 
   if (result === 'success') {
+    // A step that failed without failing the run (publishing): say so, since the result card doesn't show the steps.
+    const unfinished = steps.find((s) => s.status === 'fail');
     const stats = [
       info?.itemCount !== undefined && (['Items', info.itemCount] as const),
       info && (['Chunks', info.chunkCount] as const),
@@ -355,6 +357,11 @@ export function RunView({
           </span>
           <H className="text-[26px] leading-tight font-semibold break-words">{w.done}</H>
           <p className="text-neutral-fg max-w-[520px] text-[15px] leading-normal break-words">{w.summary(from, to)}</p>
+          {unfinished && (
+            <p className="text-warning-700 max-w-[520px] text-sm leading-normal font-medium break-words">
+              {`${unfinished.label} didn't finish. See the activity log.`}
+            </p>
+          )}
           {backupNote('to undo the transfer')}
           {stats.length > 0 && (
             <dl className="mt-2 flex w-full flex-wrap gap-3 text-left">

@@ -46,10 +46,15 @@ function handlers(names: string[], overrides: Record<string, Handler>, find: Fin
     [CT + 'getBlobState']: () => ({ data: { status: 'OK' } }),
     [CT + 'deleteContentTransfer']: () => ({}),
     // The pre-flight check, and the page's children for "This page + child pages".
+    'xmc.sites.listLanguages': () => ({ data: [{ name: 'en' }] }),
     'xmc.authoring.graphql': (p) =>
       isPreflight(p)
         ? preflightReply(find)(p)
-        : { data: { data: { item: { children: { nodes: ['Team', 'Jobs'].map((n) => ({ itemId: n, name: n, path: `${HOME}/${n}`, children: { nodes: [] } })) } } } } },
+        : p.body.query.startsWith('mutation')
+          ? { data: { data: { publishItem: { operationId: 'op-1' } } } }
+          : p.body.query.includes('publishingStatus')
+            ? { data: { data: { publishingStatus: { state: 'COMPLETED', isDone: true, isFailed: false, processed: 1 } } } }
+            : { data: { data: { item: { children: { nodes: ['Team', 'Jobs'].map((n) => ({ itemId: n, name: n, path: `${HOME}/${n}`, children: { nodes: [] } })) } } } } },
     ...Object.fromEntries(Object.entries(overrides).map(([k, h]) => [CT + k, h])),
   };
 }
@@ -274,7 +279,7 @@ describe('PanelFlow', () => {
 
     it('a non-production target needs no confirmation', async () => {
       await toReview();
-      expect(screen.queryByRole('checkbox')).not.toBeInTheDocument();
+      expect(screen.queryByRole('checkbox', { name: /^I understand this writes to/ })).not.toBeInTheDocument();
     });
   });
 
@@ -311,6 +316,22 @@ describe('PanelFlow', () => {
       click('Back');
       fireEvent.click(send());
       expect(screen.queryByText('Also sends')).not.toBeInTheDocument();
+    });
+  });
+
+  describe('Publish', () => {
+    it('is offered unticked, and ticked publishes the page on the target', async () => {
+      const { calls } = await toReview();
+      const box = screen.getByRole('checkbox', { name: 'Publish to Experience Edge when done' });
+      expect(box).not.toBeChecked();
+      fireEvent.click(box);
+      click('Start');
+      expect(await screen.findByRole('heading', { name: 'Transfer complete' })).toBeInTheDocument();
+      const publishes = calls.filter((c: any) => c.key === 'xmc.authoring.graphql' && c.params.body.query.startsWith('mutation')) as any[];
+      expect(publishes).toHaveLength(1);
+      expect(publishes[0].params.query.sitecoreContextId).toBe(`ctx-${QA}`);
+      expect(publishes[0].params.body.query).toContain(`rootItemPaths: ["${HOME}"]`);
+      expect(publishes[0].params.body.query).toContain('publishSubItems: true');
     });
   });
 

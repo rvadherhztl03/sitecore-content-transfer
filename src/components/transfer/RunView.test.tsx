@@ -431,6 +431,18 @@ describe('RunView layout', () => {
   });
 });
 
+describe('RunView complete with an unfinished step', () => {
+  it('says which step did not finish, since the result card shows no steps', () => {
+    done('transfer', { steps: [{ label: 'Verify', status: 'done' }, { label: 'Publish to Experience Edge', status: 'fail' }] });
+    expect(screen.getByText("Publish to Experience Edge didn't finish. See the activity log.")).toBeInTheDocument();
+  });
+
+  it('says nothing when every step finished', () => {
+    done('transfer');
+    expect(screen.queryByText(/didn't finish/)).not.toBeInTheDocument();
+  });
+});
+
 describe('RunView restore', () => {
   const PROD: Env = { id: 'prod', name: 'Acme · Production', contextId: 'c3', tenantName: 'acme-prod' };
   const QUESTION = 'Restore Acme · QA to how it was before this transfer?';

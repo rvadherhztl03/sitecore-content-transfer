@@ -30,7 +30,12 @@ function handlers(overrides: Record<string, Handler> = {}, find: Find | Handler 
     'xmc.authoring.graphql': (p) =>
       isPreflight(p)
         ? check(p)
-        : { data: { data: { item: { children: { nodes: [{ itemId: 'c', name: 'content', path: '/sitecore/content', children: { nodes: [] } }] } } } } },
+        : p.body.query.startsWith('mutation')
+          ? { data: { data: { publishItem: { operationId: 'op-1' } } } }
+          : p.body.query.includes('publishingStatus')
+            ? { data: { data: { publishingStatus: { state: 'COMPLETED', isDone: true, isFailed: false, processed: 2 } } } }
+            : { data: { data: { item: { children: { nodes: [{ itemId: 'c', name: 'content', path: '/sitecore/content', children: { nodes: [] } }] } } } } },
+    'xmc.sites.listLanguages': () => ({ data: [{ name: 'en' }] }),
     [CT + 'createContentTransfer']: () => ({}),
     [CT + 'getContentTransferStatus']: () =>
       statusCalls++ === 0
@@ -423,6 +428,58 @@ describe('Flow', () => {
       await screen.findByRole('heading', { level: 1, name: 'Restore complete' });
       click('Start another transfer');
       expect(screen.getByRole('heading', { level: 1, name: 'Where is the content going?' })).toBeInTheDocument();
+    });
+  });
+
+  describe('Publish', () => {
+    const publishes = (calls: { key: string; params: any }[]) =>
+      calls.filter((c) => c.key === 'xmc.authoring.graphql' && c.params.body.query.startsWith('mutation'));
+    const box = () => screen.getByRole('checkbox', { name: 'Publish to Experience Edge when done' });
+
+    it('is offered, unticked: publishing makes the content live', async () => {
+      setup();
+      await toReview();
+      expect(box()).not.toBeChecked();
+      expect(box()).toHaveAccessibleDescription(
+        'Publishes the transferred items on Acme · QA once the import finishes, in every language Acme · QA has. Only changed items are sent.',
+      );
+    });
+
+    it('ticked, publishes on the target as the last step', async () => {
+      const { calls } = setup();
+      await toReview();
+      fireEvent.click(box());
+      click('Start transfer');
+      expect(await screen.findByText('Transfer complete')).toBeInTheDocument();
+      const [publish] = publishes(calls);
+      expect(publishes(calls)).toHaveLength(1);
+      expect(publish.params.query.sitecoreContextId).toBe('ctx-qa');
+      expect(publish.params.body.query).toContain(`rootItemPaths: ["${HOME}"]`);
+      // The activity log (collapsed on Complete) ends the publish step before the run.
+      expect(screen.getByText('Published to Experience Edge.')).toBeInTheDocument();
+    });
+
+    it('unticked, publishes nothing', async () => {
+      const { calls } = setup();
+      await toReview();
+      click('Start transfer');
+      expect(await screen.findByText('Transfer complete')).toBeInTheDocument();
+      expect(publishes(calls)).toHaveLength(0);
+    });
+
+    it('a restore after a published transfer publishes what it puts back', async () => {
+      Object.assign(URL, { createObjectURL: vi.fn(() => 'blob:b'), revokeObjectURL: vi.fn() });
+      vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+      const { calls } = setup({ find: EVERYWHERE });
+      await toReview();
+      fireEvent.click(box());
+      click('Start transfer');
+      await screen.findByText('Transfer complete');
+      click('Restore Acme · QA');
+      click('Restore now');
+      expect(await screen.findByRole('heading', { level: 1, name: 'Restore complete' })).toBeInTheDocument();
+      expect(publishes(calls)).toHaveLength(2);
+      expect(publishes(calls)[1].params.body.query).toContain(`rootItemPaths: ["${HOME}"]`);
     });
   });
 

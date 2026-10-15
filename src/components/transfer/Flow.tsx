@@ -13,16 +13,27 @@ import { Icon } from '@/lib/icon';
 import { mergeTrees, newTree } from '@/lib/queue';
 import type { Env, SdkClient } from '@/lib/sdk';
 import { readPackage } from '@/lib/package';
-import { DATABASE, IMPORT_STEP, backupTreesFor, runExport, runImport, runTransfer, type DataTree } from '@/lib/transfer';
+import { DATABASE, IMPORT_STEP, backupTreesFor, runExport, runImport, runTransfer, type DataTree, type MergeStrategy, type Scope } from '@/lib/transfer';
 import { mdiArrowRight, mdiSwapHorizontal } from '@mdi/js';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 
 type Mode = 'transfer' | 'export';
 type Props = { client: SdkClient; mode: Mode; envs: Env[]; onHome(): void };
 
-const stepLabels = (mode: Mode, source: Env, target: Env | undefined, backup = false) =>
+const PUBLISH_STEP = 'Publish to Experience Edge';
+
+const stepLabels = (mode: Mode, source: Env, target: Env | undefined, backup = false, publish = false) =>
   mode === 'transfer'
-    ? [...(backup ? [`Back up ${target!.name}`] : []), `Create job on ${source.name}`, 'Package content', `Copy chunks to ${target!.name}`, `Assemble package on ${target!.name}`, `Import into ${DATABASE}`, 'Verify']
+    ? [
+        ...(backup ? [`Back up ${target!.name}`] : []),
+        `Create job on ${source.name}`,
+        'Package content',
+        `Copy chunks to ${target!.name}`,
+        `Assemble package on ${target!.name}`,
+        `Import into ${DATABASE}`,
+        'Verify',
+        ...(publish ? [PUBLISH_STEP] : []),
+      ]
     : [`Create job on ${source.name}`, 'Package content', 'Download & zip'];
 
 /** The transfer and export flow: Route ▸ Content ▸ Review ▸ Run. Owns the route, the queue and the run. */
@@ -45,6 +56,10 @@ export function Flow({ client, mode, envs, onHome }: Props) {
   const [withBackup, setWithBackup] = useState(false);
   // Whether the current run is a restore of that backup rather than the transfer itself.
   const [restoring, setRestoring] = useState(false);
+  // "Publish to Experience Edge when done" (off by default), and whether the current transfer publishes: a restore then
+  // publishes too, so the live site goes back as well.
+  const [publishOn, setPublishOn] = useState(false);
+  const [withPublish, setWithPublish] = useState(false);
 
   // An id that is no longer in `envs` (e.g. after a Retry) counts as unselected.
   const source = envs.find((e) => e.id === sourceId);
@@ -98,14 +113,16 @@ export function Flow({ client, mode, envs, onHome }: Props) {
     setBackupZip(undefined);
     setWithBackup(backup.length > 0);
     setRestoring(false);
-    void runner.start({ labels: stepLabels(mode, src, target, backup.length > 0), source: src, target }, async (cb, signal) => {
+    const publish = transfer && publishOn;
+    setWithPublish(publish);
+    void runner.start({ labels: stepLabels(mode, src, target, backup.length > 0, publish), source: src, target }, async (cb, signal) => {
       if (transfer) {
         const onBackup = (blob: Blob) => {
           const pkg = { blob, name: backupName(target!.name) };
           setBackupZip(pkg);
           download(pkg.blob, pkg.name);
         };
-        return runTransfer(client, { source: src, target: target!, database: DATABASE, dataTrees: trees, backup }, { ...cb, onBackup }, signal);
+        return runTransfer(client, { source: src, target: target!, database: DATABASE, dataTrees: trees, backup, publish }, { ...cb, onBackup }, signal);
       }
       const blob = await runExport(client, { source: src, dataTrees: trees }, cb, signal);
       if (!blob) return false;
@@ -140,10 +157,14 @@ export function Flow({ client, mode, envs, onHome }: Props) {
       const tgt = run.target!;
       runner.reset();
       setRestoring(true);
-      const labels = [`Upload backup to ${tgt.name}`, `Assemble package on ${tgt.name}`, `Import into ${DATABASE}`, 'Verify'];
+      const labels = [`Upload backup to ${tgt.name}`, `Assemble package on ${tgt.name}`, `Import into ${DATABASE}`, 'Verify', ...(withPublish ? [PUBLISH_STEP] : [])];
       void runner.start({ labels, target: tgt }, async (cb, signal) => {
-        const { parts } = await readPackage(new File([pkg.blob], pkg.name));
-        return runImport(client, { target: tgt, database: DATABASE, parts }, cb, signal);
+        const { parts, items } = await readPackage(new File([pkg.blob], pkg.name));
+        // The transfer was published: publish what the backup puts back, so the live site goes back too.
+        const publish = withPublish
+          ? items.map((i): DataTree => ({ itemPath: i.path, scope: i.scope as Scope, mergeStrategy: i.mergeStrategy as MergeStrategy }))
+          : undefined;
+        return runImport(client, { target: tgt, database: DATABASE, parts, publish }, cb, signal);
       });
     };
     body = (
@@ -293,6 +314,7 @@ export function Flow({ client, mode, envs, onHome }: Props) {
             preflight={preflight}
             onTreesChange={setTrees}
             backup={transfer ? { available: backupTrees.length > 0, checked: backupOn, onChange: setBackupOn } : undefined}
+            publish={transfer ? { checked: publishOn, onChange: setPublishOn } : undefined}
           />
         </main>
       );

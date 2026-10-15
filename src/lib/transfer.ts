@@ -1,6 +1,6 @@
 import { buildPackage, type ChunkData, type PackageItem, type PackagePart } from '@/lib/package';
 import type { ItemCheck } from '@/lib/preflight';
-import { SdkError, call, fetchChildren, fetchItemId, type Env, type SdkClient } from '@/lib/sdk';
+import { SdkError, call, fetchChildren, fetchItemId, graphql, type Env, type SdkClient } from '@/lib/sdk';
 
 // The API only knows SingleItem and ItemAndDescendants; ItemAndChildren is expanded before the job is created.
 export type Scope = 'SingleItem' | 'ItemAndChildren' | 'ItemAndDescendants';
@@ -27,11 +27,14 @@ export const TRANSFER_STEPS = ['Create job', 'Wait for package', 'Copy chunks', 
 export const IMPORT_STEPS = ['Upload package', 'Assemble on target', 'Import into database', 'Verify'];
 // Index of 'Import into database' in each step list; from here on a failure or cancel may leave the target importing.
 export const IMPORT_STEP = { transfer: 4, import: 2 } as const;
-export const TIMING = { pollMs: 3000, statusTimeoutMs: 600_000, verifyTimeoutMs: 300_000 };
+export const TIMING = { pollMs: 3000, statusTimeoutMs: 600_000, verifyTimeoutMs: 300_000, publishTimeoutMs: 600_000 };
 export const BLOB_SUCCESS = ['OK', 'Transferred', 'Consumed'];
 export const BLOB_FAILURE = ['Error', 'Failed', 'Discarded'];
-// The share of the progress bar the backup step takes, when there is one.
+// The share of the progress bar the backup step takes, when there is one, and where the publish step starts.
 const BACKUP_SHARE = 20;
+const PUBLISH_FROM = 95;
+// The publishing target every publish goes to.
+const EDGE = 'experienceedge';
 
 const CT = 'xmc.contentTransfer.';
 
@@ -255,12 +258,83 @@ async function completeSets(client: SdkClient, env: Env, transferId: string, chu
   return files;
 }
 
-// Creates the content transfer job for `dataTrees` on `env`, which packages them there.
+// Creates the content transfer job for `dataTrees` on `env`, which packages them there. Returns the trees as sent
+// (+ Children expanded).
 async function createJob(client: SdkClient, env: Env, transferId: string, dataTrees: DataTree[], cb: RunCallbacks, signal?: AbortSignal) {
   signal?.throwIfAborted();
-  await call(client, env, 'mutate', CT + 'createContentTransfer', {
-    body: { transferId, configuration: { dataTrees: await expandTrees(client, env, dataTrees, cb, signal) } },
-  });
+  const sent = await expandTrees(client, env, dataTrees, cb, signal);
+  await call(client, env, 'mutate', CT + 'createContentTransfer', { body: { transferId, configuration: { dataTrees: sent } } });
+  return sent;
+}
+
+// The target's language names, to publish every language; English when it lists none.
+async function languagesOf(client: SdkClient, env: Env): Promise<string[]> {
+  const { data } = await call<{ name?: string | null }[]>(client, env, 'query', 'xmc.sites.listLanguages', {});
+  const names = (Array.isArray(data) ? data : []).map((l) => l.name).filter((n): n is string => !!n);
+  return names.length ? names : ['en'];
+}
+
+// Values go in as GraphQL literals (JSON strings and lists are valid ones), so no input type names are needed.
+const publishMutation = (paths: string[], subItems: boolean, languages: string[]) => `mutation {
+  publishItem(input: {
+    sourceDatabase: ${JSON.stringify(DATABASE)}
+    targetDatabases: ${JSON.stringify([EDGE])}
+    rootItemPaths: ${JSON.stringify(paths)}
+    publishSubItems: ${subItems}
+    publishRelatedItems: false
+    publishItemMode: SMART
+    languages: ${JSON.stringify(languages)}
+    displayName: "Content Transfer"
+  }) { operationId }
+}`;
+const statusQuery = (id: string) => `query { publishingStatus(publishingOperationId: ${JSON.stringify(id)}) { state isDone isFailed processed } }`;
+
+async function waitForPublish(client: SdkClient, env: Env, id: string, cb: RunCallbacks, signal?: AbortSignal) {
+  const deadline = Date.now() + TIMING.publishTimeoutMs;
+  let shown: number | undefined;
+  for (;;) {
+    signal?.throwIfAborted();
+    const s = (await graphql(client, env, statusQuery(id), {}))?.publishingStatus;
+    if (s?.isFailed) throw new Error(`${env.name} reported the publish as failed (${s.state ?? 'FAILED'}).`);
+    if (typeof s?.processed === 'number' && s.processed !== shown) {
+      shown = s.processed;
+      cb.onLog(`Published ${s.processed} items`, 'info');
+    }
+    if (s?.isDone) return;
+    if (Date.now() >= deadline) throw new Error('Timed out waiting for the publish to finish.');
+    await sleep(TIMING.pollMs, signal);
+  }
+}
+
+/**
+ * The publish step: publishes `trees` from master to Experience Edge on `env`, in every language it has, and waits.
+ * "+ Everything below" rows go with their subitems; the rest (with + Children expanded, on `env` when `expand`) one by one.
+ * Related items aren't published. A failure is logged and marks the step failed but doesn't fail the run: the import stands.
+ */
+async function publishStep(client: SdkClient, env: Env, trees: DataTree[], cb: RunCallbacks, step: number, expand: boolean, signal?: AbortSignal) {
+  try {
+    const list = expand ? await expandTrees(client, env, trees, cb, signal) : trees;
+    const languages = await languagesOf(client, env);
+    const groups: [boolean, string[]][] = [
+      [true, list.filter((t) => t.scope === 'ItemAndDescendants').map((t) => t.itemPath)],
+      [false, list.filter((t) => t.scope !== 'ItemAndDescendants').map((t) => t.itemPath)],
+    ];
+    for (const [subItems, paths] of groups) {
+      if (!paths.length) continue;
+      signal?.throwIfAborted();
+      const id: string | undefined = (await graphql(client, env, publishMutation(paths, subItems, languages), {}))?.publishItem?.operationId;
+      if (!id) throw new Error(`${env.name} didn't start the publish.`);
+      await waitForPublish(client, env, id, cb, signal);
+    }
+    cb.onStepChange(step, 'done');
+    cb.onLog('Published to Experience Edge.', 'success');
+  } catch (e) {
+    if (signal?.aborted) throw e;
+    cb.onStepChange(step, 'fail');
+    const reason = (e instanceof Error ? e.message : String(e)).replace(/\.?$/, '.');
+    cb.onLog(`Publishing to Experience Edge didn't finish: ${reason} Publish the items from Pages instead.`, 'error');
+  }
+  cb.onProgress(100);
 }
 
 // Downloads every chunk of a ready package; `onChunk(n, total)` runs before chunk n (1-based) is fetched.
@@ -333,16 +407,22 @@ async function backUp(client: SdkClient, target: Env, trees: DataTree[], cb: Run
 
 export async function runTransfer(
   client: SdkClient,
-  /** `backup`: what to export from the target first (see backupTreesFor); empty or left out for no backup step. */
-  opts: { source: Env; target: Env; database: string; dataTrees: DataTree[]; backup?: DataTree[] },
+  /**
+   * `backup`: what to export from the target first (see backupTreesFor); empty or left out for no backup step.
+   * `publish`: publish what was sent to Experience Edge on the target, as a last step.
+   */
+  opts: { source: Env; target: Env; database: string; dataTrees: DataTree[]; backup?: DataTree[]; publish?: boolean },
   cb: RunCallbacks,
   signal?: AbortSignal,
 ): Promise<boolean> {
   const { source, target, database, dataTrees } = opts;
   const backup = opts.backup?.length ? opts.backup : undefined;
   // With a backup it is step 0 and takes the first part of the progress bar; every other step moves along by one.
+  // A publish step comes last and takes the end of the bar.
   const o = backup ? 1 : 0;
-  const pct = (p: number) => (backup ? Math.round(BACKUP_SHARE + (p * (100 - BACKUP_SHARE)) / 100) : p);
+  const from = backup ? BACKUP_SHARE : 0;
+  const to = opts.publish ? PUBLISH_FROM : 100;
+  const pct = (p: number) => Math.round(from + (p * (to - from)) / 100);
   const transferId = crypto.randomUUID();
   // Set once the target accepts an import: from then on it may finish even if this run fails.
   let importing = false;
@@ -362,7 +442,7 @@ export async function runTransfer(
     }
 
     begin(o, `Creating transfer job on ${source.name}.`);
-    await createJob(client, source, transferId, dataTrees, cb, signal);
+    const sent = await createJob(client, source, transferId, dataTrees, cb, signal);
     done(pct(5));
 
     begin(o + 1, `Waiting for ${source.name} to build the package.`);
@@ -397,7 +477,12 @@ export async function runTransfer(
 
     begin(o + 5, `Verifying the import on ${target.name}.`);
     await verifyFiles(client, target, files, cb, signal);
-    done(100);
+    done(pct(100));
+
+    if (opts.publish) {
+      begin(o + 6, `Publishing to Experience Edge on ${target.name}.`);
+      await publishStep(client, target, sent, cb, o + 6, false, signal);
+    }
     cb.onLog('Transfer complete.', 'success');
     return true;
   }, { target, started: () => importing });
@@ -436,11 +521,14 @@ export async function runExport(
 
 export async function runImport(
   client: SdkClient,
-  opts: { target: Env; database: string; parts: PackagePart[] },
+  /** `publish`: rows to publish to Experience Edge on the target once imported (+ Children expanded there), as a last step. */
+  opts: { target: Env; database: string; parts: PackagePart[]; publish?: DataTree[] },
   cb: RunCallbacks,
   signal?: AbortSignal,
 ): Promise<boolean> {
   const { target, database, parts } = opts;
+  const publish = opts.publish?.length ? opts.publish : undefined;
+  const pct = (p: number) => (publish ? Math.round((p * PUBLISH_FROM) / 100) : p);
   const transferId = crypto.randomUUID();
   // Set once the target accepts an import: from then on it may finish even if this run fails.
   let importing = false;
@@ -459,22 +547,27 @@ export async function runImport(
           body: data,
         });
         sent++;
-        cb.onProgress(Math.round((50 * sent) / total));
+        cb.onProgress(pct(Math.round((50 * sent) / total)));
       }
     }
-    done(50);
+    done(pct(50));
 
     begin(1, `Assembling the package on ${target.name}.`);
     const files = await completeSets(client, target, transferId, chunksetIds, signal);
-    done(65);
+    done(pct(65));
 
     begin(2, `Importing into ${database} on ${target.name}.`);
     await consumeFiles(client, target, database, files, signal, () => (importing = true));
-    done(80);
+    done(pct(80));
 
     begin(3, `Verifying the import on ${target.name}.`);
     await verifyFiles(client, target, files, cb, signal);
-    done(100);
+    done(pct(100));
+
+    if (publish) {
+      begin(4, `Publishing to Experience Edge on ${target.name}.`);
+      await publishStep(client, target, publish, cb, 4, true, signal);
+    }
     cb.onLog('Import complete.', 'success');
     return true;
   }, { target, started: () => importing });

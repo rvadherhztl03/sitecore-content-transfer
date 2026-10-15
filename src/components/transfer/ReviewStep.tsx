@@ -41,12 +41,11 @@ export function ProdConfirm({ target, checked, onChange }: ProdConfirmProps) {
   );
 }
 
-type BackupChoiceProps = { target: Env; available: boolean; checked: boolean; onChange(v: boolean): void };
+type ChoiceProps = { title: string; hint: string; checked: boolean; onChange(v: boolean): void };
 
-/** "Back up <target> first": on by default; when nothing on the target would be overwritten, it says so instead. */
-export function BackupChoice({ target, available, checked, onChange }: BackupChoiceProps) {
+// A checkbox card: the title names the checkbox, the hint describes it.
+function Choice({ title, hint, checked, onChange }: ChoiceProps) {
   const id = useId();
-  if (!available) return <p className="text-muted-foreground text-sm">{`Nothing on ${target.name} to back up.`}</p>;
   return (
     <div className="flex items-start gap-3 rounded-xl border bg-white px-4 py-3.5">
       <Checkbox
@@ -58,13 +57,40 @@ export function BackupChoice({ target, available, checked, onChange }: BackupCho
       />
       <div className="flex min-w-0 flex-col gap-0.5">
         <Label htmlFor={id} className="cursor-pointer leading-snug font-semibold break-words">
-          {`Back up ${target.name} first`}
+          {title}
         </Label>
         <span id={`${id}-hint`} className="text-muted-foreground text-[13px] leading-normal">
-          {`Saves what this transfer overwrites on ${target.name} as a package, so you can restore it with Install a package. Large trees take longer.`}
+          {hint}
         </span>
       </div>
     </div>
+  );
+}
+
+type BackupChoiceProps = { target: Env; available: boolean; checked: boolean; onChange(v: boolean): void };
+
+/** "Back up <target> first": on by default; when nothing on the target would be overwritten, it says so instead. */
+export function BackupChoice({ target, available, ...choice }: BackupChoiceProps) {
+  if (!available) return <p className="text-muted-foreground text-sm">{`Nothing on ${target.name} to back up.`}</p>;
+  return (
+    <Choice
+      title={`Back up ${target.name} first`}
+      hint={`Saves what this transfer overwrites on ${target.name} as a package, so you can restore it with Install a package. Large trees take longer.`}
+      {...choice}
+    />
+  );
+}
+
+type PublishChoiceProps = { target: Env; checked: boolean; onChange(v: boolean): void };
+
+/** "Publish to Experience Edge when done": off by default, since it makes the content live. */
+export function PublishChoice({ target, ...choice }: PublishChoiceProps) {
+  return (
+    <Choice
+      title="Publish to Experience Edge when done"
+      hint={`Publishes the transferred items on ${target.name} once the import finishes, in every language ${target.name} has. Only changed items are sent.`}
+      {...choice}
+    />
   );
 }
 
@@ -113,10 +139,12 @@ type Props = {
   onTreesChange?(trees: DataTree[]): void;
   /** The "Back up <target> first" choice (transfer only). */
   backup?: Omit<BackupChoiceProps, 'target'>;
+  /** The "Publish to Experience Edge when done" choice (transfer only). */
+  publish?: Omit<PublishChoiceProps, 'target'>;
 };
 
 /** What will be written, before it is: route, replace warning, production confirmation and the items. */
-export function ReviewStep({ mode, source, target, database, trees, prodChecked, onProdChecked, onEdit, preflight, onTreesChange, backup }: Props) {
+export function ReviewStep({ mode, source, target, database, trees, prodChecked, onProdChecked, onEdit, preflight, onTreesChange, backup, publish }: Props) {
   const to = mode === 'transfer' ? target : undefined;
   const checks = preflight?.status === 'done' ? preflight.checks : undefined;
   const fix = (f: typeof addMissingParents) => (checks && onTreesChange ? () => onTreesChange(f(trees, checks)) : undefined);
@@ -159,6 +187,8 @@ export function ReviewStep({ mode, source, target, database, trees, prodChecked,
       )}
 
       {to && backup && <BackupChoice target={to} {...backup} />}
+
+      {to && publish && <PublishChoice target={to} {...publish} />}
 
       {to && needsProdConfirm(to) && <ProdConfirm target={to} checked={prodChecked} onChange={onProdChecked} />}
 
