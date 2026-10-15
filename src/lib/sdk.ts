@@ -29,10 +29,14 @@ type Resource = {
 
 export function toEnvs(ctx: ApplicationContext | undefined): Env[] {
   const entries: Resource[] = ctx?.resourceAccess ?? ctx?.resources ?? [];
-  return entries.flatMap((r) => {
+  const envs = entries.flatMap((r) => {
     const contextId = r.context?.[CONTEXT_KIND];
-    return contextId ? [{ id: r.resourceId, name: r.tenantDisplayName ?? r.tenantName ?? r.resourceId, contextId }] : [];
+    return contextId ? [{ id: r.resourceId, name: r.tenantDisplayName ?? r.tenantName ?? r.resourceId, contextId, r }] : [];
   });
+  // Same display name twice: add the tenant (or resource id) so the pickers can tell them apart.
+  return envs.map(({ r, ...env }) =>
+    envs.filter((e) => e.name === env.name).length > 1 ? { ...env, name: `${env.name} (${r.tenantName ?? r.resourceId})` } : env,
+  );
 }
 
 // Returns '' when there is nothing useful to say (undefined, empty string or `{}`).

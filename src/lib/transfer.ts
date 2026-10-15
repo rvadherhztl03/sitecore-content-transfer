@@ -59,7 +59,7 @@ export async function waitForPackage(client: SdkClient, env: Env, transferId: st
     );
     if (data?.State === 'Completed') {
       const sets = data.ChunkSetsMetadata ?? [];
-      if (!sets.length) throw new Error('Source returned no content for the selected paths. Check that they exist.');
+      if (!sets.some((s) => s.ChunkCount > 0)) throw new Error('Source returned no content for the selected paths. Check that they exist.');
       return sets;
     }
     if (data?.State === 'Failed') throw new Error('The source environment reported the transfer as Failed.');
@@ -107,7 +107,8 @@ export async function cleanup(client: SdkClient, envs: Env[], transferId: string
 type Steps = { begin(i: number, message: string): void; done(percent: number): void };
 
 // Shared step bookkeeping: marks the running step failed on error, logs `Cancelled.` on abort,
-// returns `failed`, and always cleans up `envs`.
+// returns `failed`, and always cleans up `envs`. From `importAt.step` on, the target may already be
+// importing, so a failure or cancel also warns that it may still finish.
 async function runSteps<T>(
   client: SdkClient,
   envs: Env[],
@@ -116,6 +117,7 @@ async function runSteps<T>(
   signal: AbortSignal | undefined,
   failed: T,
   body: (steps: Steps) => Promise<T>,
+  importAt?: { step: number; target: Env },
 ): Promise<T> {
   let step = 0;
   const steps: Steps = {
@@ -135,6 +137,9 @@ async function runSteps<T>(
     cb.onStepChange(step, 'fail');
     if (signal?.aborted) cb.onLog('Cancelled.', 'warning');
     else cb.onLog(e instanceof Error ? e.message : String(e), 'error');
+    if (importAt && step >= importAt.step) {
+      cb.onLog(`${importAt.target.name} may still finish importing; check it before running again.`, 'warning');
+    }
     return failed;
   } finally {
     await cleanup(client, envs, transferId, cb);
@@ -148,7 +153,8 @@ async function fetchChunk(
   chunksetId: string,
   chunkId: number,
 ): Promise<{ blob: Blob; isMedia: boolean }> {
-  const { data, response } = await call<Blob>(client, env, 'query', CT + 'getChunk', { path: { transferId, chunksetId, chunkId } });
+  // mutate, not query: query() keeps every result in the ClientSDK cache, which would hold every chunk Blob.
+  const { data, response } = await call<Blob>(client, env, 'mutate', CT + 'getChunk', { path: { transferId, chunksetId, chunkId } });
   // Never pass a non-binary body on to a target or a package.
   if (!(data instanceof Blob)) throw new Error(`${env.name} returned no data for chunk ${chunkId + 1} of chunk set ${chunksetId}.`);
   return { blob: data, isMedia: parseIsMedia(response?.headers.get('content-disposition') ?? null) };
@@ -217,7 +223,7 @@ export async function runTransfer(
     done(100);
     cb.onLog('Transfer complete.', 'success');
     return true;
-  });
+  }, { step: TRANSFER_STEPS.indexOf('Import into database'), target });
 }
 
 export async function runExport(
@@ -255,7 +261,8 @@ export async function runExport(
     const items: PackageItem[] = [];
     for (const t of dataTrees) {
       signal?.throwIfAborted();
-      const id = (await fetchItemId(client, source, t.itemPath)) ?? '';
+      // The ID is only metadata in the package: a failed lookup shouldn't fail the export.
+      const id = (await fetchItemId(client, source, t.itemPath).catch(() => null)) ?? '';
       items.push({ path: t.itemPath, id, scope: t.scope, mergeStrategy: t.mergeStrategy });
     }
     const zip = await buildPackage(chunks, items);
@@ -307,5 +314,5 @@ export async function runImport(
     done(100);
     cb.onLog('Import complete.', 'success');
     return true;
-  });
+  }, { step: IMPORT_STEPS.indexOf('Import into database'), target });
 }

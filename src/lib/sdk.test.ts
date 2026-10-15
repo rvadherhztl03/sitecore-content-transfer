@@ -24,6 +24,16 @@ describe('toEnvs', () => {
   it('falls back to deprecated resources', () => {
     expect(toEnvs({ resources: ENTRIES } as any)).toEqual(ENVS);
   });
+  it('tells apart environments with the same display name', () => {
+    const ctx = {
+      resourceAccess: [
+        { resourceId: 'r1', tenantName: 'acme-dev', tenantDisplayName: 'Acme', context: { preview: 'p1' } },
+        { resourceId: 'r2', tenantDisplayName: 'Acme', context: { preview: 'p2' } },
+        { resourceId: 'r3', tenantDisplayName: 'QA', context: { preview: 'p3' } },
+      ],
+    };
+    expect(toEnvs(ctx as any).map((e) => e.name)).toEqual(['Acme (acme-dev)', 'Acme (r2)', 'QA']);
+  });
 });
 
 describe('call', () => {

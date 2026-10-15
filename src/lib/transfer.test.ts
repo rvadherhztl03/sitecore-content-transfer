@@ -24,7 +24,7 @@ const CT = 'xmc.contentTransfer.';
 const KIND: Record<string, 'query' | 'mutate'> = {
   createContentTransfer: 'mutate',
   getContentTransferStatus: 'query',
-  getChunk: 'query',
+  getChunk: 'mutate',
   saveChunk: 'mutate',
   completeChunkSetTransfer: 'mutate',
   consumeFile: 'query',
@@ -66,6 +66,7 @@ function recorder() {
 }
 
 const short = (key: string) => key.replace(CT, '');
+const STILL_IMPORTING = (env: string) => [`${env} may still finish importing; check it before running again.`, 'warning'];
 const ofKey = (calls: { key: string }[], k: string) => calls.filter((c) => c.key === CT + k) as any[];
 const ctxOf = (c: any) => c.params.query.sitecoreContextId;
 
@@ -194,13 +195,30 @@ describe('runTransfer', () => {
     expect(r.logs.map(([m]) => m).join('\n')).toContain(
       "The app can't access QA. Grant it in Cloud Portal → app → environment access.",
     );
+    expect(r.logs).not.toContainEqual(STILL_IMPORTING('QA'));
   });
 
-  it('fails when the blob state is Error', async () => {
+  it('fails when the blob state is Error and warns the target may still import', async () => {
     const { client } = fakeClient(happyHandlers({ getBlobState: () => ({ data: { status: 'Error' } }) }));
     const r = recorder();
     expect(await runTransfer(client, OPTS, r.cb)).toBe(false);
     expect(r.steps).toContainEqual([5, 'fail']);
+    expect(r.logs).toContainEqual(STILL_IMPORTING('QA'));
+  });
+
+  it('fails before any write when the chunk sets hold no chunks', async () => {
+    const { client, calls } = fakeClient(
+      happyHandlers({
+        getContentTransferStatus: () => ({
+          data: { State: 'Completed', ChunkSetsMetadata: [{ ChunkSetId: 'cs1', ChunkCount: 0, TotalItemCount: 0 }] },
+        }),
+      }),
+    );
+    const r = recorder();
+    expect(await runTransfer(client, OPTS, r.cb)).toBe(false);
+    expect(r.logs).toContainEqual(['Source returned no content for the selected paths. Check that they exist.', 'error']);
+    expect(ofKey(calls, 'saveChunk')).toHaveLength(0);
+    expect(ofKey(calls, 'completeChunkSetTransfer')).toHaveLength(0);
   });
 
   it('cancels and still cleans up', async () => {
@@ -284,6 +302,14 @@ describe('runExport', () => {
     for (let i = 0; i < 3; i++) expect(r.steps).toContainEqual([i, 'done']);
   });
 
+  it('exports with an empty ItemId when the ID lookup fails', async () => {
+    const { client } = fakeClient({ ...withGraphql(), [GQL]: () => ({ status: 500 }) });
+    const zip = await runExport(client, { source: DEV, dataTrees: TREES }, recorder().cb);
+    expect(zip).toBeInstanceOf(Blob);
+    const { items } = await readPackage(new File([zip!], 'e.zip'));
+    expect(items[0]).toMatchObject({ path: TREES[0].itemPath, id: '' });
+  });
+
   it('export returns null and cleans up on failure', async () => {
     const { client, calls } = fakeClient(withGraphql({ getContentTransferStatus: () => ({ data: { State: 'Failed' } }) }));
     const r = recorder();
@@ -350,6 +376,14 @@ describe('runImport', () => {
     expect(await runImport(client, IMPORT, r.cb)).toBe(false);
     expect(r.logs.map(([m]) => m).join('\n')).toMatch(/^QA returned no file name for chunk set .+\.$/m);
     expect(ofKey(calls, 'consumeFile')).toHaveLength(0);
+    expect(r.logs).not.toContainEqual(STILL_IMPORTING('QA'));
+  });
+
+  it('import warns the target may still import when verify fails', async () => {
+    const { client } = fakeClient(happyHandlers({ getBlobState: () => ({ data: { status: 'Error' } }) }));
+    const r = recorder();
+    expect(await runImport(client, IMPORT, r.cb)).toBe(false);
+    expect(r.logs).toContainEqual(STILL_IMPORTING('QA'));
   });
 
   it('cancels before uploading the next chunk', async () => {
