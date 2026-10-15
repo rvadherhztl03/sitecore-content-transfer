@@ -2,9 +2,8 @@
 
 import { useEffect, useState } from "react";
 import type { PagesContext } from "@sitecore-marketplace-sdk/client";
-import { Workspace } from "@/components/transfer/Workspace";
+import { PanelFlow } from "@/components/transfer/PanelFlow";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { Card, CardDescription, CardTitle } from "@/components/ui/card";
 import { useMarketplaceClient } from "@/utils/hooks/useMarketplaceClient";
 
 export default function PagesContextPanel() {
@@ -26,16 +25,5 @@ export default function PagesContextPanel() {
 		);
 	}
 
-	const path: string | undefined = page?.pageInfo?.path;
-	return (
-		<>
-			{path && (
-				<Card style="outline" padding="sm" className="mx-4 mt-4 gap-1">
-					<CardTitle>{page?.pageInfo?.name}</CardTitle>
-					<CardDescription className="font-mono break-all">{path}</CardDescription>
-				</Card>
-			)}
-			<Workspace client={client} compact initialItemPath={path} />
-		</>
-	);
+	return <PanelFlow client={client} pageName={page?.pageInfo?.name} pagePath={page?.pageInfo?.path} />;
 }
