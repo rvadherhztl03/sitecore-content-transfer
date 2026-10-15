@@ -1,0 +1,68 @@
+import { Button } from '@/components/ui/button';
+import { Icon } from '@/lib/icon';
+import { mdiSwapHorizontal } from '@mdi/js';
+import type { ReactNode } from 'react';
+
+type HeaderProps = { crumb?: string; envCount?: number; onHome(): void; onCancel?(): void };
+
+export function AppHeader({ crumb, envCount, onHome, onCancel }: HeaderProps) {
+  return (
+    <header className="flex flex-wrap items-center justify-between gap-4 border-b bg-white px-4 py-3.5 sm:px-8">
+      <div className="flex min-w-0 flex-wrap items-center gap-3">
+        <button
+          type="button"
+          aria-label="Home"
+          onClick={onHome}
+          className="bg-primary text-inverse-text focus-visible:ring-primary/50 grid size-9 shrink-0 cursor-pointer place-items-center rounded-lg outline-none focus-visible:ring-[3px]"
+        >
+          <Icon path={mdiSwapHorizontal} className="size-5" aria-hidden="true" />
+        </button>
+        <span className="text-lg font-semibold">Content Transfer</span>
+        {crumb && (
+          <>
+            <span aria-hidden="true" className="text-blackAlpha-300">
+              /
+            </span>
+            <span className="text-neutral-fg min-w-0 text-[15px] break-words">{crumb}</span>
+          </>
+        )}
+      </div>
+      {(envCount !== undefined || onCancel) && (
+        <div className="flex flex-wrap items-center gap-3">
+          {envCount !== undefined && (
+            <span className="bg-success-50 text-success-600 inline-flex min-h-8 items-center gap-2 rounded-full px-3 text-sm font-medium">
+              <span aria-hidden="true" className="bg-success-500 size-2 rounded-full" />
+              {envCount === 1 ? '1 environment connected' : `${envCount} environments connected`}
+            </span>
+          )}
+          {onCancel && (
+            <Button type="button" variant="outline" size="sm" className="h-9 rounded-lg px-3.5" onClick={onCancel}>
+              Cancel
+            </Button>
+          )}
+        </div>
+      )}
+    </header>
+  );
+}
+
+/** Sticky page footer: a summary on the left, the step's buttons on the right. */
+export function ActionBar({ summary, children }: { summary: ReactNode; children: ReactNode }) {
+  return (
+    <footer className="sticky bottom-0 z-10 border-t bg-white px-4 py-3.5 sm:px-8">
+      <div className="mx-auto flex max-w-[1120px] flex-wrap items-center justify-between gap-4">
+        <div className="text-md text-neutral-fg flex min-w-0 flex-wrap items-center gap-2.5">{summary}</div>
+        <div className="flex flex-wrap gap-2.5">{children}</div>
+      </div>
+    </footer>
+  );
+}
+
+export function PageHeading({ title, sub }: { title: string; sub?: string }) {
+  return (
+    <div className="flex flex-col gap-1.5">
+      <h1 className="text-[26px] leading-tight font-semibold tracking-tight">{title}</h1>
+      {sub && <p className="text-muted-foreground text-[15px]">{sub}</p>}
+    </div>
+  );
+}
