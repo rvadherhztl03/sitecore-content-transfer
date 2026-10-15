@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { describe, expect, it } from 'vitest';
-import { SdkError, call, envKind, fetchChildren, fetchItemId, toEnvs } from '@/lib/sdk';
+import { SdkError, call, envKind, envLabel, fetchChildren, fetchItemId, toEnvs } from '@/lib/sdk';
 import { fakeClient } from '@/test/fakeClient';
 
 const DEV = { id: 'r1', name: 'Dev', contextId: 'p1' };
@@ -83,6 +83,32 @@ describe('envKind', () => {
   it('lets a prod match in either text win over a weaker match in the other', () => {
     expect(kind('Latest Content', 'acme-prod')).toBe('prod');
     expect(kind('Develop Hub', 'acme-qa')).toBe('test');
+  });
+});
+
+describe('envLabel', () => {
+  const label = (name: string, tenantName?: string) => envLabel({ id: 'i', name, contextId: 'c', tenantName });
+  it.each([
+    ['petsuppliesplus / staging', 'Staging'],
+    ['petsuppliesplus / qa', 'QA'],
+    ['petsuppliesplus / dev', 'Dev'],
+    ['Acme Production', 'Prod'],
+    ['acme-prd', 'Prod'],
+    ['Live site', 'Live'],
+    ['uat', 'UAT'],
+    ['Smoke test', 'Test'],
+    ['local', 'Local'],
+    ['dev-to-prod', 'Prod'],
+    ['Content hub', null],
+  ])('%s -> %s', (name, expected) => {
+    expect(label(name)).toBe(expected);
+  });
+  it('checks tenantName when name has no match', () => {
+    expect(label('Content hub', 'acme-staging')).toBe('Staging');
+  });
+  it('lets an earlier pattern match in either text win over a later one in the other', () => {
+    expect(label('Latest Content', 'acme-prod')).toBe('Prod');
+    expect(label('Develop Hub', 'acme-qa')).toBe('QA');
   });
 });
 

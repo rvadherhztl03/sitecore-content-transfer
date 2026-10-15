@@ -9,6 +9,7 @@ import { describe, expect, it, vi } from 'vitest';
 const DEV: Env = { id: 'dev', name: 'Acme · Development', contextId: 'c1', tenantName: 'acme-dev' };
 const LONG: Env = { id: 'qa', name: 'petsuppliesplus / devpetsuppliesplus-qa', contextId: 'c2', tenantName: 'devpetsuppliesplus-qa' };
 const PROD: Env = { id: 'prod', name: 'Acme · Production', contextId: 'c3', tenantName: 'acme-prod' };
+const STAGING: Env = { id: 'stg', name: 'petsuppliesplus / staging', contextId: 'c5' };
 const PLAIN: Env = { id: 'sbx', name: 'Sandbox', contextId: 'c4' };
 
 describe('AppHeader', () => {
@@ -131,11 +132,12 @@ describe('EnvironmentCards', () => {
     expect(onChange).toHaveBeenCalledWith('prod');
   });
 
-  it('shows the badge for each environment kind, including Production', () => {
+  it("shows each environment's own type as its badge", () => {
     setup();
-    expect(screen.getByText('Production')).toBeInTheDocument();
-    expect(screen.getByText('Test')).toBeInTheDocument();
+    expect(screen.getByText('Prod')).toBeInTheDocument();
+    expect(screen.getByText('QA')).toBeInTheDocument();
     expect(screen.getByText('Dev')).toBeInTheDocument();
+    expect(screen.queryByText('Test')).not.toBeInTheDocument();
   });
 
   it('never marks the disabled environment as selected', () => {
@@ -162,12 +164,22 @@ describe('EnvironmentCards', () => {
 
 describe('EnvBadge', () => {
   it.each([
-    [PROD, 'Production'],
-    [LONG, 'Test'],
+    [PROD, 'Prod'],
+    [LONG, 'QA'],
     [DEV, 'Dev'],
+    [STAGING, 'Staging'],
   ])('labels %j as %s', (env, label) => {
     render(<EnvBadge env={env} />);
     expect(screen.getByText(label)).toBeInTheDocument();
+  });
+
+  it('keeps the warning tone for prod and uses the neutral tone for every other type', () => {
+    const { rerender } = render(<EnvBadge env={PROD} />);
+    expect(screen.getByText('Prod')).toHaveClass('bg-warning-50', 'text-warning-600');
+    for (const [env, label] of [[LONG, 'QA'], [DEV, 'Dev'], [STAGING, 'Staging']] as const) {
+      rerender(<EnvBadge env={env} />);
+      expect(screen.getByText(label)).toHaveClass('bg-neutral-bg', 'text-neutral-fg');
+    }
   });
 
   it('renders nothing when the kind is unknown', () => {

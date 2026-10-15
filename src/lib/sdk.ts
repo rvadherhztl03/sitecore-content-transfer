@@ -56,6 +56,23 @@ export function envKind(env: Env): EnvKind | null {
   return KINDS.find(([, re]) => texts.some((t) => re.test(t)))?.[0] ?? null;
 }
 
+const LABELS: [string, RegExp][] = [
+  ['Prod', /prod|prd/i],
+  ['Live', /live/i],
+  ['Staging', /stag/i],
+  ['UAT', /uat/i],
+  ['QA', /qa/i],
+  ['Test', /test/i],
+  ['Dev', /dev/i],
+  ['Local', /local/i],
+];
+
+/** The environment's own type as a short badge label, from its name and tenant name; the first pattern matching either text wins, `null` when none does. */
+export function envLabel(env: Env): string | null {
+  const texts = [env.name, env.tenantName].filter((t): t is string => !!t);
+  return LABELS.find(([, re]) => texts.some((t) => re.test(t)))?.[0] ?? null;
+}
+
 // Returns '' when there is nothing useful to say (undefined, empty string or `{}`).
 const errorText = (e: any): string => {
   const t = typeof e === 'string' ? e : (e?.message ?? e?.Message ?? e?.title ?? JSON.stringify(e));

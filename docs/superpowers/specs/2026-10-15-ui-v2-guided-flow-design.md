@@ -168,3 +168,7 @@ All the safety behaviour from v1:
 ## Out of scope
 
 Run history across sessions; dark theme; host-environment detection for the Pages panel (pending Phase 0 `host.state`); "skipped items" analysis.
+
+## Amendments (user feedback, 2026-10-15)
+
+- **Environment badges show the environment's own type.** The badge reads `Prod`, `Live`, `Staging`, `UAT`, `QA`, `Test`, `Dev` or `Local` (`envLabel`: the first pattern in that order matching the name or tenant name; no badge when none matches) instead of the `Production` / `Test` / `Dev` category. Production environments keep the warning tone, every other badge is neutral. `envKind` is unchanged and still gates the production checkbox.

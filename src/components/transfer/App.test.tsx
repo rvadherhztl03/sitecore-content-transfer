@@ -35,8 +35,8 @@ describe('App', () => {
     expect(list.getByText('Acme · Development')).toBeInTheDocument();
     expect(list.getByText('acme-dev')).toBeInTheDocument();
     expect(list.getByText('Dev')).toBeInTheDocument();
-    expect(list.getByText('Test')).toBeInTheDocument();
-    expect(list.getByText('Production')).toBeInTheDocument();
+    expect(list.getByText('QA')).toBeInTheDocument();
+    expect(list.getByText('Prod')).toBeInTheDocument();
     expect(screen.getByText(MISSING)).toBeInTheDocument();
     expect(screen.queryByText(ONE_ENV)).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Start a transfer' })).toBeEnabled();

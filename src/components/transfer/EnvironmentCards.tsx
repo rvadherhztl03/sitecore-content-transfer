@@ -1,17 +1,12 @@
 import type { Env } from '@/lib/sdk';
-import { envKind } from '@/lib/sdk';
+import { envKind, envLabel } from '@/lib/sdk';
 import { cn } from '@/lib/utils';
 
-const BADGES = {
-  prod: { label: 'Production', tone: 'bg-warning-50 text-warning-600' },
-  test: { label: 'Test', tone: 'bg-primary-100 text-primary-700' },
-  dev: { label: 'Dev', tone: 'bg-neutral-bg text-neutral-fg' },
-};
-
+/** The environment's own type (Prod, Staging, QA, Dev, ...); production keeps the warning tone, every other type is neutral. */
 export function EnvBadge({ env }: { env: Env }) {
-  const kind = envKind(env);
-  if (!kind) return null;
-  const { label, tone } = BADGES[kind];
+  const label = envLabel(env);
+  if (!label) return null;
+  const tone = envKind(env) === 'prod' ? 'bg-warning-50 text-warning-600' : 'bg-neutral-bg text-neutral-fg';
   return <span className={cn('inline-flex shrink-0 rounded-full px-2.5 py-1 text-xs font-semibold', tone)}>{label}</span>;
 }
 
