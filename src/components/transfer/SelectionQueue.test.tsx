@@ -71,6 +71,19 @@ describe('SelectionQueue', () => {
     expect(onChange).toHaveBeenLastCalledWith([TREES[0], { ...TREES[1], mergeStrategy: 'LatestWin' }]);
   });
 
+  it('+ Children moves a row off "Replace it and everything below" and no longer offers it', () => {
+    const onChange = setup();
+    fireEvent.click(within(screen.getByRole('radiogroup', { name: 'Include for /a' })).getByRole('radio', { name: '+ Children' }));
+    expect(onChange).toHaveBeenLastCalledWith([{ ...TREES[0], scope: 'ItemAndChildren', mergeStrategy: 'OverrideExistingItem' }, TREES[1]]);
+  });
+
+  it('a + Children row offers every merge option except replacing everything below', () => {
+    setup([{ itemPath: '/a', scope: 'ItemAndChildren', mergeStrategy: 'OverrideExistingItem' }]);
+    expect(within(screen.getByRole('radiogroup', { name: 'Include for /a' })).getByRole('radio', { name: '+ Children' })).toBeChecked();
+    fireEvent.keyDown(screen.getByLabelText('If /a exists'), { key: 'Enter' });
+    expect(screen.getAllByRole('option').map((o) => o.textContent)).toEqual(['Replace this item only', "Keep what's there", 'Keep the newer one']);
+  });
+
   it('imports a JSON list file', async () => {
     const onChange = setup();
     const file = new File(['[{ "path": "/d" }]'], 'queue.json', { type: 'application/json' });
@@ -92,7 +105,7 @@ describe('SelectionQueue', () => {
     for (const name of ['Add', 'Import list', 'Clear all', 'Remove /a', 'Remove /b']) {
       expect(screen.getByRole('button', { name })).toBeDisabled();
     }
-    expect(screen.getAllByRole('radio')).toHaveLength(4);
+    expect(screen.getAllByRole('radio')).toHaveLength(6);
     for (const radio of screen.getAllByRole('radio')) expect(radio).toBeDisabled();
     expect(screen.getByLabelText('If /a exists')).toBeDisabled();
     expect(screen.getByLabelText('If /b exists')).toBeDisabled();

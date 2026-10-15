@@ -152,7 +152,7 @@ export function ReviewStep({ mode, source, target, database, trees, prodChecked,
                     </span>
                   </td>
                   <td className={TD}>
-                    <span className={cn(PILL, t.scope === 'ItemAndDescendants' ? 'bg-primary-100 text-primary-700' : 'bg-neutral-bg text-neutral-fg')}>
+                    <span className={cn(PILL, t.scope !== 'SingleItem' ? 'bg-primary-100 text-primary-700' : 'bg-neutral-bg text-neutral-fg')}>
                       {labelOf(SCOPES, t.scope, true)}
                     </span>
                   </td>

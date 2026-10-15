@@ -1,7 +1,8 @@
 import { buildPackage, type ChunkData, type PackageItem, type PackagePart } from '@/lib/package';
-import { SdkError, call, fetchItemId, type Env, type SdkClient } from '@/lib/sdk';
+import { SdkError, call, fetchChildren, fetchItemId, type Env, type SdkClient } from '@/lib/sdk';
 
-export type Scope = 'SingleItem' | 'ItemAndDescendants';
+// The API only knows SingleItem and ItemAndDescendants; ItemAndChildren is expanded before the job is created.
+export type Scope = 'SingleItem' | 'ItemAndChildren' | 'ItemAndDescendants';
 export type MergeStrategy = 'OverrideExistingItem' | 'KeepExistingItem' | 'LatestWin' | 'OverrideExistingTree';
 export type DataTree = { itemPath: string; scope: Scope; mergeStrategy: MergeStrategy };
 export type LogType = 'info' | 'success' | 'warning' | 'error';
@@ -34,6 +35,36 @@ const infoOf = (sets: ChunkSet[]) => ({
   chunkCount: sets.reduce((n, s) => n + s.ChunkCount, 0),
   itemCount: sets.reduce((n, s) => n + (s.TotalItemCount ?? 0), 0),
 });
+
+// fetchChildren reads at most this many children.
+const MAX_CHILDREN = 1000;
+const pathKey = (path: string) => path.replace(/\/+$/, '').toLowerCase();
+
+/**
+ * Replaces each ItemAndChildren row with the item and each of its direct children as single items, read from the
+ * source now. A child the queue also lists on its own keeps that row instead.
+ */
+export async function expandTrees(client: SdkClient, env: Env, trees: DataTree[], cb: RunCallbacks, signal?: AbortSignal) {
+  const listed = new Set(trees.map((t) => pathKey(t.itemPath)));
+  const out: DataTree[] = [];
+  for (const t of trees) {
+    if (t.scope !== 'ItemAndChildren') {
+      out.push(t);
+      continue;
+    }
+    signal?.throwIfAborted();
+    const children = await fetchChildren(client, env, t.itemPath);
+    if (children.length >= MAX_CHILDREN) {
+      throw new Error(
+        `${t.itemPath} has 1,000 or more children, too many to add one by one. Use + Everything below, or pick the children you need.`,
+      );
+    }
+    const single = (itemPath: string): DataTree => ({ itemPath, scope: 'SingleItem', mergeStrategy: t.mergeStrategy });
+    out.push(single(t.itemPath), ...children.filter((c) => !listed.has(pathKey(c.path))).map((c) => single(c.path)));
+    cb.onLog(`Including ${children.length} children of ${t.itemPath}.`, 'info');
+  }
+  return out;
+}
 
 export function parseIsMedia(header: string | null): boolean {
   return header?.match(/IsMedia\s*=\s*(true|false)/i)?.[1].toLowerCase() === 'true';
@@ -230,7 +261,7 @@ export async function runTransfer(
     begin(0, `Creating transfer job on ${source.name}.`);
     signal?.throwIfAborted();
     await call(client, source, 'mutate', CT + 'createContentTransfer', {
-      body: { transferId, configuration: { dataTrees } },
+      body: { transferId, configuration: { dataTrees: await expandTrees(client, source, dataTrees, cb, signal) } },
     });
     done(5);
 
@@ -284,7 +315,7 @@ export async function runExport(
     begin(0, `Creating transfer job on ${source.name}.`);
     signal?.throwIfAborted();
     await call(client, source, 'mutate', CT + 'createContentTransfer', {
-      body: { transferId, configuration: { dataTrees } },
+      body: { transferId, configuration: { dataTrees: await expandTrees(client, source, dataTrees, cb, signal) } },
     });
     done(10);
 

@@ -374,6 +374,64 @@ describe('runTransfer', () => {
   });
 });
 
+describe('+ Children', () => {
+  const GQL = 'xmc.authoring.graphql';
+  const HOME = '/sitecore/content/Acme/Home';
+  const node = (name: string) => ({ itemId: `{${name}}`, name, path: `${HOME}/${name}`, children: { nodes: [] } });
+  // Answers both the children lookup and the item ID lookup.
+  const withChildren = (names: string[], overrides: Record<string, Handler> = {}) => ({
+    ...happyHandlers(overrides),
+    [GQL]: () => ({ data: { data: { item: { itemId: '{HOME}', children: { nodes: names.map(node) } } } } }),
+  });
+  const ROW: DataTree = { itemPath: HOME, scope: 'ItemAndChildren', mergeStrategy: 'KeepExistingItem' };
+  const single = (itemPath: string): DataTree => ({ itemPath, scope: 'SingleItem', mergeStrategy: 'KeepExistingItem' });
+  const sent = (calls: any[]) => ofKey(calls, 'createContentTransfer')[0].params.body.configuration.dataTrees;
+
+  it('sends the item and each direct child as single items', async () => {
+    const { client, calls } = fakeClient(withChildren(['About', 'News']));
+    const r = recorder();
+    expect(await runTransfer(client, { ...OPTS, dataTrees: [ROW] }, r.cb)).toBe(true);
+    expect(sent(calls)).toEqual([single(HOME), single(`${HOME}/About`), single(`${HOME}/News`)]);
+    const lookup = calls.find((c) => c.key === GQL);
+    expect(lookup.params.query.sitecoreContextId).toBe('ctx-dev');
+    expect(lookup.params.body.variables).toEqual({ path: HOME });
+    expect(r.logs).toContainEqual([`Including 2 children of ${HOME}.`, 'info']);
+  });
+
+  it('sends only the item when it has no children', async () => {
+    const { client, calls } = fakeClient(withChildren([]));
+    expect(await runTransfer(client, { ...OPTS, dataTrees: [ROW] }, recorder().cb)).toBe(true);
+    expect(sent(calls)).toEqual([single(HOME)]);
+  });
+
+  it('leaves other rows alone, and a child listed on its own keeps its own row', async () => {
+    const own: DataTree = { itemPath: `${HOME}/news/`, scope: 'ItemAndDescendants', mergeStrategy: 'OverrideExistingTree' };
+    const { client, calls } = fakeClient(withChildren(['About', 'News']));
+    expect(await runTransfer(client, { ...OPTS, dataTrees: [TREES[0], ROW, own] }, recorder().cb)).toBe(true);
+    expect(sent(calls)).toEqual([TREES[0], single(HOME), single(`${HOME}/About`), own]);
+  });
+
+  it('stops before creating the job when the item has 1,000 or more children', async () => {
+    const { client, calls } = fakeClient(withChildren(Array.from({ length: 1000 }, (_, i) => `c${i}`)));
+    const r = recorder();
+    expect(await runTransfer(client, { ...OPTS, dataTrees: [ROW] }, r.cb)).toBe(false);
+    expect(ofKey(calls, 'createContentTransfer')).toHaveLength(0);
+    expect(r.steps).toContainEqual([0, 'fail']);
+    expect(r.logs).toContainEqual([
+      `${HOME} has 1,000 or more children, too many to add one by one. Use + Everything below, or pick the children you need.`,
+      'error',
+    ]);
+  });
+
+  it('exports the expanded items, and the package lists the row as chosen', async () => {
+    const { client, calls } = fakeClient(withChildren(['About']));
+    const zip = await runExport(client, { source: DEV, dataTrees: [ROW] }, recorder().cb);
+    expect(sent(calls)).toEqual([single(HOME), single(`${HOME}/About`)]);
+    const { items } = await readPackage(new File([zip!], 'e.zip'));
+    expect(items).toEqual([{ path: HOME, id: '{HOME}', scope: 'ItemAndChildren', mergeStrategy: 'KeepExistingItem' }]);
+  });
+});
+
 describe('runExport', () => {
   const GQL = 'xmc.authoring.graphql';
   const withGraphql = (overrides: Record<string, Handler> = {}) => ({

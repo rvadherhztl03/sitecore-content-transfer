@@ -2,6 +2,7 @@ import type { DataTree, MergeStrategy, Scope } from '@/lib/transfer';
 
 export const SCOPES: { value: Scope; label: string; long: string }[] = [
   { value: 'SingleItem', label: 'This item', long: 'This item only' },
+  { value: 'ItemAndChildren', label: '+ Children', long: 'Item + its children' },
   { value: 'ItemAndDescendants', label: '+ Everything below', long: 'Item + everything below' },
 ];
 
@@ -11,6 +12,17 @@ export const MERGES: { value: MergeStrategy; label: string; long: string }[] = [
   { value: 'KeepExistingItem', label: "Keep what's there", long: "Keep what's there" },
   { value: 'LatestWin', label: 'Keep the newer one', long: 'Keep the newer one' },
 ];
+
+/** "+ Children" leaves the nested items out, so it doesn't offer replacing (deleting) everything below. */
+export const mergesFor = (scope: Scope, merges = MERGES) =>
+  scope === 'ItemAndChildren' ? merges.filter((m) => m.value !== 'OverrideExistingTree') : merges;
+
+/** Changes the scope, moving a merge strategy the new scope doesn't offer to "Replace this item only". */
+export const withScope = <T extends Pick<DataTree, 'scope' | 'mergeStrategy'>>(t: T, scope: Scope): T => ({
+  ...t,
+  scope,
+  mergeStrategy: mergesFor(scope).some((m) => m.value === t.mergeStrategy) ? t.mergeStrategy : 'OverrideExistingItem',
+});
 
 /** Plain-language label for a value: short for controls, `long` for review screens and tables. */
 export const labelOf = (options: { value: string; label: string; long?: string }[], value: string, long = false): string => {
@@ -57,13 +69,12 @@ export function parseQueueJson(text: string): DataTree[] {
     if (!row || typeof row !== 'object') return [];
     const path = pick(row, 'path', 'ItemPath', 'itemPath');
     if (typeof path !== 'string' || !path.trim()) return [];
-    return [
-      {
-        itemPath: path.trim(),
-        scope: oneOf(SCOPES, pick(row, 'scope', 'Scope'), defaults.scope),
-        mergeStrategy: oneOf(MERGES, pick(row, 'strategy', 'MergeStrategy', 'mergeStrategy'), defaults.mergeStrategy),
-      },
-    ];
+    const tree: DataTree = {
+      itemPath: path.trim(),
+      scope: defaults.scope,
+      mergeStrategy: oneOf(MERGES, pick(row, 'strategy', 'MergeStrategy', 'mergeStrategy'), defaults.mergeStrategy),
+    };
+    return [withScope(tree, oneOf(SCOPES, pick(row, 'scope', 'Scope'), defaults.scope))];
   });
   if (trees.length === 0) throw new Error('No valid item paths found in JSON.');
   return trees;

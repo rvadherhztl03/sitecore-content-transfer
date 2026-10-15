@@ -6,22 +6,26 @@ import { useRun } from '@/components/transfer/useRun';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
-import { Checkbox } from '@/components/ui/checkbox';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Icon } from '@/lib/icon';
-import { MERGES, SCOPES, labelOf, nameOf } from '@/lib/queue';
+import { MERGES, labelOf, mergesFor, nameOf, withScope } from '@/lib/queue';
 import type { Env, SdkClient } from '@/lib/sdk';
-import { DATABASE, IMPORT_STEP, TRANSFER_STEPS, runTransfer, type DataTree, type MergeStrategy } from '@/lib/transfer';
+import { DATABASE, IMPORT_STEP, TRANSFER_STEPS, runTransfer, type DataTree, type MergeStrategy, type Scope } from '@/lib/transfer';
 import { cn } from '@/lib/utils';
 import { useEnvironments } from '@/utils/hooks/useEnvironments';
 import { mdiArrowRight, mdiSwapHorizontal } from '@mdi/js';
-import { useId, useState, type ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
 
 const NO_PAGE = 'Open a page in the Pages editor to send it.';
 // The Pages panel is about one page, so "item" becomes "page" here.
 const PANEL_MERGES = MERGES.map((m) => (m.value === 'OverrideExistingItem' ? { ...m, label: 'Replace this page only', long: 'Replace this page only' } : m));
+const PANEL_SCOPES: { value: Scope; label: string }[] = [
+  { value: 'SingleItem', label: 'This page only' },
+  { value: 'ItemAndChildren', label: 'This page + child pages' },
+  { value: 'ItemAndDescendants', label: 'This page + all subpages' },
+];
 
 const BTN = 'h-[46px] rounded-[10px] px-5';
 const EYEBROW = 'text-muted-foreground text-xs font-semibold tracking-wider uppercase';
@@ -66,32 +70,6 @@ function Field({
       </Select>
       {children}
     </div>
-  );
-}
-
-// A switch on Blok's checkbox: role="switch", a pill track and a thumb drawn with ::after. The whole row is the tap target.
-function Toggle({ label, hint, checked, onChange }: { label: string; hint: string; checked: boolean; onChange(v: boolean): void }) {
-  const id = useId();
-  return (
-    <Label htmlFor={id} className="min-h-11 cursor-pointer justify-between gap-3 leading-snug">
-      <span className="flex min-w-0 flex-col gap-0.5">
-        <span id={`${id}-label`} className="text-[13px] font-semibold">
-          {label}
-        </span>
-        <span id={`${id}-hint`} className="text-muted-foreground text-xs font-normal">
-          {hint}
-        </span>
-      </span>
-      <Checkbox
-        id={id}
-        role="switch"
-        aria-labelledby={`${id}-label`}
-        aria-describedby={`${id}-hint`}
-        checked={checked}
-        onCheckedChange={(c) => onChange(c === true)}
-        className="bg-blackAlpha-300 data-[state=checked]:bg-primary relative h-6! w-11! rounded-full border-0 after:absolute after:top-0.5 after:left-0.5 after:size-5 after:rounded-full after:bg-white after:shadow-sm after:transition-transform data-[state=checked]:after:translate-x-5 [&>[data-slot=checkbox-indicator]]:hidden"
-      />
-    </Label>
   );
 }
 
@@ -147,7 +125,7 @@ export function PanelFlow({ client, pageName, pagePath }: Props) {
   const { envs, loading, error, retry } = useEnvironments(client);
   const [sourceId, setSourceId] = useState<string>();
   const [targetId, setTargetId] = useState<string>();
-  const [subpages, setSubpages] = useState(true);
+  const [scope, setScope] = useState<Scope>('ItemAndDescendants');
   const [merge, setMerge] = useState<MergeStrategy>('OverrideExistingTree');
   // Set while reviewing or running: the page as it was when Send was pressed.
   const [held, setHeld] = useState<Page>();
@@ -177,9 +155,14 @@ export function PanelFlow({ client, pageName, pagePath }: Props) {
     runner.reset();
     setHeld(undefined);
   };
+  const changeScope = (value: Scope) => {
+    const next = withScope({ scope, mergeStrategy: merge }, value);
+    setScope(next.scope);
+    setMerge(next.mergeStrategy);
+  };
   const start = () => {
     if (!client || !source || !target || !held || !canStart) return;
-    const dataTrees: DataTree[] = [{ itemPath: held.path, scope: subpages ? 'ItemAndDescendants' : 'SingleItem', mergeStrategy: merge }];
+    const dataTrees: DataTree[] = [{ itemPath: held.path, scope, mergeStrategy: merge }];
     void runner.start({ labels: TRANSFER_STEPS, source, target }, (cb, signal) =>
       runTransfer(client, { source, target, database: DATABASE, dataTrees }, cb, signal),
     );
@@ -233,7 +216,7 @@ export function PanelFlow({ client, pageName, pagePath }: Props) {
                 {held.path}
               </span>
             </Row>
-            <Row label="Includes">{labelOf(SCOPES, subpages ? 'ItemAndDescendants' : 'SingleItem', true)}</Row>
+            <Row label="Includes">{labelOf(PANEL_SCOPES, scope)}</Row>
             <Row label={`If it exists on ${target.name}`}>{labelOf(PANEL_MERGES, merge, true)}</Row>
           </dl>
         </section>
@@ -291,12 +274,12 @@ export function PanelFlow({ client, pageName, pagePath }: Props) {
             <Field id="panel-to" label="To" value={picked?.id} options={options} onChange={setTargetId}>
               {same && <p className="text-danger-600 text-xs">From and To must be different environments.</p>}
             </Field>
-            <Toggle label="Include subpages" hint="Copy everything under this page" checked={subpages} onChange={setSubpages} />
+            <Field id="panel-scope" label="Include" value={scope} options={PANEL_SCOPES} onChange={(v) => changeScope(v as Scope)} />
             <Field
               id="panel-merge"
               label={`If it already exists on ${picked?.name ?? 'the target'}`}
               value={merge}
-              options={PANEL_MERGES}
+              options={mergesFor(scope, PANEL_MERGES)}
               onChange={(v) => setMerge(v as MergeStrategy)}
             />
           </>

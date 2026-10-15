@@ -37,6 +37,10 @@ function handlers(names: string[], overrides: Record<string, Handler>): Record<s
     [CT + 'consumeFile']: () => ({}),
     [CT + 'getBlobState']: () => ({ data: { status: 'OK' } }),
     [CT + 'deleteContentTransfer']: () => ({}),
+    // The page's children, for "This page + child pages".
+    'xmc.authoring.graphql': () => ({
+      data: { data: { item: { children: { nodes: ['Team', 'Jobs'].map((n) => ({ itemId: n, name: n, path: `${HOME}/${n}`, children: { nodes: [] } })) } } } },
+    }),
     ...Object.fromEntries(Object.entries(overrides).map(([k, h]) => [CT + k, h])),
   };
 }
@@ -91,7 +95,7 @@ describe('PanelFlow', () => {
       expect(screen.getByText('Home')).toBeInTheDocument();
       expect(screen.getByText(HOME)).toBeInTheDocument();
       expect(screen.getByLabelText('To')).toHaveTextContent('Choose an environment');
-      expect(screen.getByRole('switch', { name: 'Include subpages' })).toBeChecked();
+      expect(screen.getByLabelText('Include')).toHaveTextContent('This page + all subpages');
       expect(screen.getByLabelText('If it already exists on the target')).toHaveTextContent('Replace it and everything below');
       expect(send()).toHaveAccessibleName('Send to target');
       expect(send()).toBeDisabled();
@@ -179,7 +183,7 @@ describe('PanelFlow', () => {
       expect(within(review).getByText(DEV)).toBeInTheDocument();
       expect(within(review).getByText(QA)).toBeInTheDocument();
       expect(within(review).getByText(HOME)).toBeInTheDocument();
-      expect(within(review).getByText('Item + everything below')).toBeInTheDocument();
+      expect(within(review).getByText('This page + all subpages')).toBeInTheDocument();
       expect(within(review).getByText('Replace it and everything below')).toBeInTheDocument();
       expect(screen.getByRole('note')).toHaveTextContent('1 item replaces everything below it on Acme · QA.');
       expect(screen.getByText(/You can cancel until the import into Acme · QA starts/)).toBeInTheDocument();
@@ -187,14 +191,27 @@ describe('PanelFlow', () => {
       expect(screen.queryByLabelText('From')).not.toBeInTheDocument();
     });
 
-    it('reflects the subpages switch and merge choice, and warns only when replacing the tree', async () => {
+    it('reflects the include and merge choices, and warns only when replacing the tree', async () => {
       await route();
-      fireEvent.click(screen.getByRole('switch', { name: 'Include subpages' }));
+      pick('Include', 'This page only');
       pick('If it already exists on Acme · QA', 'Replace this page only');
       fireEvent.click(send());
       const review = screen.getByRole('region', { name: 'Review' });
-      expect(within(review).getByText('This item only')).toBeInTheDocument();
+      expect(within(review).getByText('This page only')).toBeInTheDocument();
       expect(within(review).getByText('Replace this page only')).toBeInTheDocument();
+      expect(screen.queryByRole('note')).not.toBeInTheDocument();
+    });
+
+    it('child pages moves off replacing everything below and no longer offers it', async () => {
+      await route();
+      pick('Include', 'This page + child pages');
+      const merge = screen.getByLabelText('If it already exists on Acme · QA');
+      expect(merge).toHaveTextContent('Replace this page only');
+      fireEvent.keyDown(merge, { key: 'Enter' });
+      expect(screen.getAllByRole('option').map((o) => o.textContent)).toEqual(['Replace this page only', "Keep what's there", 'Keep the newer one']);
+      fireEvent.click(screen.getByRole('option', { name: 'Replace this page only' }));
+      fireEvent.click(send());
+      expect(within(screen.getByRole('region', { name: 'Review' })).getByText('This page + child pages')).toBeInTheDocument();
       expect(screen.queryByRole('note')).not.toBeInTheDocument();
     });
 
@@ -251,10 +268,20 @@ describe('PanelFlow', () => {
       expect(ofKey(calls, 'consumeFile')[0].params.query).toMatchObject({ databaseName: 'master', sitecoreContextId: `ctx-${QA}` });
     });
 
-    it('turning subpages off and replacing only this page is what is sent', async () => {
+    it('child pages sends the page and each child page on its own', async () => {
       const { calls } = await route();
-      fireEvent.click(screen.getByRole('switch', { name: 'Include subpages' }));
-      expect(screen.getByRole('switch', { name: 'Include subpages' })).not.toBeChecked();
+      pick('Include', 'This page + child pages');
+      fireEvent.click(send());
+      click('Start');
+      await screen.findByRole('heading', { name: 'Transfer complete' });
+      expect(ofKey(calls, 'createContentTransfer')[0].params.body.configuration.dataTrees).toEqual(
+        [HOME, `${HOME}/Team`, `${HOME}/Jobs`].map((itemPath) => ({ itemPath, scope: 'SingleItem', mergeStrategy: 'OverrideExistingItem' })),
+      );
+    });
+
+    it('this page only, replacing only this page, is what is sent', async () => {
+      const { calls } = await route();
+      pick('Include', 'This page only');
       pick('If it already exists on Acme · QA', 'Replace this page only');
       fireEvent.click(send());
       click('Start');

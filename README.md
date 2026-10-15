@@ -14,7 +14,7 @@ The app opens on **Home** ("What would you like to do?"): three actions, plus th
 | **Export a package** | Packages items from one environment into a `.zip` download. |
 | **Install a package** | Installs a `.zip` or `.raif` package into an environment. |
 
-Options are shown in plain language. Each item has what it includes, `This item` (`SingleItem`) or `+ Everything below` (`ItemAndDescendants`), and what happens if it already exists on the target:
+Options are shown in plain language. Each item has what it includes, `This item` (`SingleItem`), `+ Children` (`ItemAndChildren`) or `+ Everything below` (`ItemAndDescendants`), and what happens if it already exists on the target:
 
 | Option | Value |
 |---|---|
@@ -22,6 +22,8 @@ Options are shown in plain language. Each item has what it includes, `This item`
 | Replace this item only | `OverrideExistingItem` |
 | Keep what's there | `KeepExistingItem` |
 | Keep the newer one | `LatestWin` |
+
+Sitecore's API has no item-and-children scope, so `+ Children` is expanded when the run starts: the item and each of its direct children (read from the source at that moment) are sent as single items, and a child you also queued on its own keeps its own settings. Nested items are left alone, so `+ Children` doesn't offer `Replace it and everything below`; choosing it moves the row to `Replace this item only`. Each child becomes its own package on the target, and an item with 1,000 or more children is refused (use `+ Everything below` instead).
 
 ### Transfer
 
@@ -41,7 +43,7 @@ One screen: choose a `.zip` or `.raif` file, check **What's inside** (items, wha
 
 ### Pages editor: Send this page
 
-In the Pages editor context panel, the current page is shown as a compact form: **From** and **To** (nothing preselected), an **Include subpages** switch (on by default) and **If it already exists on** `<target>` (the item-only option reads `Replace this page only`). **Send to** `<target>` opens an inline review with the same warnings and production checkbox, then **Start** runs it in the panel. Content is written to `master`, and nothing is written before you confirm. The page you sent stays fixed until you close the review or run, even if you open another page meanwhile.
+In the Pages editor context panel, the current page is shown as a compact form: **From** and **To** (nothing preselected), an **Include** select (`This page only`, `This page + child pages` or `This page + all subpages`, the default) and **If it already exists on** `<target>` (the item-only option reads `Replace this page only`). **Send to** `<target>` opens an inline review with the same warnings and production checkbox, then **Start** runs it in the panel. Content is written to `master`, and nothing is written before you confirm. The page you sent stays fixed until you close the review or run, even if you open another page meanwhile.
 
 ---
 

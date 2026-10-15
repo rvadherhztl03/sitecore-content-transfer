@@ -29,7 +29,7 @@ export function Segmented({ label, value, options, onChange, size = 'md', disabl
   };
 
   return (
-    <div role="radiogroup" aria-label={label} onKeyDown={onKeyDown} className="bg-neutral-bg inline-flex max-w-full gap-1 rounded-lg p-1">
+    <div role="radiogroup" aria-label={label} onKeyDown={onKeyDown} className="bg-neutral-bg inline-flex max-w-full flex-wrap gap-1 rounded-lg p-1">
       {options.map((o, i) => {
         const selected = o.value === value;
         return (
@@ -42,7 +42,7 @@ export function Segmented({ label, value, options, onChange, size = 'md', disabl
             disabled={disabled}
             onClick={() => onChange(o.value)}
             className={cn(
-              'focus-visible:ring-primary/50 cursor-pointer rounded-lg outline-none focus-visible:ring-[3px] disabled:cursor-not-allowed disabled:opacity-50 pointer-coarse:min-h-11',
+              'focus-visible:ring-primary/50 cursor-pointer rounded-lg whitespace-nowrap outline-none focus-visible:ring-[3px] disabled:cursor-not-allowed disabled:opacity-50 pointer-coarse:min-h-11',
               size === 'sm' ? 'text-sm min-h-8 px-3' : 'text-md min-h-9 px-4.5',
               selected ? 'text-foreground bg-white font-semibold shadow-[0_1px_3px_rgba(20,20,40,0.12)]' : 'text-muted-foreground bg-transparent font-medium',
             )}

@@ -4,7 +4,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Icon } from '@/lib/icon';
-import { MERGES, SCOPES, labelOf, mergeTrees, nameOf, newTree, parseQueueJson } from '@/lib/queue';
+import { MERGES, SCOPES, labelOf, mergeTrees, mergesFor, nameOf, newTree, parseQueueJson, withScope } from '@/lib/queue';
 import type { DataTree, MergeStrategy, Scope } from '@/lib/transfer';
 import { mdiClose } from '@mdi/js';
 import { useRef, useState } from 'react';
@@ -133,7 +133,7 @@ export function SelectionQueue({ trees, onChange, disabled }: Props) {
                     value={t.scope}
                     options={SCOPES}
                     disabled={disabled}
-                    onChange={(v) => update(i, { scope: v as Scope })}
+                    onChange={(v) => update(i, withScope(t, v as Scope))}
                   />
                   <div className="text-muted-foreground flex max-w-full min-w-0 flex-wrap items-center gap-x-2 gap-y-1.5 text-sm">
                     <span className="shrink-0">If it exists</span>
@@ -142,7 +142,7 @@ export function SelectionQueue({ trees, onChange, disabled }: Props) {
                         <SelectValue>{labelOf(MERGES, t.mergeStrategy)}</SelectValue>
                       </SelectTrigger>
                       <SelectContent>
-                        {MERGES.map((m) => (
+                        {mergesFor(t.scope).map((m) => (
                           <SelectItem key={m.value} value={m.value}>
                             {m.label}
                           </SelectItem>
