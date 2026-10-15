@@ -7,7 +7,7 @@ const geist = Geist({subsets:['latin'],variable:'--font-sans'});
 
 export const metadata: Metadata = {
   title: 'Content Transfer',
-  description: 'Sitecore Marketplace extension starter application',
+  description: 'Transfer content between XM Cloud environments.',
 }
 
 export default function RootLayout({

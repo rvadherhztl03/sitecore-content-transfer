@@ -2,7 +2,7 @@
 // Shown only when NEXT_PUBLIC_SPIKE=1. Delete after findings are recorded.
 "use client";
 
-import { useRef, useState } from "react";
+import { useState } from "react";
 import type { ClientSDK } from "@sitecore-marketplace-sdk/client";
 
 const CHILDREN_QUERY = `query GetItemChildren($path: String!) {
@@ -41,7 +41,9 @@ export default function Spike({ client }: { client: ClientSDK | null }) {
 	const [kind, setKind] = useState<Kind>("preview");
 	const [itemPath, setItemPath] = useState("");
 	const [mediaPath, setMediaPath] = useState("");
-	const resources = useRef<Any[]>([]);
+	const [resources, setResources] = useState<Any[]>([]);
+	// The exact sentence the user ticked; editing the paths or target changes the sentence and unticks it.
+	const [ack, setAck] = useState("");
 	const c = client as Any;
 
 	const log = (label: string, value?: unknown) => {
@@ -49,27 +51,40 @@ export default function Spike({ client }: { client: ClientSDK | null }) {
 		setOut((prev) => `${prev}\n=== ${label} ===\n${body}\n`);
 	};
 
-	// Normalise to the raw hey-api result { data, error, response } for both queries and mutations.
+	// Normalise to the raw hey-api result { data, error, response } for both queries and mutations, plus the call's duration.
 	const op = async (type: "query" | "mutate", key: string, params: Any) => {
+		const start = performance.now();
+		let r: Any;
 		try {
-			const r = await c[type](key, { params });
-			if (type === "mutate") return r;
-			return r?.data ?? { data: undefined, error: r?.error };
+			r = await c[type](key, { params });
+			if (type === "query") r = r?.data ?? { data: undefined, error: r?.error };
 		} catch (e) {
-			return { data: undefined, error: e, response: undefined };
+			r = { data: undefined, error: e, response: undefined };
 		}
+		return { ...r, ms: Math.round(performance.now() - start) };
 	};
-	const logRes = (label: string, r: Any) => log(label, { data: r?.data, error: r?.error, response: r?.response });
+	const logRes = (label: string, r: Any) => log(`${label} (${r?.ms} ms)`, { data: r?.data, error: r?.error, response: r?.response });
 
 	const loadContext = async () => {
 		const res = await c.query("application.context");
-		resources.current = res?.data?.resourceAccess ?? [];
-		log("application.context resourceAccess", { resourceAccess: resources.current, error: res?.error });
+		const list: Any[] = res?.data?.resourceAccess ?? [];
+		setResources(list);
+		log("application.context resourceAccess", { resourceAccess: list, error: res?.error });
+		return list;
 	};
-	const ensureContext = async () => {
-		if (!resources.current.length) await loadContext();
-		return resources.current;
+	const showContext = async () => {
+		await loadContext();
+		const host = await c.query("host.state");
+		log("host.state", { data: host?.data, error: host?.error });
 	};
+	const ensureContext = async () => (resources.length ? resources : loadContext());
+
+	const nameOf = (r: Any) => r?.tenantDisplayName ?? r?.tenantName ?? r?.tenantId;
+	const paths = [itemPath, mediaPath].map((p) => p.trim()).filter(Boolean);
+	const tgtName = nameOf(resources[tgtIdx]);
+	const ackText = `I understand this writes ${paths.join(", ")} into ${tgtName}`;
+	const canAck = !!tgtName && paths.length > 0;
+	const acked = canAck && ack === ackText;
 
 	const tree = async (k: Kind) => {
 		const ra = await ensureContext();
@@ -86,14 +101,13 @@ export default function Spike({ client }: { client: ClientSDK | null }) {
 		const ra = await ensureContext();
 		const src = ra[srcIdx];
 		const tgt = ra[tgtIdx];
-		const paths = [itemPath, mediaPath].map((p) => p.trim()).filter(Boolean);
 		if (!src || !tgt || !paths.length) return log("Transfer aborted: need valid source/target index and at least one item path");
 		if (srcIdx === tgtIdx) return log("Transfer aborted: source index equals target index");
 		const srcCtx = src.context?.[kind];
 		const tgtCtx = tgt.context?.[kind];
 		if (!srcCtx || !tgtCtx) return log("Transfer aborted: missing context id", { kind, srcCtx, tgtCtx });
-		const tgtName = tgt.tenantDisplayName ?? tgt.tenantName ?? tgt.tenantId;
-		if (!window.confirm(`This writes ${paths.join(", ")} into ${tgtName}. Continue?`)) return log("Transfer cancelled by user");
+		if (!acked) return log("Transfer aborted: tick the confirmation first");
+		setAck("");
 
 		const transferId = crypto.randomUUID();
 		log("Transfer start", { transferId, kind, srcCtx, tgtCtx, paths, target: tgtName });
@@ -117,8 +131,9 @@ export default function Spike({ client }: { client: ClientSDK | null }) {
 					query: { sitecoreContextId: srcCtx },
 				});
 				logRes(`getContentTransferStatus #${i}`, status);
+				// Errors (e.g. 404 before the job is registered) keep polling.
 				const state = status?.data?.State;
-				if (state === "Completed" || state === "Failed" || status?.error) break;
+				if (state === "Completed" || state === "Failed") break;
 				await sleep(3000);
 			}
 
@@ -132,14 +147,15 @@ export default function Spike({ client }: { client: ClientSDK | null }) {
 				const chunksetId: string = cs.ChunkSetId ?? cs.ChunksetId;
 				lastChunksetId = chunksetId;
 				for (let chunkId = 0; chunkId < cs.ChunkCount; chunkId++) {
-					const got = await op("query", "xmc.contentTransfer.getChunk", {
+					// mutate, like the app: query() would cache every chunk Blob.
+					const got = await op("mutate", "xmc.contentTransfer.getChunk", {
 						path: { transferId, chunksetId, chunkId },
 						query: { sitecoreContextId: srcCtx },
 					});
 					const h = got?.response?.headers;
 					const header = (n: string) => h?.get?.(n) ?? null;
 					const disposition: string | null = header("content-disposition");
-					log(`getChunk ${chunksetId}/${chunkId}`, {
+					log(`getChunk ${chunksetId}/${chunkId} (${got.ms} ms)`, {
 						dataTag: Object.prototype.toString.call(got?.data),
 						size: got?.data?.size ?? null,
 						byteLength: got?.data?.byteLength ?? null,
@@ -217,13 +233,20 @@ export default function Spike({ client }: { client: ClientSDK | null }) {
 		}
 	};
 
-	const input = { padding: 4, marginRight: 8 } as const;
+	const input = { marginRight: 8 } as const;
 	return (
-		<div style={{ padding: 20, fontFamily: "sans-serif", color: "#fff" }}>
+		<div className="spike" style={{ padding: 20, fontFamily: "sans-serif", color: "#111", background: "#fff" }}>
+			{/* Tailwind preflight strips borders and backgrounds from form controls; put them back. */}
+			<style>{`
+				.spike button, .spike input:not([type=checkbox]), .spike select { border: 1px solid #888; border-radius: 4px; padding: 4px 10px; background: #fff; color: #111; }
+				.spike button:disabled { opacity: 0.5; cursor: not-allowed; }
+				.spike fieldset { border: 1px solid #ccc; padding: 8px 12px; }
+				.spike h2 { font-size: 1.25rem; font-weight: 600; }
+			`}</style>
 			<h2>SDK spike (throwaway)</h2>
 			<p>client: {client ? "ready" : "not ready"}</p>
 			<div style={{ marginBottom: 12 }}>
-				<button disabled={busy || !client} onClick={run(loadContext)}>Context</button>{" "}
+				<button disabled={busy || !client} onClick={run(showContext)}>Context</button>{" "}
 				<button disabled={busy || !client} onClick={run(() => tree("preview"))}>Tree (preview)</button>{" "}
 				<button disabled={busy || !client} onClick={run(() => tree("live"))}>Tree (live)</button>
 			</div>
@@ -244,14 +267,20 @@ export default function Spike({ client }: { client: ClientSDK | null }) {
 					<label>media item path (optional) <input style={{ ...input, width: 360 }} value={mediaPath} onChange={(e) => setMediaPath(e.target.value)} placeholder="/sitecore/media library/..." /></label>
 				</div>
 				<div style={{ marginTop: 8 }}>
-					<button disabled={busy || !client} onClick={run(transfer)}>Run test transfer</button>
+					<label>
+						<input type="checkbox" disabled={!canAck} checked={acked} onChange={(e) => setAck(e.target.checked ? ackText : "")} />{" "}
+						{canAck ? ackText : "Click Context and enter an item path to confirm the transfer"}
+					</label>
+				</div>
+				<div style={{ marginTop: 8 }}>
+					<button disabled={busy || !client || !acked} onClick={run(transfer)}>Run test transfer</button>
 				</div>
 			</fieldset>
 			<div style={{ marginBottom: 8 }}>
 				<button onClick={() => navigator.clipboard.writeText(out)}>Copy output</button>{" "}
 				<button onClick={() => setOut("")}>Clear</button> {busy && "running..."}
 			</div>
-			<pre style={{ whiteSpace: "pre-wrap", wordBreak: "break-all", background: "#111", padding: 12, maxHeight: "60vh", overflow: "auto" }}>{out}</pre>
+			<pre style={{ whiteSpace: "pre-wrap", wordBreak: "break-all", background: "#111", color: "#eee", padding: 12, maxHeight: "60vh", overflow: "auto" }}>{out}</pre>
 		</div>
 	);
 }
