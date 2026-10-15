@@ -2,7 +2,8 @@ import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import { Icon } from '@/lib/icon';
 import { type PackageItem, type PackagePart, readPackage } from '@/lib/package';
-import { MERGES, SCOPES, labelOf } from '@/lib/queue';
+import { MERGES, SCOPES, labelOf, mergesFor } from '@/lib/queue';
+import type { Scope } from '@/lib/transfer';
 import { mdiFileOutline, mdiFileUploadOutline } from '@mdi/js';
 import { useRef, useState } from 'react';
 
@@ -136,7 +137,8 @@ export function ImportPanel({ disabled, onPackage }: Props) {
                           {i.path}
                         </td>
                         <td className={TD}>{labelOf(SCOPES, i.scope, true)}</td>
-                        <td className={TD}>{labelOf(MERGES, i.mergeStrategy, true)}</td>
+                        {/* A package from before scope-specific options can pair any scope with any strategy. */}
+                        <td className={TD}>{labelOf([...mergesFor(i.scope as Scope), ...MERGES], i.mergeStrategy, true)}</td>
                       </tr>
                     ))}
                   </tbody>

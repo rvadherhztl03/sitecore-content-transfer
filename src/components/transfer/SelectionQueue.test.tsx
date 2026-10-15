@@ -64,7 +64,7 @@ describe('SelectionQueue', () => {
     const onChange = setup();
     const scope = screen.getByRole('radiogroup', { name: 'Include for /a' });
     fireEvent.click(within(scope).getByRole('radio', { name: 'This item' }));
-    expect(onChange).toHaveBeenLastCalledWith([{ ...TREES[0], scope: 'SingleItem' }, TREES[1]]);
+    expect(onChange).toHaveBeenLastCalledWith([{ ...TREES[0], scope: 'SingleItem', mergeStrategy: 'OverrideExistingItem' }, TREES[1]]);
 
     fireEvent.keyDown(screen.getByLabelText('If /b exists'), { key: 'Enter' });
     fireEvent.click(screen.getByRole('option', { name: 'Keep the newer one' }));
@@ -80,6 +80,13 @@ describe('SelectionQueue', () => {
   it('a + Children row offers every merge option except replacing everything below', () => {
     setup([{ itemPath: '/a', scope: 'ItemAndChildren', mergeStrategy: 'OverrideExistingItem' }]);
     expect(within(screen.getByRole('radiogroup', { name: 'Include for /a' })).getByRole('radio', { name: '+ Children' })).toBeChecked();
+    fireEvent.keyDown(screen.getByLabelText('If /a exists'), { key: 'Enter' });
+    expect(screen.getByLabelText('If /a exists')).toHaveTextContent('Replace it and its children');
+    expect(screen.getAllByRole('option').map((o) => o.textContent)).toEqual(['Replace it and its children', "Keep what's there", 'Keep the newer one']);
+  });
+
+  it('a single item offers every merge option except replacing everything below', () => {
+    setup([{ itemPath: '/a', scope: 'SingleItem', mergeStrategy: 'OverrideExistingItem' }]);
     fireEvent.keyDown(screen.getByLabelText('If /a exists'), { key: 'Enter' });
     expect(screen.getAllByRole('option').map((o) => o.textContent)).toEqual(['Replace this item only', "Keep what's there", 'Keep the newer one']);
   });

@@ -59,7 +59,9 @@ export async function expandTrees(client: SdkClient, env: Env, trees: DataTree[]
         `${t.itemPath} has 1,000 or more children, too many to add one by one. Use + Everything below, or pick the children you need.`,
       );
     }
-    const single = (itemPath: string): DataTree => ({ itemPath, scope: 'SingleItem', mergeStrategy: t.mergeStrategy });
+    // Replacing a child's tree would delete what lies below it, which + Children leaves out: replace each item only.
+    const merge = t.mergeStrategy === 'OverrideExistingTree' ? 'OverrideExistingItem' : t.mergeStrategy;
+    const single = (itemPath: string): DataTree => ({ itemPath, scope: 'SingleItem', mergeStrategy: merge });
     out.push(single(t.itemPath), ...children.filter((c) => !listed.has(pathKey(c.path))).map((c) => single(c.path)));
     cb.onLog(`Including ${children.length} children of ${t.itemPath}.`, 'info');
   }

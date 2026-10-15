@@ -398,6 +398,12 @@ describe('+ Children', () => {
     expect(r.logs).toContainEqual([`Including 2 children of ${HOME}.`, 'info']);
   });
 
+  it('never replaces anything below a child, even if the row asks to', async () => {
+    const { client, calls } = fakeClient(withChildren(['About']));
+    expect(await runTransfer(client, { ...OPTS, dataTrees: [{ ...ROW, mergeStrategy: 'OverrideExistingTree' }] }, recorder().cb)).toBe(true);
+    expect(sent(calls).map((t: DataTree) => t.mergeStrategy)).toEqual(['OverrideExistingItem', 'OverrideExistingItem']);
+  });
+
   it('sends only the item when it has no children', async () => {
     const { client, calls } = fakeClient(withChildren([]));
     expect(await runTransfer(client, { ...OPTS, dataTrees: [ROW] }, recorder().cb)).toBe(true);

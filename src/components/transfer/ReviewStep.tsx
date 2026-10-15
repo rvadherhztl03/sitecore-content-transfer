@@ -6,7 +6,7 @@ import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Label } from '@/components/ui/label';
 import { Icon } from '@/lib/icon';
-import { MERGES, SCOPES, labelOf, nameOf } from '@/lib/queue';
+import { SCOPES, labelOf, mergesFor, nameOf } from '@/lib/queue';
 import { envKind, type Env } from '@/lib/sdk';
 import type { DataTree } from '@/lib/transfer';
 import { cn } from '@/lib/utils';
@@ -158,7 +158,7 @@ export function ReviewStep({ mode, source, target, database, trees, prodChecked,
                   </td>
                   <td className={TD}>
                     <span className={cn(PILL, t.mergeStrategy === 'OverrideExistingTree' ? 'bg-warning-50 text-warning-600' : 'bg-neutral-bg text-neutral-fg')}>
-                      {labelOf(MERGES, t.mergeStrategy, true)}
+                      {labelOf(mergesFor(t.scope), t.mergeStrategy, true)}
                     </span>
                   </td>
                 </tr>

@@ -4,7 +4,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Icon } from '@/lib/icon';
-import { MERGES, SCOPES, labelOf, mergeTrees, mergesFor, nameOf, newTree, parseQueueJson, withScope } from '@/lib/queue';
+import { SCOPES, labelOf, mergeTrees, mergesFor, nameOf, newTree, parseQueueJson, withScope } from '@/lib/queue';
 import type { DataTree, MergeStrategy, Scope } from '@/lib/transfer';
 import { mdiClose } from '@mdi/js';
 import { useRef, useState } from 'react';
@@ -139,7 +139,7 @@ export function SelectionQueue({ trees, onChange, disabled }: Props) {
                     <span className="shrink-0">If it exists</span>
                     <Select value={t.mergeStrategy} disabled={disabled} onValueChange={(v) => update(i, { mergeStrategy: v as MergeStrategy })}>
                       <SelectTrigger aria-label={`If ${t.itemPath} exists`} className="max-w-full min-w-0 rounded-lg text-sm data-[size=default]:pointer-coarse:h-11 *:data-[slot=select-value]:block *:data-[slot=select-value]:truncate">
-                        <SelectValue>{labelOf(MERGES, t.mergeStrategy)}</SelectValue>
+                        <SelectValue>{labelOf(mergesFor(t.scope), t.mergeStrategy)}</SelectValue>
                       </SelectTrigger>
                       <SelectContent>
                         {mergesFor(t.scope).map((m) => (

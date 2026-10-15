@@ -38,16 +38,35 @@ describe('queue', () => {
     });
   });
 
-  it('+ Children does not offer replacing everything below', () => {
-    const values = (scope: Parameters<typeof mergesFor>[0]) => mergesFor(scope).map((m) => m.value);
-    expect(values('ItemAndChildren')).toEqual(['OverrideExistingItem', 'KeepExistingItem', 'LatestWin']);
-    expect(values('SingleItem')).toEqual(MERGES.map((m) => m.value));
-    expect(values('ItemAndDescendants')).toEqual(MERGES.map((m) => m.value));
+  it('offers replacing everything below only with + Everything below', () => {
+    const labels = (scope: Parameters<typeof mergesFor>[0]) => mergesFor(scope).map((m) => [m.value, m.label]);
+    expect(labels('SingleItem')).toEqual([
+      ['OverrideExistingItem', 'Replace this item only'],
+      ['KeepExistingItem', "Keep what's there"],
+      ['LatestWin', 'Keep the newer one'],
+    ]);
+    // + Children replaces the item and each child on its own, never anything deeper.
+    expect(labels('ItemAndChildren')).toEqual([
+      ['OverrideExistingItem', 'Replace it and its children'],
+      ['KeepExistingItem', "Keep what's there"],
+      ['LatestWin', 'Keep the newer one'],
+    ]);
+    expect(mergesFor('ItemAndChildren')[0].long).toBe('Replace it and its children');
+    expect(mergesFor('ItemAndDescendants')).toBe(MERGES);
   });
 
-  it('withScope moves "Replace it and everything below" to "Replace this item only" for + Children', () => {
+  it('mergesFor names the + Children replace option as given', () => {
+    expect(mergesFor('ItemAndChildren', MERGES, 'Replace it and its child pages')[0]).toEqual({
+      value: 'OverrideExistingItem',
+      label: 'Replace it and its child pages',
+      long: 'Replace it and its child pages',
+    });
+  });
+
+  it('withScope moves "Replace it and everything below" to replacing the item (and its children) for the other scopes', () => {
     expect(withScope(newTree('/a'), 'ItemAndChildren')).toEqual({ itemPath: '/a', scope: 'ItemAndChildren', mergeStrategy: 'OverrideExistingItem' });
-    expect(withScope(newTree('/a'), 'SingleItem')).toEqual({ itemPath: '/a', scope: 'SingleItem', mergeStrategy: 'OverrideExistingTree' });
+    expect(withScope(newTree('/a'), 'SingleItem')).toEqual({ itemPath: '/a', scope: 'SingleItem', mergeStrategy: 'OverrideExistingItem' });
+    expect(withScope(newTree('/a'), 'ItemAndDescendants')).toEqual(newTree('/a'));
     const keep = { ...newTree('/a'), mergeStrategy: 'LatestWin' as const };
     expect(withScope(keep, 'ItemAndChildren')).toEqual({ ...keep, scope: 'ItemAndChildren' });
   });
@@ -75,6 +94,12 @@ describe('queue', () => {
 
   it('parseQueueJson maps unsupported scope and merge to the defaults', () => {
     expect(parseQueueJson('[{"path":"/a","scope":"Nope","strategy":"Nope"}]')).toEqual([newTree('/a')]);
+  });
+
+  it('parseQueueJson never replaces everything below a single item', () => {
+    expect(parseQueueJson('[{"path":"/a","scope":"SingleItem","strategy":"OverrideExistingTree"}]')).toEqual([
+      { itemPath: '/a', scope: 'SingleItem', mergeStrategy: 'OverrideExistingItem' },
+    ]);
   });
 
   it('parseQueueJson accepts ItemAndChildren, without replacing everything below', () => {

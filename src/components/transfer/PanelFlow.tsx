@@ -142,6 +142,7 @@ export function PanelFlow({ client, pageName, pagePath }: Props) {
   const routeOk = !!source && !!target;
   const page = held ?? (pagePath ? { name: pageName, path: pagePath } : undefined);
   const prodChecked = !!target && prodFor === target.id;
+  const merges = mergesFor(scope, PANEL_MERGES, 'Replace it and its child pages');
   const canStart = !!held && routeOk && !(needsProdConfirm(target) && !prodChecked);
   // An environment vanished during the review (e.g. after a Retry): back to the form. Render-phase reset.
   if (held && !run && !routeOk) setHeld(undefined);
@@ -217,7 +218,7 @@ export function PanelFlow({ client, pageName, pagePath }: Props) {
               </span>
             </Row>
             <Row label="Includes">{labelOf(PANEL_SCOPES, scope)}</Row>
-            <Row label={`If it exists on ${target.name}`}>{labelOf(PANEL_MERGES, merge, true)}</Row>
+            <Row label={`If it exists on ${target.name}`}>{labelOf(merges, merge, true)}</Row>
           </dl>
         </section>
         {replacing && (
@@ -279,7 +280,7 @@ export function PanelFlow({ client, pageName, pagePath }: Props) {
               id="panel-merge"
               label={`If it already exists on ${picked?.name ?? 'the target'}`}
               value={merge}
-              options={mergesFor(scope, PANEL_MERGES)}
+              options={merges}
               onChange={(v) => setMerge(v as MergeStrategy)}
             />
           </>

@@ -206,13 +206,24 @@ describe('PanelFlow', () => {
       await route();
       pick('Include', 'This page + child pages');
       const merge = screen.getByLabelText('If it already exists on Acme · QA');
+      expect(merge).toHaveTextContent('Replace it and its child pages');
+      fireEvent.keyDown(merge, { key: 'Enter' });
+      expect(screen.getAllByRole('option').map((o) => o.textContent)).toEqual(['Replace it and its child pages', "Keep what's there", 'Keep the newer one']);
+      fireEvent.click(screen.getByRole('option', { name: 'Replace it and its child pages' }));
+      fireEvent.click(send());
+      const review = screen.getByRole('region', { name: 'Review' });
+      expect(within(review).getByText('This page + child pages')).toBeInTheDocument();
+      expect(within(review).getByText('Replace it and its child pages')).toBeInTheDocument();
+      expect(screen.queryByRole('note')).not.toBeInTheDocument();
+    });
+
+    it('this page only does not offer replacing everything below', async () => {
+      await route();
+      pick('Include', 'This page only');
+      const merge = screen.getByLabelText('If it already exists on Acme · QA');
       expect(merge).toHaveTextContent('Replace this page only');
       fireEvent.keyDown(merge, { key: 'Enter' });
       expect(screen.getAllByRole('option').map((o) => o.textContent)).toEqual(['Replace this page only', "Keep what's there", 'Keep the newer one']);
-      fireEvent.click(screen.getByRole('option', { name: 'Replace this page only' }));
-      fireEvent.click(send());
-      expect(within(screen.getByRole('region', { name: 'Review' })).getByText('This page + child pages')).toBeInTheDocument();
-      expect(screen.queryByRole('note')).not.toBeInTheDocument();
     });
 
     it('Back returns to the form with the choices kept', async () => {

@@ -13,11 +13,18 @@ export const MERGES: { value: MergeStrategy; label: string; long: string }[] = [
   { value: 'LatestWin', label: 'Keep the newer one', long: 'Keep the newer one' },
 ];
 
-/** "+ Children" leaves the nested items out, so it doesn't offer replacing (deleting) everything below. */
-export const mergesFor = (scope: Scope, merges = MERGES) =>
-  scope === 'ItemAndChildren' ? merges.filter((m) => m.value !== 'OverrideExistingTree') : merges;
+/**
+ * The merge options for a scope. Replacing (deleting) everything below is only offered with "+ Everything below".
+ * "+ Children" replaces the item and each child on its own, so its item-only option is named `childrenReplace`.
+ */
+export const mergesFor = (scope: Scope, merges = MERGES, childrenReplace = 'Replace it and its children') => {
+  if (scope === 'ItemAndDescendants') return merges;
+  const options = merges.filter((m) => m.value !== 'OverrideExistingTree');
+  if (scope !== 'ItemAndChildren') return options;
+  return options.map((m) => (m.value === 'OverrideExistingItem' ? { ...m, label: childrenReplace, long: childrenReplace } : m));
+};
 
-/** Changes the scope, moving a merge strategy the new scope doesn't offer to "Replace this item only". */
+/** Changes the scope, moving a merge strategy the new scope doesn't offer to replacing the item (and its children). */
 export const withScope = <T extends Pick<DataTree, 'scope' | 'mergeStrategy'>>(t: T, scope: Scope): T => ({
   ...t,
   scope,
