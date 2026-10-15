@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { fireEvent, render, screen, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { Workspace, blockReason } from '@/components/transfer/Workspace';
 import { newTree } from '@/lib/queue';
@@ -79,6 +79,12 @@ function setup(ctx: Handler, props: { initialItemPath?: string } = {}) {
 // The source tree loads its root once the environments arrive; wait for it so no update lands outside act().
 const treeLoaded = () => screen.findByText('content');
 
+// Opens a Radix select from the keyboard and picks an option.
+function pick(label: string, option: string) {
+  fireEvent.keyDown(screen.getByLabelText(label), { key: 'Enter' });
+  fireEvent.click(screen.getByRole('option', { name: option }));
+}
+
 describe('Workspace', () => {
   let pollMs: number;
   beforeEach(() => {
@@ -126,10 +132,30 @@ describe('Workspace', () => {
     ).toBeInTheDocument();
   });
 
+  it('compact mode preselects nothing and waits for both environments', async () => {
+    const { client } = fakeClient(handlers(() => context('Dev', 'QA')));
+    render(<Workspace client={client} compact initialItemPath="/sitecore/content/Home" />);
+    expect(await screen.findByText('Choose an environment.')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Send to target' })).toBeDisabled();
+    expect(screen.queryByText(/^From /)).not.toBeInTheDocument();
+
+    pick('Source', 'Dev');
+    expect(screen.getByText('From Dev')).toBeInTheDocument();
+    expect(screen.getByText('Choose an environment.')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Send to target' })).toBeDisabled();
+
+    pick('Target', 'QA');
+    expect(screen.queryByText('Choose an environment.')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Send to QA' })).toBeEnabled();
+  });
+
   it('compact mode has no tabs or tree and sends to the target', async () => {
     const { client } = fakeClient(handlers(() => context('Dev', 'QA')));
     render(<Workspace client={client} compact initialItemPath="/sitecore/content/Home" />);
-    expect(await screen.findByRole('button', { name: 'Send to QA' })).toBeEnabled();
+    await screen.findByText('Choose an environment.');
+    pick('Source', 'Dev');
+    pick('Target', 'QA');
+    expect(screen.getByRole('button', { name: 'Send to QA' })).toBeEnabled();
     expect(screen.queryByRole('tablist')).not.toBeInTheDocument();
     expect(screen.queryByLabelText('Filter loaded items')).not.toBeInTheDocument();
     expect(screen.getByText('/sitecore/content/Home')).toBeInTheDocument();
@@ -148,7 +174,10 @@ describe('Workspace', () => {
   it('holds a new page path until the confirmed run is over', async () => {
     const { client, calls } = fakeClient(handlers(() => context('Dev', 'QA')));
     const { rerender } = render(<Workspace client={client} compact initialItemPath="/sitecore/content/A" />);
-    fireEvent.click(await screen.findByRole('button', { name: 'Send to QA' }));
+    await screen.findByText('Choose an environment.');
+    pick('Source', 'Dev');
+    pick('Target', 'QA');
+    fireEvent.click(screen.getByRole('button', { name: 'Send to QA' }));
     rerender(<Workspace client={client} compact initialItemPath="/sitecore/content/B" />);
     expect(within(screen.getByRole('alertdialog')).getByText('/sitecore/content/A')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Start' }));
@@ -174,5 +203,25 @@ describe('Workspace', () => {
     expect(await screen.findByText('Completed')).toBeInTheDocument();
     const create = calls.find((c) => c.key === 'xmc.contentTransfer.createContentTransfer');
     expect(create?.params.body.configuration.dataTrees).toEqual([newTree('/sitecore/content/Home')]);
+  });
+
+  it('offers no Cancel once the import into the database has started', async () => {
+    let release!: () => void;
+    const h = handlers(() => context('Dev', 'QA'));
+    h['xmc.contentTransfer.consumeFile'] = () => new Promise<FakeReply>((r) => (release = () => r({})));
+    const { client } = fakeClient(h);
+    render(<Workspace client={client} initialItemPath="/sitecore/content/Home" />);
+    await treeLoaded();
+    fireEvent.click(screen.getByRole('button', { name: 'Start transfer' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Start' }));
+    const panel = screen.getByRole('dialog', { name: 'Transfer' });
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
+    expect(within(panel).getByRole('button', { name: 'Cancel' })).toBeInTheDocument();
+
+    await waitFor(() => expect(within(panel).queryByRole('button', { name: 'Cancel' })).not.toBeInTheDocument());
+    expect(release).toBeTypeOf('function');
+    expect(screen.queryByText('Completed')).not.toBeInTheDocument();
+    release();
+    expect(await screen.findByText('Completed')).toBeInTheDocument();
   });
 });

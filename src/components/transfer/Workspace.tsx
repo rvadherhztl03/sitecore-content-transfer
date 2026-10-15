@@ -70,7 +70,8 @@ function download(blob: Blob, fileName: string) {
   document.body.appendChild(a);
   a.click();
   a.remove();
-  URL.revokeObjectURL(url);
+  // Revoking right after click() can drop the download in some browsers.
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 const localDate = (d = new Date()) =>
@@ -103,13 +104,16 @@ export function Workspace({ client, compact, initialItemPath }: Props) {
   // Leaving the page stops the run (the engine still cleans up).
   useEffect(() => () => abort.current?.abort(), []);
 
-  const source = envs.find((e) => e.id === sourceId) ?? envs[0];
-  // With one environment it is the target too, so Import works; Transfer is still blocked by the one-environment rule.
-  const target = envs.find((e) => e.id === targetId) ?? envs[1] ?? envs[0];
+  // The page panel preselects nothing: the user picks the copy direction. Elsewhere, with one environment
+  // it is the target too, so Import works; Transfer is still blocked by the one-environment rule.
+  const source = envs.find((e) => e.id === sourceId) ?? (compact ? undefined : envs[0]);
+  const target = envs.find((e) => e.id === targetId) ?? (compact ? undefined : (envs[1] ?? envs[0]));
   const settled = !loading && !error;
   const reason = blockReason(mode, { envs, source, target, trees, hasPackage: !!pkg });
   const prod = mode !== 'export' && !!target && /prod/i.test(target.name);
   const { tab, action, steps } = MODES[mode];
+  // Once the target is importing it can't be stopped, so Cancel would only mislead.
+  const importing = !!run?.steps.some((s) => s.label === 'Import into database' && (s.status === 'running' || s.status === 'done'));
 
   const count = `${trees.length} item ${trees.length === 1 ? 'tree' : 'trees'}`;
   const merges = [...new Set(trees.map((t) => MERGES.find((m) => m.value === t.mergeStrategy)?.label ?? t.mergeStrategy))];
@@ -157,6 +161,7 @@ export function Workspace({ client, compact, initialItemPath }: Props) {
     <div className="flex flex-col gap-4 p-4">
       <header className="flex flex-col gap-2">
         <h1 className="text-xl font-semibold">Content Transfer</h1>
+        {compact && source && <p className="text-muted-foreground text-sm">{`From ${source.name}`}</p>}
         {!compact && (
           <Tabs value={mode} onValueChange={(v) => setMode(v as Mode)}>
             <TabsList aria-label="Mode">
@@ -280,7 +285,7 @@ export function Workspace({ client, compact, initialItemPath }: Props) {
           logs={run.logs}
           running={run.running}
           result={run.result}
-          onCancel={() => abort.current?.abort()}
+          onCancel={importing ? undefined : () => abort.current?.abort()}
           onClose={() => setRun(null)}
           onRunAgain={() => {
             setRun(null);

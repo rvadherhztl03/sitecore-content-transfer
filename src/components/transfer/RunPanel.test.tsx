@@ -43,6 +43,12 @@ describe('RunPanel', () => {
     expect(onCancel).toHaveBeenCalledOnce();
   });
 
+  it('hides Cancel while running without onCancel', () => {
+    setup({ onCancel: undefined });
+    expect(screen.queryByRole('button', { name: 'Cancel' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Done' })).not.toBeInTheDocument();
+  });
+
   it('on success shows Completed, Done and Run again but no Cancel', () => {
     const { onClose, onRunAgain } = setup({ running: false, result: 'success', progress: 100, steps: steps('done', 'done') });
     expect(screen.getByText('Completed')).toBeInTheDocument();

@@ -19,7 +19,8 @@ type Props = {
   logs: LogLine[];
   running: boolean;
   result: 'success' | 'fail' | null;
-  onCancel(): void;
+  /** Leave out to hide Cancel, e.g. once the target is importing and can't be stopped. */
+  onCancel?(): void;
   onClose(): void;
   onRunAgain(): void;
 };
@@ -131,9 +132,11 @@ export function RunPanel({
   );
 
   const actions = running ? (
-    <Button type="button" variant="outline" onClick={onCancel}>
-      Cancel
-    </Button>
+    onCancel && (
+      <Button type="button" variant="outline" onClick={onCancel}>
+        Cancel
+      </Button>
+    )
   ) : (
     <>
       <Button type="button" variant="outline" onClick={onRunAgain}>
