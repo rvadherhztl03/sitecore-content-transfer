@@ -25,3 +25,21 @@ export function fakeClient(handlers: Record<string, Handler>) {
   const client: SdkClient = { query: (k, o) => run('query', k, o), mutate: (k, o) => run('mutate', k, o) };
   return { client, calls };
 }
+
+type Found = { id: string; children?: { id: string; name: string }[] };
+
+/**
+ * Answers the pre-flight GraphQL query (src/lib/preflight.ts): `find(contextId, path)` gives the item at that path in that
+ * environment, or nothing. `p…` aliases get the item's ID, `c…` aliases its children; each alias is named like its variable.
+ */
+export const preflightReply = (find: (contextId: string, path: string) => Found | undefined) => (p: any): FakeReply => {
+  const data: Record<string, unknown> = {};
+  for (const [k, path] of Object.entries(p.body.variables as Record<string, string>)) {
+    const it = find(p.query.sitecoreContextId, path);
+    data[k] = !it ? null : k.startsWith('c') ? { children: { nodes: (it.children ?? []).map((c) => ({ itemId: c.id, name: c.name })) } } : { itemId: it.id };
+  }
+  return { data: { data } };
+};
+
+/** Whether a GraphQL call is the pre-flight query. */
+export const isPreflight = (p: any) => typeof p?.body?.query === 'string' && p.body.query.startsWith('query Preflight');

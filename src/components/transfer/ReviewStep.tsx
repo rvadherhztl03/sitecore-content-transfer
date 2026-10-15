@@ -1,11 +1,14 @@
 import { cancelNote, treeWarning } from '@/components/transfer/copy';
 import { EnvBadge } from '@/components/transfer/EnvironmentCards';
 import { PageHeading } from '@/components/transfer/Layout';
+import { PreflightNotes, PreflightStatus } from '@/components/transfer/Preflight';
+import type { Preflight } from '@/components/transfer/usePreflight';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Label } from '@/components/ui/label';
 import { Icon } from '@/lib/icon';
+import { addMissingParents, removeNotFound } from '@/lib/preflight';
 import { SCOPES, labelOf, mergesFor, nameOf } from '@/lib/queue';
 import { envKind, type Env } from '@/lib/sdk';
 import type { DataTree } from '@/lib/transfer';
@@ -77,11 +80,17 @@ type Props = {
   prodChecked: boolean;
   onProdChecked(v: boolean): void;
   onEdit(): void;
+  /** The pre-flight check of the target (transfer only). */
+  preflight?: Preflight;
+  /** Lets the pre-flight notes fix the list: add missing parents, remove items the source lacks. */
+  onTreesChange?(trees: DataTree[]): void;
 };
 
 /** What will be written, before it is: route, replace warning, production confirmation and the items. */
-export function ReviewStep({ mode, source, target, database, trees, prodChecked, onProdChecked, onEdit }: Props) {
+export function ReviewStep({ mode, source, target, database, trees, prodChecked, onProdChecked, onEdit, preflight, onTreesChange }: Props) {
   const to = mode === 'transfer' ? target : undefined;
+  const checks = preflight?.status === 'done' ? preflight.checks : undefined;
+  const fix = (f: typeof addMissingParents) => (checks && onTreesChange ? () => onTreesChange(f(trees, checks)) : undefined);
   const replacing = trees.filter((t) => t.mergeStrategy === 'OverrideExistingTree').length;
   const detail = (env: Env, text: string) => [env.tenantName, text].filter(Boolean).join(' · ');
 
@@ -116,6 +125,10 @@ export function ReviewStep({ mode, source, target, database, trees, prodChecked,
         </Alert>
       )}
 
+      {to && (
+        <PreflightNotes preflight={preflight} source={source} target={to} onAddParents={fix(addMissingParents)} onRemoveNotFound={fix(removeNotFound)} />
+      )}
+
       {to && needsProdConfirm(to) && <ProdConfirm target={to} checked={prodChecked} onChange={onProdChecked} />}
 
       <section className="overflow-hidden rounded-[14px] border bg-white">
@@ -132,6 +145,11 @@ export function ReviewStep({ mode, source, target, database, trees, prodChecked,
                 <th scope="col" className={TH}>
                   Item
                 </th>
+                {to && (
+                  <th scope="col" className={TH}>
+                    {`On ${to.name}`}
+                  </th>
+                )}
                 <th scope="col" className={TH}>
                   Includes
                 </th>
@@ -151,6 +169,11 @@ export function ReviewStep({ mode, source, target, database, trees, prodChecked,
                       </span>
                     </span>
                   </td>
+                  {to && (
+                    <td className={TD}>
+                      <PreflightStatus preflight={preflight} itemPath={t.itemPath} source={source} />
+                    </td>
+                  )}
                   <td className={TD}>
                     <span className={cn(PILL, t.scope !== 'SingleItem' ? 'bg-primary-100 text-primary-700' : 'bg-neutral-bg text-neutral-fg')}>
                       {labelOf(SCOPES, t.scope, true)}

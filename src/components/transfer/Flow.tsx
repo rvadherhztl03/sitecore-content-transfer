@@ -5,6 +5,7 @@ import { ReviewStep, needsProdConfirm } from '@/components/transfer/ReviewStep';
 import { RunView } from '@/components/transfer/RunView';
 import { SelectionQueue } from '@/components/transfer/SelectionQueue';
 import { Stepper } from '@/components/transfer/Stepper';
+import { usePreflight } from '@/components/transfer/usePreflight';
 import { useRun } from '@/components/transfer/useRun';
 import { Button } from '@/components/ui/button';
 import { Icon } from '@/lib/icon';
@@ -61,6 +62,8 @@ export function Flow({ client, mode, envs, onHome }: Props) {
   // jump ahead to the remembered step. Render-phase reset; this pass still shows Route.
   if (!run && !routeOk && step) setStep(0);
   const current = run ? 3 : routeOk ? step : 0;
+  // Checks the target while on Review (transfer only); changing the list there re-checks it.
+  const preflight = usePreflight(client, transfer && current === 2 ? source : undefined, target, trees);
 
   // Moving to another step puts focus on its heading. Not on first mount, and not into the run: useRun focuses its own.
   const page = useRef<HTMLDivElement>(null);
@@ -262,6 +265,8 @@ export function Flow({ client, mode, envs, onHome }: Props) {
             prodChecked={prodChecked}
             onProdChecked={(v) => setProdFor(v ? target!.id : null)}
             onEdit={() => go(1)}
+            preflight={preflight}
+            onTreesChange={setTrees}
           />
         </main>
       );

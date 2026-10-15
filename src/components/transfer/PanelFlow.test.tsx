@@ -1,7 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { PanelFlow } from '@/components/transfer/PanelFlow';
 import { TIMING } from '@/lib/transfer';
-import { fakeClient, type FakeReply } from '@/test/fakeClient';
+import { fakeClient, isPreflight, preflightReply, type FakeReply } from '@/test/fakeClient';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
@@ -21,8 +21,12 @@ const context = (...names: string[]) => ({
   data: { resourceAccess: names.map((name, i) => ({ resourceId: `r${i + 1}`, tenantDisplayName: name, context: { preview: `ctx-${name}` } })) },
 });
 
+type Find = Parameters<typeof preflightReply>[0];
+// By default every path is on both environments as the same item, so the pre-flight check finds nothing.
+const EVERYWHERE: Find = (_, path) => ({ id: path });
+
 // Modelled on happyHandlers in src/lib/transfer.test.ts.
-function handlers(names: string[], overrides: Record<string, Handler>): Record<string, Handler> {
+function handlers(names: string[], overrides: Record<string, Handler>, find: Find = EVERYWHERE): Record<string, Handler> {
   let statusCalls = 0;
   return {
     'application.context': () => context(...names),
@@ -37,10 +41,11 @@ function handlers(names: string[], overrides: Record<string, Handler>): Record<s
     [CT + 'consumeFile']: () => ({}),
     [CT + 'getBlobState']: () => ({ data: { status: 'OK' } }),
     [CT + 'deleteContentTransfer']: () => ({}),
-    // The page's children, for "This page + child pages".
-    'xmc.authoring.graphql': () => ({
-      data: { data: { item: { children: { nodes: ['Team', 'Jobs'].map((n) => ({ itemId: n, name: n, path: `${HOME}/${n}`, children: { nodes: [] } })) } } } },
-    }),
+    // The pre-flight check, and the page's children for "This page + child pages".
+    'xmc.authoring.graphql': (p) =>
+      isPreflight(p)
+        ? preflightReply(find)(p)
+        : { data: { data: { item: { children: { nodes: ['Team', 'Jobs'].map((n) => ({ itemId: n, name: n, path: `${HOME}/${n}`, children: { nodes: [] } })) } } } } },
     ...Object.fromEntries(Object.entries(overrides).map(([k, h]) => [CT + k, h])),
   };
 }
@@ -48,8 +53,13 @@ function handlers(names: string[], overrides: Record<string, Handler>): Record<s
 type Page = { pageName?: string; pagePath?: string };
 const HOME_PAGE: Page = { pageName: 'Home', pagePath: HOME };
 
-function setup({ names = [DEV, QA, PROD], overrides = {}, page = HOME_PAGE }: { names?: string[]; overrides?: Record<string, Handler>; page?: Page } = {}) {
-  const { client, calls } = fakeClient(handlers(names, overrides));
+function setup({
+  names = [DEV, QA, PROD],
+  overrides = {},
+  page = HOME_PAGE,
+  find,
+}: { names?: string[]; overrides?: Record<string, Handler>; page?: Page; find?: Find } = {}) {
+  const { client, calls } = fakeClient(handlers(names, overrides, find));
   const view = render(<PanelFlow client={client} {...page} />);
   return { calls, ...view, show: (next: Page) => view.rerender(<PanelFlow client={client} {...next} />) };
 }
@@ -258,6 +268,42 @@ describe('PanelFlow', () => {
     it('a non-production target needs no confirmation', async () => {
       await toReview();
       expect(screen.queryByRole('checkbox')).not.toBeInTheDocument();
+    });
+  });
+
+  describe('Pre-flight check', () => {
+    const ACME = '/sitecore/content/Acme';
+
+    it('shows what the target holds for the page', async () => {
+      await toReview();
+      const review = screen.getByRole('region', { name: 'Review' });
+      expect(await screen.findByText('Pre-flight check: everything is in place on Acme · QA.')).toBeInTheDocument();
+      expect(within(review).getByText('On Acme · QA').closest('div')).toHaveTextContent('Exists');
+    });
+
+    it('Add missing parents sends them before the page, and shows them in the review', async () => {
+      const { calls } = await toReview(DEV, QA, {
+        find: (ctx, path) => (ctx === `ctx-${QA}` && (path === ACME || path === HOME) ? undefined : { id: path }),
+      });
+      const note = await screen.findByRole('note', { name: 'Missing parents on Acme · QA' });
+      fireEvent.click(within(note).getByRole('button', { name: 'Add missing parents' }));
+      const review = screen.getByRole('region', { name: 'Review' });
+      expect(within(review).getByText('Also sends').closest('div')).toHaveTextContent(ACME);
+      expect(await screen.findByText('Pre-flight check: everything is in place on Acme · QA.')).toBeInTheDocument();
+      click('Start');
+      await screen.findByRole('heading', { name: 'Transfer complete' });
+      expect(ofKey(calls, 'createContentTransfer')[0].params.body.configuration.dataTrees).toEqual([
+        { itemPath: ACME, scope: 'SingleItem', mergeStrategy: 'KeepExistingItem' },
+        { itemPath: HOME, scope: 'ItemAndDescendants', mergeStrategy: 'OverrideExistingTree' },
+      ]);
+    });
+
+    it('a fresh review starts without the parents added last time', async () => {
+      await toReview(DEV, QA, { find: (ctx, path) => (ctx === `ctx-${QA}` && path === ACME ? undefined : { id: path }) });
+      fireEvent.click(within(await screen.findByRole('note', { name: 'Missing parents on Acme · QA' })).getByRole('button', { name: 'Add missing parents' }));
+      click('Back');
+      fireEvent.click(send());
+      expect(screen.queryByText('Also sends')).not.toBeInTheDocument();
     });
   });
 

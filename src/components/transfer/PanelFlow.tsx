@@ -1,7 +1,9 @@
 import { ONE_ENV, cancelNote, treeWarning } from '@/components/transfer/copy';
 import { EnvBadge } from '@/components/transfer/EnvironmentCards';
+import { PreflightNotes, PreflightStatus } from '@/components/transfer/Preflight';
 import { ProdConfirm, needsProdConfirm } from '@/components/transfer/ReviewStep';
 import { RunView } from '@/components/transfer/RunView';
+import { usePreflight } from '@/components/transfer/usePreflight';
 import { useRun } from '@/components/transfer/useRun';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
@@ -10,6 +12,7 @@ import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Icon } from '@/lib/icon';
+import { addMissingParents } from '@/lib/preflight';
 import { MERGES, labelOf, mergesFor, nameOf, withScope } from '@/lib/queue';
 import type { Env, SdkClient } from '@/lib/sdk';
 import { DATABASE, IMPORT_STEP, TRANSFER_STEPS, runTransfer, type DataTree, type MergeStrategy, type Scope } from '@/lib/transfer';
@@ -129,6 +132,8 @@ export function PanelFlow({ client, pageName, pagePath }: Props) {
   const [merge, setMerge] = useState<MergeStrategy>('OverrideExistingTree');
   // Set while reviewing or running: the page as it was when Send was pressed.
   const [held, setHeld] = useState<Page>();
+  // Missing parents added from the review's pre-flight notes, sent before the page.
+  const [parents, setParents] = useState<DataTree[]>([]);
   // The target id the production box was ticked for: another target, or a fresh review, needs it ticked again.
   const [prodFor, setProdFor] = useState<string | null>(null);
   const runner = useRun();
@@ -144,12 +149,15 @@ export function PanelFlow({ client, pageName, pagePath }: Props) {
   const prodChecked = !!target && prodFor === target.id;
   const merges = mergesFor(scope, PANEL_MERGES, 'Replace it and its child pages');
   const canStart = !!held && routeOk && !(needsProdConfirm(target) && !prodChecked);
+  const dataTrees: DataTree[] = held ? [...parents, { itemPath: held.path, scope, mergeStrategy: merge }] : [];
+  const preflight = usePreflight(client, held && !run ? source : undefined, target, dataTrees);
   // An environment vanished during the review (e.g. after a Retry): back to the form. Render-phase reset.
   if (held && !run && !routeOk) setHeld(undefined);
 
   const review = () => {
     if (!routeOk || !pagePath) return;
     setProdFor(null);
+    setParents([]);
     setHeld({ name: pageName, path: pagePath });
   };
   const close = () => {
@@ -163,7 +171,6 @@ export function PanelFlow({ client, pageName, pagePath }: Props) {
   };
   const start = () => {
     if (!client || !source || !target || !held || !canStart) return;
-    const dataTrees: DataTree[] = [{ itemPath: held.path, scope, mergeStrategy: merge }];
     void runner.start({ labels: TRANSFER_STEPS, source, target }, (cb, signal) =>
       runTransfer(client, { source, target, database: DATABASE, dataTrees }, cb, signal),
     );
@@ -217,6 +224,20 @@ export function PanelFlow({ client, pageName, pagePath }: Props) {
                 {held.path}
               </span>
             </Row>
+            <Row label={`On ${target.name}`}>
+              <span>
+                <PreflightStatus preflight={preflight} itemPath={held.path} source={source!} />
+              </span>
+            </Row>
+            {parents.length > 0 && (
+              <Row label="Also sends">
+                {parents.map((t) => (
+                  <span key={t.itemPath} className="text-muted-foreground font-mono text-xs font-normal [overflow-wrap:anywhere]">
+                    {t.itemPath}
+                  </span>
+                ))}
+              </Row>
+            )}
             <Row label="Includes">{labelOf(PANEL_SCOPES, scope)}</Row>
             <Row label={`If it exists on ${target.name}`}>{labelOf(merges, merge, true)}</Row>
           </dl>
@@ -228,6 +249,16 @@ export function PanelFlow({ client, pageName, pagePath }: Props) {
             </AlertDescription>
           </Alert>
         )}
+        <PreflightNotes
+          preflight={preflight}
+          source={source!}
+          target={target}
+          onAddParents={
+            preflight?.status === 'done'
+              ? () => setParents(addMissingParents(dataTrees, preflight.checks).filter((t) => t.itemPath !== held.path))
+              : undefined
+          }
+        />
         {needsProdConfirm(target) && <ProdConfirm target={target} checked={prodChecked} onChange={(v) => setProdFor(v ? target.id : null)} />}
         <p className="text-muted-foreground text-[13px] leading-normal">
           {cancelNote(target.name)}

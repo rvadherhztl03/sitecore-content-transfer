@@ -5,7 +5,7 @@ import { Flow } from '@/components/transfer/Flow';
 import { newTree } from '@/lib/queue';
 import type { Env } from '@/lib/sdk';
 import { TIMING } from '@/lib/transfer';
-import { fakeClient, type FakeReply } from '@/test/fakeClient';
+import { fakeClient, isPreflight, preflightReply, type FakeReply } from '@/test/fakeClient';
 
 const DEV: Env = { id: 'dev', name: 'Acme · Development', contextId: 'ctx-dev', tenantName: 'acme-dev' };
 const QA: Env = { id: 'qa', name: 'Acme · QA', contextId: 'ctx-qa', tenantName: 'acme-qa' };
@@ -15,13 +15,19 @@ const CT = 'xmc.contentTransfer.';
 
 type Handler = (params: any) => FakeReply | Promise<FakeReply>;
 
-// Modelled on happyHandlers in src/lib/transfer.test.ts, plus the tree query.
-function handlers(overrides: Record<string, Handler> = {}): Record<string, Handler> {
+type Find = Parameters<typeof preflightReply>[0];
+// By default every path is on both environments as the same item, so the pre-flight check finds nothing.
+const EVERYWHERE: Find = (_, path) => ({ id: path });
+
+// Modelled on happyHandlers in src/lib/transfer.test.ts, plus the tree query and the pre-flight check.
+function handlers(overrides: Record<string, Handler> = {}, find: Find | Handler = EVERYWHERE): Record<string, Handler> {
   let statusCalls = 0;
+  const check: Handler = find.length === 2 ? preflightReply(find as Find) : (find as Handler);
   return {
-    'xmc.authoring.graphql': () => ({
-      data: { data: { item: { children: { nodes: [{ itemId: 'c', name: 'content', path: '/sitecore/content', children: { nodes: [] } }] } } } },
-    }),
+    'xmc.authoring.graphql': (p) =>
+      isPreflight(p)
+        ? check(p)
+        : { data: { data: { item: { children: { nodes: [{ itemId: 'c', name: 'content', path: '/sitecore/content', children: { nodes: [] } }] } } } } },
     [CT + 'createContentTransfer']: () => ({}),
     [CT + 'getContentTransferStatus']: () =>
       statusCalls++ === 0
@@ -37,8 +43,13 @@ function handlers(overrides: Record<string, Handler> = {}): Record<string, Handl
   };
 }
 
-function setup({ mode = 'transfer', envs = [DEV, QA, PROD], overrides = {} }: { mode?: 'transfer' | 'export'; envs?: Env[]; overrides?: Record<string, Handler> } = {}) {
-  const { client, calls } = fakeClient(handlers(overrides));
+function setup({
+  mode = 'transfer',
+  envs = [DEV, QA, PROD],
+  overrides = {},
+  find,
+}: { mode?: 'transfer' | 'export'; envs?: Env[]; overrides?: Record<string, Handler>; find?: Find | Handler } = {}) {
+  const { client, calls } = fakeClient(handlers(overrides, find));
   const onHome = vi.fn();
   const view = render(<Flow client={client} mode={mode} envs={envs} onHome={onHome} />);
   return { client, calls, onHome, ...view };
@@ -212,6 +223,65 @@ describe('Flow', () => {
       expect(screen.getByRole('button', { name: 'Remove /sitecore/content' })).toBeInTheDocument();
       fireEvent.click(box);
       expect(screen.queryByRole('button', { name: 'Remove /sitecore/content' })).not.toBeInTheDocument();
+    });
+  });
+
+  describe('Pre-flight check', () => {
+    const PAGE = '/sitecore/content/Acme/Page';
+    const ACME = '/sitecore/content/Acme';
+    const GQL = 'xmc.authoring.graphql';
+
+    it('checks the target on Review and shows what it holds for each item', async () => {
+      setup();
+      await toReview();
+      expect(screen.getByRole('status')).toHaveTextContent('Checking Acme · QA…');
+      expect(await screen.findByText('Pre-flight check: everything is in place on Acme · QA.')).toBeInTheDocument();
+      expect(screen.getByRole('columnheader', { name: 'On Acme · QA' })).toBeInTheDocument();
+      expect(screen.getByRole('row', { name: /Home/ })).toHaveTextContent('Exists');
+    });
+
+    it('Add missing parents puts the parent in the list, and the transfer sends it first', async () => {
+      const { calls } = setup({ find: (ctx, path) => (ctx === 'ctx-qa' && (path === ACME || path === PAGE) ? undefined : { id: path }) });
+      await toContent();
+      addPath(PAGE);
+      click('Review transfer');
+      const note = await screen.findByRole('note', { name: 'Missing parents on Acme · QA' });
+      expect(within(note).getByText(ACME)).toBeInTheDocument();
+      expect(screen.getByRole('row', { name: /Page/ })).toHaveTextContent('Parent missing');
+      fireEvent.click(within(note).getByRole('button', { name: 'Add missing parents' }));
+      expect(await screen.findByText('Pre-flight check: everything is in place on Acme · QA.')).toBeInTheDocument();
+      const [, parent, page] = screen.getAllByRole('row');
+      expect(parent).toHaveTextContent(`Acme${ACME}New`);
+      expect(page).toHaveTextContent(`Page${PAGE}New`);
+      click('Start transfer');
+      await screen.findByText('Transfer complete');
+      expect(ofKey(calls, 'createContentTransfer')[0].params.body.configuration.dataTrees).toEqual([
+        { itemPath: ACME, scope: 'SingleItem', mergeStrategy: 'KeepExistingItem' },
+        newTree(PAGE),
+      ]);
+    });
+
+    it('Remove from the list drops the items the source lacks', async () => {
+      setup({ find: (ctx, path) => (ctx === 'ctx-dev' && path === HOME ? undefined : { id: path }) });
+      await toReview();
+      const note = await screen.findByRole('note', { name: 'Not found on Acme · Development' });
+      fireEvent.click(within(note).getByRole('button', { name: 'Remove from the list' }));
+      expect(screen.queryByRole('row', { name: /Home/ })).not.toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Start transfer' })).toBeDisabled();
+    });
+
+    it('a failed check says so and does not block Start', async () => {
+      setup({ find: () => ({ status: 500 }) });
+      await toReview();
+      expect(await screen.findByRole('note', { name: "Couldn't run the pre-flight check: HTTP 500. You can still start." })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Start transfer' })).toBeEnabled();
+    });
+
+    it('export runs no check', async () => {
+      const { calls } = setup({ mode: 'export' });
+      await toReview('Review export');
+      expect(screen.queryByRole('status')).not.toBeInTheDocument();
+      expect(calls.filter((c) => c.key === GQL && isPreflight(c.params))).toHaveLength(0);
     });
   });
 

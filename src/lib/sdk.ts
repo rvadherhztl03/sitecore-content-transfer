@@ -109,9 +109,9 @@ export async function call<T = any>(
 
 export type TreeNode = { id: string; name: string; path: string; hasChildren: boolean };
 
-async function graphql(client: SdkClient, env: Env, query: string, path: string): Promise<any> {
+export async function graphql(client: SdkClient, env: Env, query: string, variables: Record<string, unknown>): Promise<any> {
   const { data } = await call(client, env, 'mutate', 'xmc.authoring.graphql', {
-    body: { query, variables: { path } },
+    body: { query, variables },
   });
   if (data?.errors?.length) throw new SdkError(data.errors[0].message);
   return data?.data;
@@ -133,7 +133,7 @@ const ITEM_ID_QUERY = `query GetItemId($path: String!) {
 }`;
 
 export async function fetchChildren(client: SdkClient, env: Env, path: string): Promise<TreeNode[]> {
-  const data = await graphql(client, env, CHILDREN_QUERY, path);
+  const data = await graphql(client, env, CHILDREN_QUERY, { path });
   const nodes: any[] = data?.item?.children?.nodes ?? [];
   return nodes.map((n) => ({
     id: n.itemId,
@@ -144,6 +144,6 @@ export async function fetchChildren(client: SdkClient, env: Env, path: string): 
 }
 
 export async function fetchItemId(client: SdkClient, env: Env, path: string): Promise<string | null> {
-  const data = await graphql(client, env, ITEM_ID_QUERY, path);
+  const data = await graphql(client, env, ITEM_ID_QUERY, { path });
   return data?.item?.itemId ?? null;
 }
