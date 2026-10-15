@@ -1,4 +1,5 @@
-import { SdkError, call, type Env, type SdkClient } from '@/lib/sdk';
+import { buildPackage, type ChunkData, type PackageItem, type PackagePart } from '@/lib/package';
+import { SdkError, call, fetchItemId, type Env, type SdkClient } from '@/lib/sdk';
 
 export type Scope = 'SingleItem' | 'ItemAndDescendants';
 export type MergeStrategy = 'OverrideExistingItem' | 'KeepExistingItem' | 'LatestWin' | 'OverrideExistingTree';
@@ -13,6 +14,8 @@ export interface RunCallbacks {
 }
 
 export const TRANSFER_STEPS = ['Create job', 'Wait for package', 'Copy chunks', 'Assemble on target', 'Import into database', 'Verify'];
+export const EXPORT_STEPS = ['Create job', 'Wait for package', 'Download & zip'];
+export const IMPORT_STEPS = ['Upload package', 'Assemble on target', 'Import into database', 'Verify'];
 export const TIMING = { pollMs: 3000, statusTimeoutMs: 600_000, verifyTimeoutMs: 300_000 };
 export const BLOB_SUCCESS = ['OK', 'Transferred', 'Consumed'];
 export const BLOB_FAILURE = ['Error', 'Failed'];
@@ -101,6 +104,71 @@ export async function cleanup(client: SdkClient, envs: Env[], transferId: string
   }
 }
 
+type Steps = { begin(i: number, message: string): void; done(percent: number): void };
+
+// Shared step bookkeeping: marks the running step failed on error, logs `Cancelled.` on abort,
+// returns `failed`, and always cleans up `envs`.
+async function runSteps<T>(
+  client: SdkClient,
+  envs: Env[],
+  transferId: string,
+  cb: RunCallbacks,
+  signal: AbortSignal | undefined,
+  failed: T,
+  body: (steps: Steps) => Promise<T>,
+): Promise<T> {
+  let step = 0;
+  const steps: Steps = {
+    begin(i, message) {
+      step = i;
+      cb.onStepChange(i, 'running');
+      cb.onLog(message, 'info');
+    },
+    done(percent) {
+      cb.onStepChange(step, 'done');
+      cb.onProgress(percent);
+    },
+  };
+  try {
+    return await body(steps);
+  } catch (e) {
+    cb.onStepChange(step, 'fail');
+    if (signal?.aborted) cb.onLog('Cancelled.', 'warning');
+    else cb.onLog(e instanceof Error ? e.message : String(e), 'error');
+    return failed;
+  } finally {
+    await cleanup(client, envs, transferId, cb);
+  }
+}
+
+async function fetchChunk(
+  client: SdkClient,
+  env: Env,
+  transferId: string,
+  chunksetId: string,
+  chunkId: number,
+  signal?: AbortSignal,
+): Promise<{ blob: Blob; isMedia: boolean }> {
+  signal?.throwIfAborted();
+  const { data, response } = await call<Blob>(client, env, 'query', CT + 'getChunk', { path: { transferId, chunksetId, chunkId } });
+  // Never pass a non-binary body on to a target or a package.
+  if (!(data instanceof Blob)) throw new Error(`${env.name} returned no data for chunk ${chunkId + 1} of chunk set ${chunksetId}.`);
+  return { blob: data, isMedia: parseIsMedia(response?.headers.get('content-disposition') ?? null) };
+}
+
+async function completeSets(client: SdkClient, env: Env, transferId: string, chunksetIds: string[], signal?: AbortSignal) {
+  const files: string[] = [];
+  for (const chunksetId of chunksetIds) {
+    signal?.throwIfAborted();
+    const { data } = await call<{ ContentTransferFileName?: string }>(
+      client, env, 'mutate', CT + 'completeChunkSetTransfer', { path: { transferId, chunksetId } },
+    );
+    if (!data?.ContentTransferFileName) throw new Error(`${env.name} returned no file name for chunk set ${chunksetId}.`);
+    files.push(data.ContentTransferFileName);
+  }
+  return files;
+}
+
 export async function runTransfer(
   client: SdkClient,
   opts: { source: Env; target: Env; database: string; dataTrees: DataTree[] },
@@ -109,18 +177,7 @@ export async function runTransfer(
 ): Promise<boolean> {
   const { source, target, database, dataTrees } = opts;
   const transferId = crypto.randomUUID();
-  let step = 0;
-  const begin = (i: number, message: string) => {
-    step = i;
-    cb.onStepChange(i, 'running');
-    cb.onLog(message, 'info');
-  };
-  const done = (percent: number) => {
-    cb.onStepChange(step, 'done');
-    cb.onProgress(percent);
-  };
-
-  try {
+  return runSteps(client, [source, target], transferId, cb, signal, false, async ({ begin, done }) => {
     begin(0, `Creating transfer job on ${source.name}.`);
     signal?.throwIfAborted();
     await call(client, source, 'mutate', CT + 'createContentTransfer', {
@@ -137,15 +194,12 @@ export async function runTransfer(
     let copied = 0;
     for (const set of sets) {
       for (let chunkId = 0; chunkId < set.ChunkCount; chunkId++) {
+        signal?.throwIfAborted();
         cb.onLog(`Copying chunk ${copied + 1} / ${total}`, 'info');
         const path = { transferId, chunksetId: set.ChunkSetId, chunkId };
+        const { blob, isMedia } = await fetchChunk(client, source, transferId, set.ChunkSetId, chunkId, signal);
         signal?.throwIfAborted();
-        const { data, response } = await call<Blob>(client, source, 'query', CT + 'getChunk', { path });
-        // Never write a non-binary body into the target.
-        if (!(data instanceof Blob)) throw new Error(`${source.name} returned no data for chunk ${copied + 1} / ${total}.`);
-        const isMedia = parseIsMedia(response?.headers.get('content-disposition') ?? null);
-        signal?.throwIfAborted();
-        await call(client, target, 'mutate', CT + 'saveChunk', { path, query: { isMedia }, body: data });
+        await call(client, target, 'mutate', CT + 'saveChunk', { path, query: { isMedia }, body: blob });
         copied++;
         cb.onProgress(Math.round(15 + (60 * copied) / total));
       }
@@ -153,14 +207,7 @@ export async function runTransfer(
     done(75);
 
     begin(3, `Assembling the package on ${target.name}.`);
-    const files: string[] = [];
-    for (const set of sets) {
-      signal?.throwIfAborted();
-      const { data } = await call<{ ContentTransferFileName: string }>(
-        client, target, 'mutate', CT + 'completeChunkSetTransfer', { path: { transferId, chunksetId: set.ChunkSetId } },
-      );
-      files.push(data.ContentTransferFileName);
-    }
+    const files = await completeSets(client, target, transferId, sets.map((s) => s.ChunkSetId), signal);
     done(80);
 
     begin(4, `Importing into ${database} on ${target.name}.`);
@@ -172,12 +219,95 @@ export async function runTransfer(
     done(100);
     cb.onLog('Transfer complete.', 'success');
     return true;
-  } catch (e) {
-    cb.onStepChange(step, 'fail');
-    if (signal?.aborted) cb.onLog('Cancelled.', 'warning');
-    else cb.onLog(e instanceof Error ? e.message : String(e), 'error');
-    return false;
-  } finally {
-    await cleanup(client, [source, target], transferId, cb);
-  }
+  });
+}
+
+export async function runExport(
+  client: SdkClient,
+  opts: { source: Env; dataTrees: DataTree[] },
+  cb: RunCallbacks,
+  signal?: AbortSignal,
+): Promise<Blob | null> {
+  const { source, dataTrees } = opts;
+  const transferId = crypto.randomUUID();
+  return runSteps<Blob | null>(client, [source], transferId, cb, signal, null, async ({ begin, done }) => {
+    begin(0, `Creating transfer job on ${source.name}.`);
+    signal?.throwIfAborted();
+    await call(client, source, 'mutate', CT + 'createContentTransfer', {
+      body: { transferId, configuration: { dataTrees } },
+    });
+    done(10);
+
+    begin(1, `Waiting for ${source.name} to build the package.`);
+    const sets = await waitForPackage(client, source, transferId, signal);
+    done(30);
+
+    begin(2, `Downloading the package from ${source.name}.`);
+    const total = sets.reduce((n, s) => n + s.ChunkCount, 0);
+    const chunks: ChunkData[] = [];
+    for (const [chunkSet, set] of sets.entries()) {
+      for (let index = 0; index < set.ChunkCount; index++) {
+        signal?.throwIfAborted();
+        cb.onLog(`Downloading chunk ${chunks.length + 1} / ${total}`, 'info');
+        const { blob, isMedia } = await fetchChunk(client, source, transferId, set.ChunkSetId, index, signal);
+        chunks.push({ chunkSet, index, isMedia, data: blob });
+        cb.onProgress(Math.round(30 + (65 * chunks.length) / total));
+      }
+    }
+    const items: PackageItem[] = [];
+    for (const t of dataTrees) {
+      signal?.throwIfAborted();
+      const id = (await fetchItemId(client, source, t.itemPath)) ?? '';
+      items.push({ path: t.itemPath, id, scope: t.scope, mergeStrategy: t.mergeStrategy });
+    }
+    const zip = await buildPackage(chunks, items);
+    signal?.throwIfAborted();
+    done(100);
+    cb.onLog('Export complete.', 'success');
+    return zip;
+  });
+}
+
+export async function runImport(
+  client: SdkClient,
+  opts: { target: Env; database: string; parts: PackagePart[] },
+  cb: RunCallbacks,
+  signal?: AbortSignal,
+): Promise<boolean> {
+  const { target, database, parts } = opts;
+  const transferId = crypto.randomUUID();
+  const chunksetIds = parts.map(() => crypto.randomUUID());
+  return runSteps(client, [target], transferId, cb, signal, false, async ({ begin, done }) => {
+    begin(0, `Uploading the package to ${target.name}.`);
+    const total = parts.reduce((n, p) => n + p.chunks.length, 0);
+    let sent = 0;
+    for (const [i, part] of parts.entries()) {
+      for (const [chunkId, { data, isMedia }] of part.chunks.entries()) {
+        signal?.throwIfAborted();
+        cb.onLog(`Uploading chunk ${sent + 1} / ${total}`, 'info');
+        await call(client, target, 'mutate', CT + 'saveChunk', {
+          path: { transferId, chunksetId: chunksetIds[i], chunkId },
+          query: { isMedia },
+          body: data,
+        });
+        sent++;
+        cb.onProgress(Math.round((50 * sent) / total));
+      }
+    }
+    done(50);
+
+    begin(1, `Assembling the package on ${target.name}.`);
+    const files = await completeSets(client, target, transferId, chunksetIds, signal);
+    done(65);
+
+    begin(2, `Importing into ${database} on ${target.name}.`);
+    await consumeFiles(client, target, database, files, signal);
+    done(80);
+
+    begin(3, `Verifying the import on ${target.name}.`);
+    await verifyFiles(client, target, files, cb, signal);
+    done(100);
+    cb.onLog('Import complete.', 'success');
+    return true;
+  });
 }

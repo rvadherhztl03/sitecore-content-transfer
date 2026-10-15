@@ -1,7 +1,17 @@
 // @vitest-environment node
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { beforeEach, describe, expect, it } from 'vitest';
-import { TIMING, runTransfer, type DataTree, type LogType, type RunCallbacks, type StepStatus } from '@/lib/transfer';
+import { readPackage, type PackagePart } from '@/lib/package';
+import {
+  TIMING,
+  runExport,
+  runImport,
+  runTransfer,
+  type DataTree,
+  type LogType,
+  type RunCallbacks,
+  type StepStatus,
+} from '@/lib/transfer';
 import { fakeClient, type FakeReply } from '@/test/fakeClient';
 
 const DEV = { id: 'r1', name: 'Dev', contextId: 'ctx-dev' };
@@ -211,10 +221,143 @@ describe('runTransfer', () => {
     expect(ofKey(calls, 'deleteContentTransfer').map(ctxOf)).toEqual(['ctx-dev', 'ctx-qa']);
   });
 
+  it('cancels mid-copy without logging a chunk that never starts', async () => {
+    const ctrl = new AbortController();
+    const { client, calls } = fakeClient(
+      happyHandlers({
+        saveChunk: () => {
+          ctrl.abort();
+          return {};
+        },
+      }),
+    );
+    const r = recorder();
+    expect(await runTransfer(client, OPTS, r.cb, ctrl.signal)).toBe(false);
+    expect(ofKey(calls, 'getChunk')).toHaveLength(1);
+    expect(ofKey(calls, 'saveChunk')).toHaveLength(1);
+    expect(r.logs.filter(([m]) => /^Copying chunk \d/.test(m))).toHaveLength(1);
+    expect(r.logs).toContainEqual(['Cancelled.', 'warning']);
+  });
+
   it('treats a cleanup failure as a warning', async () => {
     const { client } = fakeClient(happyHandlers({ deleteContentTransfer: () => ({ status: 500 }) }));
     const r = recorder();
     expect(await runTransfer(client, OPTS, r.cb)).toBe(true);
     expect(r.logs.some(([m, t]) => t === 'warning' && m.startsWith('Cleanup failed'))).toBe(true);
+  });
+});
+
+describe('runExport', () => {
+  const GQL = 'xmc.authoring.graphql';
+  const withGraphql = (overrides: Record<string, Handler> = {}) => ({
+    ...happyHandlers(overrides),
+    [GQL]: () => ({ data: { data: { item: { itemId: '{ID}' } } } }),
+  });
+
+  it('exports a zip with metadata and every chunk', async () => {
+    const { client, calls } = fakeClient(withGraphql());
+    const r = recorder();
+    const zip = await runExport(client, { source: DEV, dataTrees: TREES }, r.cb);
+    expect(zip).toBeInstanceOf(Blob);
+
+    const { items, parts } = await readPackage(new File([zip!], 'e.zip'));
+    expect(items[0].id).toBe('{ID}');
+    expect(items[0].path).toBe(TREES[0].itemPath);
+    const chunks = parts.flatMap((p) => p.chunks);
+    expect(await Promise.all(chunks.map((c) => c.data.text()))).toEqual(['c0', 'c1']);
+    expect(chunks.map((c) => c.isMedia)).toEqual([false, true]);
+
+    expect(ofKey(calls, 'saveChunk')).toHaveLength(0);
+    expect(ofKey(calls, 'consumeFile')).toHaveLength(0);
+    expect(ofKey(calls, 'deleteContentTransfer').map(ctxOf)).toEqual(['ctx-dev']);
+    for (const c of calls) expect(ctxOf(c)).toBe('ctx-dev');
+    expect(r.progress.at(-1)).toBe(100);
+    for (let i = 0; i < 3; i++) expect(r.steps).toContainEqual([i, 'done']);
+  });
+
+  it('export returns null and cleans up on failure', async () => {
+    const { client, calls } = fakeClient(withGraphql({ getContentTransferStatus: () => ({ data: { State: 'Failed' } }) }));
+    const r = recorder();
+    expect(await runExport(client, { source: DEV, dataTrees: TREES }, r.cb)).toBeNull();
+    expect(r.steps).toContainEqual([1, 'fail']);
+    expect(ofKey(calls, 'deleteContentTransfer').map(ctxOf)).toEqual(['ctx-dev']);
+  });
+});
+
+describe('runImport', () => {
+  const PARTS: PackagePart[] = [
+    {
+      chunks: [
+        { data: new Blob(['a0']), isMedia: false },
+        { data: new Blob(['a1']), isMedia: true },
+      ],
+    },
+    { chunks: [{ data: new Blob(['b0']), isMedia: false }] },
+  ];
+  const IMPORT = { target: QA, database: 'master', parts: PARTS };
+
+  it('imports each part into the target', async () => {
+    const { client, calls } = fakeClient(happyHandlers());
+    const r = recorder();
+    expect(await runImport(client, IMPORT, r.cb)).toBe(true);
+
+    for (const c of calls) expect(ctxOf(c)).toBe('ctx-qa');
+    const seq = calls.map((c) => short(c.key)).filter((k, i, a) => i === 0 || k !== a[i - 1]);
+    expect(seq).toEqual(['saveChunk', 'completeChunkSetTransfer', 'consumeFile', 'getBlobState', 'deleteContentTransfer']);
+
+    const saves = ofKey(calls, 'saveChunk');
+    const { transferId } = saves[0].params.path;
+    for (const c of calls) expect(c.params.path?.transferId ?? transferId).toBe(transferId);
+    expect(saves.map((c) => c.params.path.chunkId)).toEqual([0, 1, 0]);
+    const [setA, , setB] = saves.map((c) => c.params.path.chunksetId);
+    expect(saves[1].params.path.chunksetId).toBe(setA);
+    expect(setB).not.toBe(setA);
+    expect(saves.map((c) => c.params.query.isMedia)).toEqual([false, true, false]);
+    expect(await Promise.all(saves.map((c) => c.params.body.text()))).toEqual(['a0', 'a1', 'b0']);
+
+    expect(ofKey(calls, 'completeChunkSetTransfer').map((c) => c.params.path.chunksetId)).toEqual([setA, setB]);
+    expect(ofKey(calls, 'consumeFile').map((c) => c.params.query)).toEqual([
+      { databaseName: 'master', fileName: `f-${setA}.raif`, sitecoreContextId: 'ctx-qa' },
+      { databaseName: 'master', fileName: `f-${setB}.raif`, sitecoreContextId: 'ctx-qa' },
+    ]);
+    expect(ofKey(calls, 'deleteContentTransfer')).toHaveLength(1);
+    expect(r.progress.at(-1)).toBe(100);
+    for (let i = 0; i < 4; i++) expect(r.steps).toContainEqual([i, 'done']);
+  });
+
+  it('import shows the access message on 403 and cleans up', async () => {
+    const { client, calls } = fakeClient(happyHandlers({ saveChunk: () => ({ status: 403 }) }));
+    const r = recorder();
+    expect(await runImport(client, IMPORT, r.cb)).toBe(false);
+    expect(r.logs.map(([m]) => m).join('\n')).toContain(
+      "The app can't access QA. Grant it in Cloud Portal → app → environment access.",
+    );
+    expect(ofKey(calls, 'deleteContentTransfer').map(ctxOf)).toEqual(['ctx-qa']);
+  });
+
+  it('fails when the target returns no file name', async () => {
+    const { client, calls } = fakeClient(happyHandlers({ completeChunkSetTransfer: () => ({ data: {} }) }));
+    const r = recorder();
+    expect(await runImport(client, IMPORT, r.cb)).toBe(false);
+    expect(r.logs.map(([m]) => m).join('\n')).toMatch(/^QA returned no file name for chunk set .+\.$/m);
+    expect(ofKey(calls, 'consumeFile')).toHaveLength(0);
+  });
+
+  it('cancels before uploading the next chunk', async () => {
+    const ctrl = new AbortController();
+    const { client, calls } = fakeClient(
+      happyHandlers({
+        saveChunk: () => {
+          ctrl.abort();
+          return {};
+        },
+      }),
+    );
+    const r = recorder();
+    expect(await runImport(client, IMPORT, r.cb, ctrl.signal)).toBe(false);
+    expect(ofKey(calls, 'saveChunk')).toHaveLength(1);
+    expect(r.logs.filter(([m]) => /^Uploading chunk \d/.test(m))).toHaveLength(1);
+    expect(r.logs).toContainEqual(['Cancelled.', 'warning']);
+    expect(ofKey(calls, 'deleteContentTransfer').map(ctxOf)).toEqual(['ctx-qa']);
   });
 });
