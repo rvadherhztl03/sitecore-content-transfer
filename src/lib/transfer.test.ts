@@ -142,7 +142,7 @@ describe('runTransfer', () => {
       fileName: 'blob://f-cs1.raif',
       sitecoreContextId: 'ctx-qa',
     });
-    expect(ofKey(calls, 'getBlobState')[0].params.query).toEqual({ fileName: 'blob://f-cs1.raif', sitecoreContextId: 'ctx-qa' });
+    expect(ofKey(calls, 'getBlobState')[0].params.query).toEqual({ fileName: 'f-cs1.raif', sitecoreContextId: 'ctx-qa' });
 
     expect(r.progress.at(-1)).toBe(100);
     for (let i = 0; i < 6; i++) expect(r.steps).toContainEqual([i, 'done']);
@@ -168,8 +168,8 @@ describe('runTransfer', () => {
     expect(ofKey(calls, 'completeChunkSetTransfer').map((c) => c.params.path.chunksetId)).toEqual(['cs1', 'cs2']);
     expect(ofKey(calls, 'consumeFile').map((c) => c.params.query.fileName)).toEqual(['blob://f-cs1.raif', 'blob://f-cs2.raif']);
     expect([...new Set(ofKey(calls, 'getBlobState').map((c) => c.params.query.fileName))]).toEqual([
-      'blob://f-cs1.raif',
-      'blob://f-cs2.raif',
+      'f-cs1.raif',
+      'f-cs2.raif',
     ]);
   });
 
@@ -180,6 +180,15 @@ describe('runTransfer', () => {
     expect(await runTransfer(client, OPTS, recorder().cb)).toBe(true);
     expect(ofKey(calls, 'consumeFile')[0].params.query.fileName).toBe('file://pkg.raif');
     expect(ofKey(calls, 'getBlobState')[0].params.query.fileName).toBe('file://pkg.raif');
+  });
+
+  it('ends the import on the Item Transfer API terminal states', async () => {
+    for (const BlobState of ['Error', 'Discarded']) {
+      const { client } = fakeClient(happyHandlers({ getBlobState: () => ({ data: { BlobState, Error: 'boom' } }) }));
+      const r = recorder();
+      expect(await runTransfer(client, OPTS, r.cb)).toBe(false);
+      expect(r.logs.map(([m]) => m).join('\n')).toContain(`Import failed on QA: ${BlobState} (boom)`);
+    }
   });
 
   it('reports the chunk and item counts once the package is ready', async () => {

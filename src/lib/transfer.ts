@@ -21,7 +21,7 @@ export const IMPORT_STEPS = ['Upload package', 'Assemble on target', 'Import int
 export const IMPORT_STEP = { transfer: 4, import: 2 } as const;
 export const TIMING = { pollMs: 3000, statusTimeoutMs: 600_000, verifyTimeoutMs: 300_000 };
 export const BLOB_SUCCESS = ['OK', 'Transferred', 'Consumed'];
-export const BLOB_FAILURE = ['Error', 'Failed'];
+export const BLOB_FAILURE = ['Error', 'Failed', 'Discarded'];
 
 const CT = 'xmc.contentTransfer.';
 
@@ -76,6 +76,10 @@ export async function waitForPackage(client: SdkClient, env: Env, transferId: st
   }
 }
 
+// ConsumeFile wants a location with a scheme, and the assembled package lives in blob storage, so a bare
+// `ContentTransferFileName` becomes `blob://<name>`. GetBlobState looks the blob up by its plain name.
+const packageLocation = (name: string) => (/^[a-z][a-z0-9+.-]*:\/\//i.test(name) ? name : `blob://${name}`);
+
 export async function consumeFiles(
   client: SdkClient,
   env: Env,
@@ -86,7 +90,7 @@ export async function consumeFiles(
 ) {
   for (const fileName of files) {
     signal?.throwIfAborted();
-    await call(client, env, 'query', CT + 'consumeFile', { query: { databaseName: database, fileName } });
+    await call(client, env, 'query', CT + 'consumeFile', { query: { databaseName: database, fileName: packageLocation(fileName) } });
     onAccepted?.();
   }
 }
@@ -116,7 +120,10 @@ export async function verifyFiles(client: SdkClient, env: Env, files: string[], 
       if (status === 'TransferredWithErrors') {
         throw new Error(`${env.name} imported the package with errors (TransferredWithErrors). Check the item transfer details on ${env.name}.`);
       }
-      if (BLOB_FAILURE.includes(status)) throw new Error(`Import failed on ${env.name}: ${status}`);
+      if (BLOB_FAILURE.includes(status)) {
+        const detail = (data as { Error?: unknown } | undefined)?.Error;
+        throw new Error(`Import failed on ${env.name}: ${status}${typeof detail === 'string' && detail ? ` (${detail.slice(0, 300)})` : ''}`);
+      }
       if (Date.now() >= deadline) throw new Error('Timed out waiting for the import to finish.');
       await sleep(TIMING.pollMs, signal);
     }
@@ -190,10 +197,6 @@ async function fetchChunk(
   return { blob: data, isMedia: parseIsMedia(response?.headers.get('content-disposition') ?? null) };
 }
 
-// The Items API (ConsumeFile, GetBlobState) wants a location with a scheme, and the assembled package
-// lives in blob storage, so a bare `ContentTransferFileName` becomes `blob://<name>`.
-const packageLocation = (name: string) => (/^[a-z][a-z0-9+.-]*:\/\//i.test(name) ? name : `blob://${name}`);
-
 async function completeSets(client: SdkClient, env: Env, transferId: string, chunksetIds: string[], signal?: AbortSignal) {
   const files: string[] = [];
   for (const chunksetId of chunksetIds) {
@@ -202,7 +205,7 @@ async function completeSets(client: SdkClient, env: Env, transferId: string, chu
       client, env, 'mutate', CT + 'completeChunkSetTransfer', { path: { transferId, chunksetId } },
     );
     if (!data?.ContentTransferFileName) throw new Error(`${env.name} returned no file name for chunk set ${chunksetId}.`);
-    files.push(packageLocation(data.ContentTransferFileName));
+    files.push(data.ContentTransferFileName);
   }
   return files;
 }
