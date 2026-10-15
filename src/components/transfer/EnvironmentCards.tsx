@@ -32,14 +32,14 @@ export function EnvironmentCards({ legend, name, envs, value, disabledId, disabl
       <legend className="text-muted-foreground px-1.5 text-sm font-semibold tracking-wider uppercase">{legend}</legend>
       {envs.map((env) => {
         const disabled = env.id === disabledId;
-        const selected = env.id === value;
+        const selected = !disabled && env.id === value;
         return (
           <label
             key={env.id}
             className={cn(
               'has-[:focus-visible]:ring-primary/50 flex items-center gap-3 rounded-xl border px-4 py-3.5 has-[:focus-visible]:ring-[3px]',
-              disabled ? 'cursor-not-allowed opacity-55' : 'hover:border-primary-300 cursor-pointer',
-              selected ? 'border-primary bg-primary-50 border-[1.5px]' : 'bg-white',
+              disabled ? 'cursor-not-allowed opacity-55' : 'cursor-pointer',
+              selected ? 'border-primary bg-primary-50 border-[1.5px]' : cn('bg-white', !disabled && 'hover:border-primary-300'),
             )}
           >
             <input

@@ -7,12 +7,12 @@ type Props = { steps: { label: string; hint: string }[]; current: number; locked
 
 const ITEM = 'flex min-w-0 items-center gap-3 rounded-xl border px-3.5 py-3 text-left';
 
-function Item({ badge, label, hint, hintClass }: { badge: ReactNode; label: string; hint: string; hintClass: string }) {
+function Item({ badge, label, labelClass, hint, hintClass }: { badge: ReactNode; label: string; labelClass: string; hint: string; hintClass: string }) {
   return (
     <>
       {badge}
       <span className="flex min-w-0 flex-col gap-px">
-        <span className="text-md break-words">{label}</span>
+        <span className={cn('text-md break-words', labelClass)}>{label}</span>
         <span className={cn('text-xs break-words', hintClass)}>{hint}</span>
       </span>
     </>
@@ -32,7 +32,12 @@ export function Stepper({ steps, current, locked, onGo }: Props) {
       <ol className="mx-auto flex max-w-[1120px] flex-wrap gap-3">
         {steps.map((s, i) => {
           if (i < current) {
-            const body = <Item badge={DONE_BADGE} label={s.label} hint={s.hint} hintClass="text-success-600" />;
+            const body = (
+              <>
+                <span className="sr-only">Completed: </span>
+                <Item badge={DONE_BADGE} label={s.label} labelClass="font-semibold" hint={s.hint} hintClass="text-success-600" />
+              </>
+            );
             return (
               <li key={s.label} className="flex flex-[1_1_200px]">
                 {locked ? (
@@ -68,6 +73,7 @@ export function Stepper({ steps, current, locked, onGo }: Props) {
                   </span>
                 }
                 label={s.label}
+                labelClass={isCurrent ? 'font-semibold' : 'text-neutral-fg font-medium'}
                 hint={s.hint}
                 hintClass={isCurrent ? 'text-primary-fg' : 'text-muted-foreground'}
               />

@@ -12,11 +12,11 @@ const PROD: Env = { id: 'prod', name: 'Acme · Production', contextId: 'c3', ten
 const PLAIN: Env = { id: 'sbx', name: 'Sandbox', contextId: 'c4' };
 
 describe('AppHeader', () => {
-  it('calls onHome from the logo button', () => {
+  it('calls onHome from the logo and title button', () => {
     const onHome = vi.fn();
     render(<AppHeader onHome={onHome} />);
     expect(screen.getByText('Content Transfer')).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Home' }));
+    fireEvent.click(screen.getByRole('button', { name: /Content Transfer/ }));
     expect(onHome).toHaveBeenCalledTimes(1);
   });
 
@@ -87,6 +87,21 @@ describe('Stepper', () => {
     expect(screen.getByRole('navigation', { name: 'Transfer steps' })).toBeInTheDocument();
   });
 
+  it('emphasises done and current labels and mutes future ones', () => {
+    render(<Stepper steps={STEPS} current={1} onGo={vi.fn()} />);
+    expect(screen.getByText('Route')).toHaveClass('font-semibold');
+    expect(screen.getByText('Content')).toHaveClass('font-semibold');
+    expect(screen.getByText('Review')).toHaveClass('font-medium', 'text-neutral-fg');
+  });
+
+  it('announces a done step as completed, as a button and when locked', () => {
+    const { unmount } = render(<Stepper steps={STEPS} current={1} onGo={vi.fn()} />);
+    expect(screen.getByRole('button', { name: /^Completed:\s*Route/ })).toBeInTheDocument();
+    unmount();
+    render(<Stepper steps={STEPS} current={1} locked onGo={vi.fn()} />);
+    expect(screen.getByText('Completed:', { exact: false })).toHaveClass('sr-only');
+  });
+
   it('renders no step buttons while locked', () => {
     render(<Stepper steps={STEPS} current={2} locked onGo={vi.fn()} />);
     expect(screen.queryByRole('button')).not.toBeInTheDocument();
@@ -109,6 +124,18 @@ describe('EnvironmentCards', () => {
     expect(screen.getByRole('radio', { name: /Acme · Development/ })).toBeChecked();
     fireEvent.click(screen.getByRole('radio', { name: /Acme · Production/ }));
     expect(onChange).toHaveBeenCalledWith('prod');
+  });
+
+  it('shows the badge for each environment kind, including Production', () => {
+    setup();
+    expect(screen.getByText('Production')).toBeInTheDocument();
+    expect(screen.getByText('Test')).toBeInTheDocument();
+    expect(screen.getByText('Dev')).toBeInTheDocument();
+  });
+
+  it('never marks the disabled environment as selected', () => {
+    setup({ value: 'dev', disabledId: 'dev', disabledReason: 'Already the source' });
+    expect(screen.getAllByRole('radio').filter((r) => (r as HTMLInputElement).checked)).toHaveLength(0);
   });
 
   it('disables the excluded environment and shows the reason instead of its tenant', () => {
@@ -164,5 +191,46 @@ describe('Segmented', () => {
     render(<Segmented label="Database" value="master" options={OPTIONS} onChange={onChange} size="sm" />);
     fireEvent.click(screen.getByRole('radio', { name: 'web' }));
     expect(onChange).toHaveBeenCalledWith('web');
+  });
+
+  it('disables every option when disabled', () => {
+    const onChange = vi.fn();
+    render(<Segmented label="Database" value="master" options={OPTIONS} onChange={onChange} disabled />);
+    const radios = screen.getAllByRole('radio');
+    radios.forEach((r) => expect(r).toBeDisabled());
+    fireEvent.click(radios[1]);
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it('makes only the checked option a tab stop', () => {
+    render(<Segmented label="Database" value="web" options={OPTIONS} onChange={vi.fn()} />);
+    expect(screen.getByRole('radio', { name: 'web' })).toHaveAttribute('tabindex', '0');
+    expect(screen.getByRole('radio', { name: 'master' })).toHaveAttribute('tabindex', '-1');
+  });
+
+  it('moves selection and focus with the arrow keys, wrapping at both ends', () => {
+    const onChange = vi.fn();
+    render(<Segmented label="Database" value="master" options={OPTIONS} onChange={onChange} />);
+    const master = screen.getByRole('radio', { name: 'master' });
+    const web = screen.getByRole('radio', { name: 'web' });
+    master.focus();
+    fireEvent.keyDown(master, { key: 'ArrowRight' });
+    expect(onChange).toHaveBeenLastCalledWith('web');
+    expect(web).toHaveFocus();
+    fireEvent.keyDown(web, { key: 'ArrowDown' });
+    expect(onChange).toHaveBeenLastCalledWith('master');
+    expect(master).toHaveFocus();
+    fireEvent.keyDown(master, { key: 'ArrowLeft' });
+    expect(onChange).toHaveBeenLastCalledWith('web');
+    fireEvent.keyDown(web, { key: 'ArrowUp' });
+    expect(onChange).toHaveBeenLastCalledWith('master');
+    expect(onChange).toHaveBeenCalledTimes(4);
+  });
+
+  it('ignores other keys', () => {
+    const onChange = vi.fn();
+    render(<Segmented label="Database" value="master" options={OPTIONS} onChange={onChange} />);
+    fireEvent.keyDown(screen.getByRole('radio', { name: 'master' }), { key: 'Tab' });
+    expect(onChange).not.toHaveBeenCalled();
   });
 });

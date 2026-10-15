@@ -11,13 +11,14 @@ export function AppHeader({ crumb, envCount, onHome, onCancel }: HeaderProps) {
       <div className="flex min-w-0 flex-wrap items-center gap-3">
         <button
           type="button"
-          aria-label="Home"
           onClick={onHome}
-          className="bg-primary text-inverse-text focus-visible:ring-primary/50 grid size-9 shrink-0 cursor-pointer place-items-center rounded-lg outline-none focus-visible:ring-[3px]"
+          className="focus-visible:ring-primary/50 flex cursor-pointer items-center gap-3 rounded-lg outline-none focus-visible:ring-[3px] pointer-coarse:min-h-11"
         >
-          <Icon path={mdiSwapHorizontal} className="size-5" aria-hidden="true" />
+          <span className="bg-primary text-inverse-text grid size-9 shrink-0 place-items-center rounded-lg">
+            <Icon path={mdiSwapHorizontal} className="size-5" aria-hidden="true" />
+          </span>
+          <span className="text-lg font-semibold">Content Transfer</span>
         </button>
-        <span className="text-lg font-semibold">Content Transfer</span>
         {crumb && (
           <>
             <span aria-hidden="true" className="text-blackAlpha-300">
@@ -36,7 +37,7 @@ export function AppHeader({ crumb, envCount, onHome, onCancel }: HeaderProps) {
             </span>
           )}
           {onCancel && (
-            <Button type="button" variant="outline" size="sm" className="h-9 rounded-lg px-3.5" onClick={onCancel}>
+            <Button type="button" variant="outline" size="sm" className="h-9 rounded-lg px-3.5 pointer-coarse:h-11" onClick={onCancel}>
               Cancel
             </Button>
           )}
