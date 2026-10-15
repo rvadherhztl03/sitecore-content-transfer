@@ -138,7 +138,7 @@ export function SelectionQueue({ trees, onChange, disabled }: Props) {
                   <div className="text-muted-foreground flex max-w-full min-w-0 flex-wrap items-center gap-x-2 gap-y-1.5 text-sm">
                     <span className="shrink-0">If it exists</span>
                     <Select value={t.mergeStrategy} disabled={disabled} onValueChange={(v) => update(i, { mergeStrategy: v as MergeStrategy })}>
-                      <SelectTrigger aria-label={`If ${t.itemPath} exists`} className="max-w-full min-w-0 rounded-lg text-sm data-[size=default]:pointer-coarse:h-11">
+                      <SelectTrigger aria-label={`If ${t.itemPath} exists`} className="max-w-full min-w-0 rounded-lg text-sm data-[size=default]:pointer-coarse:h-11 *:data-[slot=select-value]:block *:data-[slot=select-value]:truncate">
                         <SelectValue>{labelOf(MERGES, t.mergeStrategy)}</SelectValue>
                       </SelectTrigger>
                       <SelectContent>

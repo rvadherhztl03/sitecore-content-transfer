@@ -65,8 +65,17 @@ describe('ReviewStep', () => {
     expect(within(route).getByText('Acme · Development')).toBeInTheDocument();
     expect(within(route).getByText('To')).toBeInTheDocument();
     expect(within(route).getByText('Acme · QA')).toBeInTheDocument();
-    expect(within(route).getByText(/acme-dev · master/)).toBeInTheDocument();
+    expect(within(route).getByText(/acme-dev · reads from master/)).toBeInTheDocument();
     expect(within(route).getByText(/acme-qa · writes to master/)).toBeInTheDocument();
+  });
+
+  it('reads from master on the From card and names the chosen database only on the To card', () => {
+    setup({ database: 'web' });
+    const route = screen.getByRole('region', { name: 'Route' });
+    const card = (label: string) => within(route).getByText(label).closest('div')!;
+    expect(card('From')).toHaveTextContent('acme-dev · reads from master');
+    expect(card('From')).not.toHaveTextContent('web');
+    expect(card('To')).toHaveTextContent('acme-qa · writes to web');
   });
 
   it('lists each path with its name, long labels and a column named for the target', () => {

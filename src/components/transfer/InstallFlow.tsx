@@ -94,7 +94,7 @@ export function InstallFlow({ client, envs, onHome }: Props) {
         </div>
       </main>
       {run ? (
-        <main ref={runner.headingRef} className="flex flex-1 flex-col [&_h1]:outline-none">
+        <div ref={runner.headingRef} className="flex flex-1 flex-col [&_h1]:outline-none">
           <RunView
             kind="install"
             target={run.target}
@@ -110,7 +110,7 @@ export function InstallFlow({ client, envs, onHome }: Props) {
             onAgain={again}
             onHome={onHome}
           />
-        </main>
+        </div>
       ) : (
         <ActionBar
           summary={

@@ -69,7 +69,10 @@ export function ActionBar({ summary, children }: { summary: ReactNode; children:
 export function PageHeading({ title, sub }: { title: string; sub?: string }) {
   return (
     <div className="flex flex-col gap-1.5">
-      <h1 className="text-[26px] leading-tight font-semibold tracking-tight">{title}</h1>
+      {/* Focusable by script only: Flow moves focus here when the step changes. */}
+      <h1 tabIndex={-1} className="text-[26px] leading-tight font-semibold tracking-tight outline-none">
+        {title}
+      </h1>
       {sub && <p className="text-muted-foreground text-[15px]">{sub}</p>}
     </div>
   );

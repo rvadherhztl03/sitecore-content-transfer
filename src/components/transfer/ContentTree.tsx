@@ -124,7 +124,7 @@ function Tree({ client, env, selectedPaths, onToggle, title }: Props) {
           <Alert variant="danger" className="py-2">
             <AlertDescription className="flex flex-wrap items-center gap-x-2">
               <span className="min-w-0 break-words">{entry.error || "Couldn't load items."}</span>
-              <Button type="button" variant="link" size="xs" onClick={() => void load(path)}>
+              <Button type="button" variant="link" size="xs" className="pointer-coarse:h-11" onClick={() => void load(path)}>
                 Retry
               </Button>
             </AlertDescription>

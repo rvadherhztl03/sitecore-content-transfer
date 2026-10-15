@@ -16,7 +16,6 @@ export interface RunCallbacks {
 }
 
 export const TRANSFER_STEPS = ['Create job', 'Wait for package', 'Copy chunks', 'Assemble on target', 'Import into database', 'Verify'];
-export const EXPORT_STEPS = ['Create job', 'Wait for package', 'Download & zip'];
 export const IMPORT_STEPS = ['Upload package', 'Assemble on target', 'Import into database', 'Verify'];
 // Index of 'Import into database' in each step list; from here on a failure or cancel may leave the target importing.
 export const IMPORT_STEP = { transfer: 4, import: 2 } as const;

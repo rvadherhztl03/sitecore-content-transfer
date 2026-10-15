@@ -387,6 +387,22 @@ describe('RunView layout', () => {
     expect(within(footer).getByRole('button', { name: 'Cancel transfer' })).toBeInTheDocument();
   });
 
+  it.each([
+    ['running', {}],
+    ['complete', { running: false, result: 'success' as const }],
+  ])('the full page %s is the main landmark, with the footer outside it', (_n, props) => {
+    setup(props);
+    const main = screen.getByRole('main');
+    expect(within(main).getByRole('heading', { level: 1 })).toBeInTheDocument();
+    expect(main.querySelector('footer')).toBeNull();
+    if (props.result !== 'success') expect(screen.getByRole('contentinfo').closest('main')).toBeNull();
+  });
+
+  it('compact leaves <main> to its host', () => {
+    setup({ compact: true });
+    expect(screen.queryByRole('main')).not.toBeInTheDocument();
+  });
+
   it('compact has no footer landmark; actions are inline', () => {
     const { onCancel, container } = setup({ compact: true });
     expect(screen.queryByRole('contentinfo')).not.toBeInTheDocument();

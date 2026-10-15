@@ -1,3 +1,4 @@
+import { ONE_ENV, cancelNote, treeWarning } from '@/components/transfer/copy';
 import { EnvBadge } from '@/components/transfer/EnvironmentCards';
 import { ProdConfirm, needsProdConfirm } from '@/components/transfer/ReviewStep';
 import { RunView } from '@/components/transfer/RunView';
@@ -18,7 +19,6 @@ import { useEnvironments } from '@/utils/hooks/useEnvironments';
 import { mdiArrowRight, mdiSwapHorizontal } from '@mdi/js';
 import { useId, useState, type ReactNode } from 'react';
 
-const ONE_ENV = 'Grant this app access to another environment in Cloud Portal to transfer between environments.';
 const NO_PAGE = 'Open a page in the Pages editor to send it.';
 // The Pages panel is about one page, so "item" becomes "page" here.
 const PANEL_MERGES = MERGES.map((m) => (m.value === 'OverrideExistingItem' ? { ...m, label: 'Replace this page only', long: 'Replace this page only' } : m));
@@ -242,13 +242,13 @@ export function PanelFlow({ client, pageName, pagePath }: Props) {
         {replacing && (
           <Alert variant="warning" role="note" className="border-warning-200 bg-warning-50 text-warning-700 items-start rounded-xl border px-4 py-3.5">
             <AlertDescription>
-              <strong className="font-semibold break-words">{`1 item replaces everything below it on ${target.name}.`}</strong>
+              <strong className="font-semibold break-words">{treeWarning(1, target.name)}</strong>
             </AlertDescription>
           </Alert>
         )}
         {needsProdConfirm(target) && <ProdConfirm target={target} checked={prodChecked} onChange={(v) => setProdFor(v ? target.id : null)} />}
         <p className="text-muted-foreground text-[13px] leading-normal">
-          {`Large trees can take a few minutes. You can cancel until the import into ${target.name} starts; after that the target finishes on its own.`}
+          {cancelNote(target.name)}
         </p>
       </div>
     );

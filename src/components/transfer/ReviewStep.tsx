@@ -1,3 +1,4 @@
+import { cancelNote, treeWarning } from '@/components/transfer/copy';
 import { EnvBadge } from '@/components/transfer/EnvironmentCards';
 import { PageHeading } from '@/components/transfer/Layout';
 import { Alert, AlertDescription } from '@/components/ui/alert';
@@ -96,7 +97,7 @@ export function ReviewStep({ mode, source, target, database, trees, prodChecked,
         aria-label="Route"
         className={cn('grid items-center gap-4 rounded-[14px] border bg-white p-5', to && 'sm:grid-cols-[1fr_auto_1fr]')}
       >
-        <RouteCard kind="from" env={source} detail={detail(source, database)} />
+        <RouteCard kind="from" env={source} detail={detail(source, 'reads from master')} />
         {to && (
           <>
             <Icon path={mdiArrowRight} className="text-primary size-7 shrink-0 justify-self-center rotate-90 sm:rotate-0" aria-hidden="true" />
@@ -109,9 +110,7 @@ export function ReviewStep({ mode, source, target, database, trees, prodChecked,
         <Alert variant="warning" role="note" className="border-warning-200 bg-warning-50 text-warning-700 items-start rounded-xl border px-4 py-3.5">
           <AlertDescription>
             <strong className="font-semibold break-words">
-              {replacing === 1
-                ? `1 item replaces everything below it on ${to.name}.`
-                : `${replacing} items replace everything below them on ${to.name}.`}
+              {treeWarning(replacing, to.name)}
             </strong>
           </AlertDescription>
         </Alert>
@@ -171,7 +170,7 @@ export function ReviewStep({ mode, source, target, database, trees, prodChecked,
 
       {to && (
         <p className="text-muted-foreground text-[13px] leading-normal">
-          {`Large trees can take a few minutes. You can cancel until the import into ${to.name} starts; after that the target finishes on its own.`}
+          {cancelNote(to.name)}
         </p>
       )}
     </div>

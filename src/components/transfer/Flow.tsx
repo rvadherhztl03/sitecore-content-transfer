@@ -13,7 +13,7 @@ import { mergeTrees, newTree } from '@/lib/queue';
 import type { Env, SdkClient } from '@/lib/sdk';
 import { IMPORT_STEP, runExport, runTransfer, type DataTree } from '@/lib/transfer';
 import { mdiArrowRight, mdiSwapHorizontal } from '@mdi/js';
-import { useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 
 type Mode = 'transfer' | 'export';
 type Props = { client: SdkClient; mode: Mode; envs: Env[]; onHome(): void };
@@ -63,6 +63,15 @@ export function Flow({ client, mode, envs, onHome }: Props) {
   // jump ahead to the remembered step. Render-phase reset; this pass still shows Route.
   if (!run && !routeOk && step) setStep(0);
   const current = run ? 3 : routeOk ? step : 0;
+
+  // Moving to another step puts focus on its heading. Not on first mount, and not into the run: useRun focuses its own.
+  const page = useRef<HTMLDivElement>(null);
+  const shown = useRef(current);
+  useEffect(() => {
+    if (shown.current === current) return;
+    shown.current = current;
+    if (!run) page.current?.querySelector<HTMLElement>('main h1')?.focus();
+  }, [current, run]);
 
   const go = (i: number) => {
     runner.reset();
@@ -115,7 +124,7 @@ export function Flow({ client, mode, envs, onHome }: Props) {
     // Export has no import phase; a transfer can be cancelled until the target starts importing.
     const cancellable = !transfer || runner.canCancelUntil(IMPORT_STEP.transfer);
     body = (
-      <main ref={runner.headingRef} className="flex flex-1 flex-col [&_h1]:outline-none">
+      <div ref={runner.headingRef} className="flex flex-1 flex-col [&_h1]:outline-none">
         <RunView
           kind={mode}
           source={run.source}
@@ -136,7 +145,7 @@ export function Flow({ client, mode, envs, onHome }: Props) {
           onHome={onHome}
           onDownload={zip ? () => download(zip.blob, zip.name) : undefined}
         />
-      </main>
+      </div>
     );
   } else if (current === 0) {
     body = (
@@ -282,7 +291,7 @@ export function Flow({ client, mode, envs, onHome }: Props) {
   }
 
   return (
-    <div className="bg-muted flex min-h-screen flex-col">
+    <div ref={page} className="bg-muted flex min-h-screen flex-col">
       {/* No way out through the header while running (leaving would abort the run), and no Cancel or step links
           once a run exists: RunView's own buttons lead on. */}
       <AppHeader crumb={transfer ? 'New transfer' : 'New export'} onHome={running ? undefined : onHome} onCancel={run ? undefined : onHome} />

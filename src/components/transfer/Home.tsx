@@ -1,3 +1,4 @@
+import { ONE_ENV } from '@/components/transfer/copy';
 import { EnvBadge } from '@/components/transfer/EnvironmentCards';
 import { BTN, MAIN } from '@/components/transfer/Layout';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
@@ -11,7 +12,6 @@ import { mdiDatabaseArrowRight, mdiDownload, mdiUpload } from '@mdi/js';
 export type Screen = 'transfer' | 'export' | 'install';
 type Props = { envs: Env[]; loading: boolean; error: string | null; onRetry(): void; onOpen(screen: Screen): void };
 
-const ONE_ENV = 'Grant this app access to another environment in Cloud Portal to transfer between environments.';
 const MISSING_ENV = 'Missing an environment? Grant this app access to it in Cloud Portal, then reopen the app.';
 
 const STEPS = [
@@ -120,7 +120,7 @@ export function Home({ envs, loading, error, onRetry, onOpen }: Props) {
                 <AlertTitle>Couldn&apos;t load environments</AlertTitle>
                 <AlertDescription className="flex flex-wrap items-center gap-x-2">
                   <span className="min-w-0 break-words">{error}</span>
-                  <Button type="button" variant="link" size="xs" onClick={onRetry}>
+                  <Button type="button" variant="link" size="xs" className="pointer-coarse:h-11" onClick={onRetry}>
                     Retry
                   </Button>
                 </AlertDescription>

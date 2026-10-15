@@ -33,7 +33,7 @@ export function useRun() {
   useEffect(() => () => abort.current?.abort(), []);
 
   // Announce completion or failure: move focus to the run heading.
-  const headingRef = useRef<HTMLElement>(null);
+  const headingRef = useRef<HTMLDivElement>(null);
   const result = run?.result;
   useEffect(() => {
     // The first one is the run's own: RunView puts its status card before the Steps and Activity headings.
@@ -69,7 +69,8 @@ export function useRun() {
         const ms = status === 'running' ? undefined : now - (stepStart[i] ?? now);
         update((r) => ({ steps: r.steps.map((s, j) => (j === i ? { ...s, status, ms } : s)) }));
       },
-      onInfo: (next) => update(() => ({ info: next })),
+      // 0 means the package didn't report a count (no TotalItemCount): leave the stat out rather than show "0".
+      onInfo: (next) => update(() => ({ info: { ...next, itemCount: next.itemCount || undefined } })),
     };
     let ok = false;
     try {

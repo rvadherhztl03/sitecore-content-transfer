@@ -152,6 +152,40 @@ describe('Flow', () => {
     });
   });
 
+  describe('Focus', () => {
+    const heading = (name: string) => screen.getByRole('heading', { level: 1, name });
+
+    it('stays where it is on first mount', () => {
+      setup();
+      expect(document.body).toHaveFocus();
+    });
+
+    it('moves to the new step heading on Continue, Review, Edit, Back and the step bar', async () => {
+      setup();
+      await toContent();
+      expect(heading('What should be copied?')).toHaveFocus();
+      addPath();
+      click('Review transfer');
+      expect(heading('Ready to transfer')).toHaveFocus();
+      click('Edit');
+      expect(heading('What should be copied?')).toHaveFocus();
+      click('Back');
+      expect(heading('Where is the content going?')).toHaveFocus();
+      await toContent();
+      fireEvent.click(within(stepBar()).getByRole('button', { name: /Route/ }));
+      expect(heading('Where is the content going?')).toHaveFocus();
+    });
+
+    it('does not steal focus when the queue changes within a step', async () => {
+      setup();
+      await toContent();
+      fireEvent.change(screen.getByLabelText('Add by path'), { target: { value: HOME } });
+      screen.getByLabelText('Add by path').focus();
+      click('Add');
+      expect(heading('What should be copied?')).not.toHaveFocus();
+    });
+  });
+
   describe('Content', () => {
     it('needs at least one item to continue', async () => {
       setup();
@@ -225,6 +259,28 @@ describe('Flow', () => {
       expect(radio('To', QA)).toBeChecked();
       await toContent();
       expect(screen.getByText('Pick items from the tree or paste a path.')).toBeInTheDocument();
+    });
+
+    it('keeps the run footer outside main so it stays a page landmark', async () => {
+      setup();
+      await toReview();
+      click('Start transfer');
+      const footer = screen.getByRole('contentinfo');
+      expect(footer.closest('main')).toBeNull();
+      expect(within(footer).getByRole('button', { name: 'Cancel transfer' })).toBeInTheDocument();
+      expect(screen.getByRole('main')).toContainElement(screen.getByRole('heading', { level: 1, name: 'Copying content to Acme · QA' }));
+      expect(await screen.findByText('Transfer complete')).toBeInTheDocument();
+    });
+
+    it('omits the Items stat when the package does not report a count', async () => {
+      setup({
+        overrides: { getContentTransferStatus: () => ({ data: { State: 'Completed', ChunkSetsMetadata: [{ ChunkSetId: 'cs1', ChunkCount: 2 }] } }) },
+      });
+      await toReview();
+      click('Start transfer');
+      expect(await screen.findByRole('heading', { level: 1, name: 'Transfer complete' })).toBeInTheDocument();
+      expect(screen.queryByText('Items')).not.toBeInTheDocument();
+      expect(screen.getByText('Chunks').parentElement).toHaveTextContent('Chunks2');
     });
 
     it('offers Cancel until the import starts', async () => {
@@ -319,7 +375,7 @@ describe('Flow', () => {
     // Durations of the finished and the failed step.
     expect(within(screen.getByRole('list', { name: 'Steps' })).getAllByText('0 s')).toHaveLength(2);
     click('Try again');
-    expect(screen.getByRole('heading', { level: 1, name: 'Ready to transfer' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { level: 1, name: 'Ready to transfer' })).toHaveFocus();
   });
 
   it('export success downloads once and Download package downloads again', async () => {

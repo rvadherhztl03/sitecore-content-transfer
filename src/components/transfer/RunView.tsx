@@ -185,8 +185,13 @@ export function RunView({
   const from = source?.name ?? 'the source';
   const to = target?.name ?? 'the target';
   const percent = Math.min(100, Math.max(0, Math.round(progress)));
-  const chunk = running ? [...logs].reverse().map((l) => CHUNK.exec(l.text)).find(Boolean) : null;
+  // The latest "<Verb> chunk N / M" line, found from the end.
+  let chunk: RegExpExecArray | null = null;
+  if (running) for (let i = logs.length - 1; i >= 0 && !chunk; i--) chunk = CHUNK.exec(logs[i].text);
   const H: ElementType = compact ? 'h2' : 'h1';
+  // The full page's body is the page's <main>; the footer below sits outside it so it stays a contentinfo landmark.
+  // Compact lives inside the panel's own <main>.
+  const Body: ElementType = compact ? 'div' : 'main';
 
   const copyButton = (
     <>
@@ -268,7 +273,7 @@ export function RunView({
       tookMs !== undefined && (['Took', formatDuration(tookMs)] as const),
     ].filter((x) => !!x);
     return (
-      <div className={cn('mx-auto flex w-full flex-col gap-6', compact ? 'gap-4' : 'max-w-[760px] flex-1 px-4 py-12 sm:px-8')}>
+      <Body className={cn('mx-auto flex w-full flex-col gap-6', compact ? 'gap-4' : 'max-w-[760px] flex-1 px-4 py-12 sm:px-8')}>
         <section className={cn(CARD, 'flex flex-col items-center gap-3.5 text-center', compact ? 'p-4' : 'p-8 sm:rounded-2xl')}>
           <span className="bg-success-50 text-success-500 grid size-16 place-items-center rounded-full">
             <Icon path={mdiCheck} className="size-8" aria-hidden="true" />
@@ -309,7 +314,7 @@ export function RunView({
             <div className="flex justify-end">{copyButton}</div>
           </div>
         </details>
-      </div>
+      </Body>
     );
   }
 
@@ -324,7 +329,7 @@ export function RunView({
 
   return (
     <div className={cn('flex flex-col', compact ? 'gap-4' : 'flex-1')}>
-      <div className={cn('flex w-full flex-col gap-5', !compact && 'mx-auto max-w-[1120px] flex-1 px-4 py-7 sm:px-8')}>
+      <Body className={cn('flex w-full flex-col gap-5', !compact && 'mx-auto max-w-[1120px] flex-1 px-4 py-7 sm:px-8')}>
         <section className={cn(CARD, 'flex flex-col gap-4', compact ? 'p-4' : 'p-5 sm:p-6')}>
           <div className="flex flex-wrap items-start justify-between gap-4">
             <div className="flex min-w-0 items-start gap-3.5">
@@ -383,7 +388,7 @@ export function RunView({
           {steplist}
           {activity}
         </div>
-      </div>
+      </Body>
       {!compact && (cancel || note) && <ActionBar summary={note ?? `Keep this tab open until the ${w.noun} finishes.`}>{cancel}</ActionBar>}
     </div>
   );
