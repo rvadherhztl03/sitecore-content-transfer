@@ -1,6 +1,5 @@
+import { Logo } from '@/components/transfer/Logo';
 import { Button } from '@/components/ui/button';
-import { Icon } from '@/lib/icon';
-import { mdiSwapHorizontal } from '@mdi/js';
 import type { ReactNode } from 'react';
 
 /** The page's content column, between the header and the footer. */
@@ -21,9 +20,7 @@ export function AppHeader({ crumb, envCount, onHome, onCancel }: HeaderProps) {
           disabled={!onHome}
           className="focus-visible:ring-primary/50 flex cursor-pointer items-center gap-3 rounded-lg outline-none focus-visible:ring-[3px] disabled:cursor-default pointer-coarse:min-h-11"
         >
-          <span className="bg-primary text-inverse-text grid size-9 shrink-0 place-items-center rounded-lg">
-            <Icon path={mdiSwapHorizontal} className="size-5" aria-hidden="true" />
-          </span>
+          <Logo className="size-9 shrink-0" />
           <span className="text-lg font-semibold">Content Transfer</span>
         </button>
         {crumb && (

@@ -1,5 +1,6 @@
 import { ONE_ENV, cancelNote, treeWarning } from '@/components/transfer/copy';
 import { EnvBadge } from '@/components/transfer/EnvironmentCards';
+import { Logo } from '@/components/transfer/Logo';
 import { PreflightNotes, PreflightStatus } from '@/components/transfer/Preflight';
 import { backupName, download } from '@/components/transfer/download';
 import { BackupChoice, ProdConfirm, PublishChoice, needsProdConfirm } from '@/components/transfer/ReviewStep';
@@ -21,7 +22,7 @@ import type { Env, SdkClient } from '@/lib/sdk';
 import { DATABASE, IMPORT_STEP, IMPORT_STEPS, TRANSFER_STEPS, backupTreesFor, runImport, runTransfer, type DataTree, type MergeStrategy, type Scope } from '@/lib/transfer';
 import { cn } from '@/lib/utils';
 import { useEnvironments } from '@/utils/hooks/useEnvironments';
-import { mdiArrowRight, mdiSwapHorizontal } from '@mdi/js';
+import { mdiArrowRight } from '@mdi/js';
 import { useState, type ReactNode } from 'react';
 
 const NO_PAGE = 'Open a page in the Pages editor to send it.';
@@ -393,9 +394,7 @@ export function PanelFlow({ client, pageName, pagePath }: Props) {
   return (
     <div className="flex min-h-screen flex-col bg-white">
       <header className="flex items-center gap-2.5 border-b px-[18px] py-4">
-        <span className="bg-primary text-inverse-text grid size-[30px] shrink-0 place-items-center rounded-lg">
-          <Icon path={mdiSwapHorizontal} className="size-[17px]" aria-hidden="true" />
-        </span>
+        <Logo className="size-[30px] shrink-0" />
         <h1 className="text-[15px] font-semibold">Send this page</h1>
       </header>
       <main className="flex flex-1 flex-col gap-[18px] p-[18px]">{body}</main>
