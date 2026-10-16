@@ -100,6 +100,14 @@ Older zips without `package-chunks.json` still import: `package.raif` is uploade
 
 ---
 
+## Version 1 (classic)
+
+The first version of the app still runs at **`/v1`**, unchanged: the credential-based dashboard (client ID, client secret and API host per environment, saved profiles, swap, demo mode) and its server routes under `/api/migrate/*`. Open it from **Open version 1 (classic)** at the bottom of Home; its **Back to version 2** link returns to the extension page you came from. It doesn't need the Marketplace SDK, so it also works in a normal browser tab, and you can register `/v1` as its own extension point in Cloud Portal.
+
+- Its server routes need the app hosted with a Node server; on a static-only deployment the page loads but transfers can't run.
+- Its styles (`src/app/v1/v1.css`) are scoped under `.v1-app`, so they don't touch version 2.
+- It doesn't get version 2's checks, backup, restore, compare or publish.
+
 ## Limitations
 
 - Same Sitecore Cloud organization only: the app sees only the environments it was granted.

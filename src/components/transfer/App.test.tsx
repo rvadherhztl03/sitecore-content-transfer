@@ -43,6 +43,13 @@ describe('App', () => {
     expect(screen.getByRole('button', { name: 'Content Transfer' })).toBeDisabled();
   });
 
+  it('links to version 1, which links back here', async () => {
+    setup();
+    await start();
+    // Outside Next's router there is no pathname, so the full-screen app is the way back.
+    expect(screen.getByRole('link', { name: 'Open version 1 (classic)' })).toHaveAttribute('href', '/v1?back=%2Ffullscreen-extension');
+  });
+
   it('shows skeletons and disables the actions while loading, including with no client yet', () => {
     render(<App client={null} />);
     expect(screen.getByRole('heading', { name: 'What would you like to do?' })).toBeInTheDocument();

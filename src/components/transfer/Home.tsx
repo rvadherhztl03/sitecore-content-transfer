@@ -8,6 +8,8 @@ import { Icon } from '@/lib/icon';
 import type { Env } from '@/lib/sdk';
 import { cn } from '@/lib/utils';
 import { mdiDatabaseArrowRight, mdiDownload, mdiUpload } from '@mdi/js';
+import Link from 'next/link';
+import { usePathname } from 'next/navigation';
 
 export type Screen = 'transfer' | 'export' | 'install';
 type Props = { envs: Env[]; loading: boolean; error: string | null; onRetry(): void; onOpen(screen: Screen): void };
@@ -47,6 +49,8 @@ const CARDS = [
 
 /** The start screen: what to do, and which environments the app can reach. */
 export function Home({ envs, loading, error, onRetry, onOpen }: Props) {
+  // The v1 page's "Back to version 2" returns to this extension page.
+  const pathname = usePathname();
   const ready = !loading && !error;
   // Export and install need one environment; a transfer needs two.
   const canOpen = (screen: Screen) => ready && envs.length >= (screen === 'transfer' ? 2 : 1);
@@ -173,6 +177,13 @@ export function Home({ envs, loading, error, onRetry, onOpen }: Props) {
           </ol>
         </div>
       </section>
+
+      <p className="text-muted-foreground text-[13px]">
+        Need the first version, with client credentials?{' '}
+        <Link href={`/v1?back=${encodeURIComponent(pathname ?? '/fullscreen-extension')}`} className="text-primary-600 font-medium underline-offset-2 hover:underline">
+          Open version 1 (classic)
+        </Link>
+      </p>
     </main>
   );
 }
