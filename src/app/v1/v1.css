@@ -1,0 +1,454 @@
+/*
+ * Version 1 (classic) styles, from main's globals.css, scoped under .v1-app so they cannot restyle version 2.
+ * Rules that were element-level (the reset, page body, headings, scrollbars) go in Tailwind's base layer: in
+ * Tailwind 3 they lost to utility classes, and Tailwind 4's layered utilities would otherwise lose to them.
+ * Class rules stay unlayered, so they still win over utilities as they did in Tailwind 3.
+ */
+@layer base {
+  
+  
+  .v1-app {
+    /* Light Theme (Default SaaS styling) */
+    --bg-app: #f8fafc;
+    --bg-panel: #ffffff;
+    --bg-input: #ffffff;
+    --border-panel: #e2e8f0;
+    
+    --text-main: #0f172a;
+    --text-muted: #64748b;
+    
+    --primary-color: #4f46e5;
+    --primary-rgb: 79, 70, 229;
+    --secondary-color: #475569;
+    
+    --bg-terminal: #0f172a;
+    --border-terminal: #1e293b;
+    --text-terminal: #f8fafc;
+    
+    --step-active-bg: #f5f3ff;
+    --step-active-border: #ddd6fe;
+    --step-completed-bg: #f0fdf4;
+    --step-completed-border: #bbf7d0;
+    
+    --success: #10b981;
+    --warning: #f59e0b;
+    --error: #ef4444;
+    --tree-row-bg: #f8fafc;
+  }
+  
+  
+  .v1-app, .v1-app * {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+  }
+  
+  
+  .v1-app {
+    background-color: var(--bg-app);
+    color: var(--text-main);
+    font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+    min-height: 100vh;
+    transition: background-color 0.2s, color 0.2s;
+  }
+  
+  
+  /* Header & Typography */
+  .v1-app h1, .v1-app h2, .v1-app h3, .v1-app h4 {
+    font-weight: 600;
+    color: var(--text-main);
+    letter-spacing: -0.02em;
+  }
+  
+  
+  /* Custom Scrollbars */
+  .v1-app ::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  
+  
+  .v1-app ::-webkit-scrollbar-track {
+    background: var(--bg-app);
+  }
+  
+  
+  .v1-app ::-webkit-scrollbar-thumb {
+    background: var(--border-panel);
+    border-radius: 9999px;
+  }
+  
+  
+  .v1-app ::-webkit-scrollbar-thumb:hover {
+    background: var(--text-muted);
+  }
+}
+
+
+
+body.dark-mode .v1-app {
+  /* Dark Theme SaaS styling */
+  --bg-app: #090d16;
+  --bg-panel: #111827;
+  --bg-input: #1f2937;
+  --border-panel: #374151;
+  
+  --text-main: #f9fafb;
+  --text-muted: #9ca3af;
+  
+  --primary-color: #6366f1;
+  --primary-rgb: 99, 102, 241;
+  --secondary-color: #9ca3af;
+  
+  --bg-terminal: #030712;
+  --border-terminal: #1f2937;
+  --text-terminal: #f3f4f6;
+  
+  --step-active-bg: rgba(99, 102, 241, 0.08);
+  --step-active-border: rgba(99, 102, 241, 0.3);
+  --step-completed-bg: rgba(16, 185, 129, 0.08);
+  --step-completed-border: rgba(16, 185, 129, 0.3);
+  
+  --tree-row-bg: rgba(31, 41, 55, 0.5);
+}
+
+
+/* Flat Premium Card Panels */
+.v1-app .glass-panel {
+  background: var(--bg-panel);
+  border: 1px solid var(--border-panel);
+  border-radius: 8px;
+  padding: 24px;
+  box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+  transition: background-color 0.2s, border-color 0.2s;
+}
+
+
+/* Form Layouts */
+.v1-app .form-group {
+  margin-bottom: 18px;
+}
+
+
+.v1-app .form-label {
+  display: block;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  margin-bottom: 6px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+
+.v1-app .form-input, .v1-app .form-select {
+  width: 100%;
+  padding: 10px 14px;
+  background-color: var(--bg-input);
+  border: 1px solid var(--border-panel);
+  border-radius: 6px;
+  color: var(--text-main);
+  font-size: 0.875rem;
+  transition: border-color 0.15s ease-in-out, box-shadow 0.15s ease-in-out, background-color 0.15s ease-in-out;
+}
+
+
+.v1-app .form-input:focus, .v1-app .form-select:focus {
+  outline: none;
+  border-color: var(--primary-color);
+  box-shadow: 0 0 0 2px rgba(var(--primary-rgb), 0.15);
+}
+
+
+/* Grid Layouts */
+.v1-app .grid-2 {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 20px;
+}
+
+
+@media (max-width: 992px) {
+
+  .v1-app .grid-2 {
+    grid-template-columns: 1fr;
+  }
+}
+
+
+/* Buttons */
+.v1-app .btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 10px 20px;
+  font-size: 0.875rem;
+  font-weight: 600;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: background-color 0.15s, border-color 0.15s, color 0.15s;
+}
+
+
+.v1-app .btn-primary {
+  background-color: var(--primary-color);
+  color: #ffffff;
+}
+
+
+.v1-app .btn-primary:hover {
+  filter: brightness(0.92);
+}
+
+
+.v1-app .btn-primary:disabled {
+  background-color: var(--border-panel);
+  color: var(--text-muted);
+  cursor: not-allowed;
+  filter: none;
+}
+
+
+.v1-app .btn-secondary {
+  background-color: transparent;
+  border-color: var(--border-panel);
+  color: var(--text-main);
+}
+
+
+.v1-app .btn-secondary:hover {
+  background-color: var(--bg-app);
+  border-color: var(--text-muted);
+}
+
+
+/* Modern Monospace Logs Terminal */
+.v1-app .terminal {
+  background-color: var(--bg-terminal);
+  border: 1px solid var(--border-terminal);
+  border-radius: 6px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.775rem;
+  padding: 16px;
+  height: 240px;
+  overflow-y: auto;
+  color: var(--text-terminal);
+  box-shadow: inset 0 2px 4px 0 rgba(0, 0, 0, 0.06);
+}
+
+
+.v1-app .terminal-line {
+  margin-bottom: 6px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+
+.v1-app .terminal-info { color: #38bdf8; }
+
+.v1-app .terminal-success { color: var(--success); }
+
+.v1-app .terminal-warning { color: var(--warning); }
+
+.v1-app .terminal-error { color: var(--error); }
+
+.v1-app .terminal-timestamp { color: var(--text-muted); margin-right: 8px; opacity: 0.85; }
+
+
+/* Progress Indicators */
+.v1-app .progress-container {
+  background-color: var(--border-panel);
+  border-radius: 9999px;
+  height: 6px;
+  overflow: hidden;
+  margin: 12px 0;
+}
+
+
+.v1-app .progress-bar {
+  background-color: var(--primary-color);
+  height: 100%;
+  border-radius: 9999px;
+  transition: width 0.3s ease;
+}
+
+
+/* Pipeline Status Timeline */
+.v1-app .pipeline-step {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 10px;
+  padding: 10px 14px;
+  border-radius: 6px;
+  background-color: transparent;
+  border: 1px solid transparent;
+}
+
+
+.v1-app .pipeline-step-active {
+  background-color: var(--step-active-bg);
+  border-color: var(--step-active-border);
+}
+
+
+.v1-app .pipeline-step-completed {
+  background-color: var(--step-completed-bg);
+  border-color: var(--step-completed-border);
+}
+
+
+.v1-app .status-icon {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.7rem;
+  font-weight: bold;
+  flex-shrink: 0;
+}
+
+
+.v1-app .status-pending {
+  border: 1.5px solid var(--text-muted);
+  color: var(--text-muted);
+}
+
+
+.v1-app .status-running {
+  border: 1.5px solid var(--primary-color);
+  background-color: var(--primary-color);
+  color: #ffffff;
+}
+
+
+.v1-app .status-done {
+  border: 1.5px solid var(--success);
+  background-color: var(--success);
+  color: #ffffff;
+}
+
+
+.v1-app .status-fail {
+  border: 1.5px solid var(--error);
+  background-color: var(--error);
+  color: #ffffff;
+}
+
+
+/* Toggle Switch Control */
+.v1-app .switch-container {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+
+.v1-app .switch {
+  position: relative;
+  display: inline-block;
+  width: 36px;
+  height: 18px;
+}
+
+
+.v1-app .switch input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+
+.v1-app .slider {
+  position: absolute;
+  cursor: pointer;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: var(--border-panel);
+  transition: .15s;
+  border-radius: 9999px;
+}
+
+
+.v1-app .slider:before {
+  position: absolute;
+  content: "";
+  height: 12px;
+  width: 12px;
+  left: 3px;
+  bottom: 3px;
+  background-color: var(--text-muted);
+  transition: .15s;
+  border-radius: 50%;
+}
+
+
+.v1-app input:checked + .slider {
+  background-color: var(--primary-color);
+}
+
+
+.v1-app input:checked + .slider:before {
+  transform: translateX(18px);
+  background-color: #ffffff;
+}
+
+
+/* Card Tree Queue Lists */
+.v1-app .tree-row {
+  background-color: var(--tree-row-bg);
+  border: 1px solid var(--border-panel);
+  border-radius: 6px;
+  padding: 12px 16px;
+  margin-bottom: 8px;
+  position: relative;
+}
+
+
+.v1-app .tree-row-remove {
+  position: absolute;
+  top: 10px;
+  right: 12px;
+  background: transparent;
+  border: none;
+  color: var(--error);
+  cursor: pointer;
+  opacity: 0.6;
+  transition: opacity 0.15s;
+  font-size: 1.15rem;
+}
+
+
+.v1-app .tree-row-remove:hover {
+  opacity: 1;
+}
+
+
+/* Theme Selector Button */
+.v1-app .theme-toggle-btn {
+  background: transparent;
+  border: 1px solid var(--border-panel);
+  border-radius: 6px;
+  padding: 6px 14px;
+  cursor: pointer;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--text-main);
+  transition: background-color 0.15s, border-color 0.15s;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+
+.v1-app .theme-toggle-btn:hover {
+  background-color: var(--border-panel);
+}

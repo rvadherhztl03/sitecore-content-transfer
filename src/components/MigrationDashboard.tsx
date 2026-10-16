@@ -2,7 +2,7 @@
 "use client";
 
 import React, { useState, useEffect, useRef } from "react";
-import { MigrationService, DataTree, LogType } from "@/src/utils/migrationService";
+import { MigrationService, DataTree, LogType } from "@/utils/migrationService";
 import { ContentTreeExplorer } from "./ContentTreeExplorer";
 import JSZip from "jszip";
 import { Layers, Layers3, Activity, Globe, CheckCircle2, Play, Download, Upload, Moon, Sun, Search, Plus, Database, FileText, AlertTriangle, ArrowUpDown } from "lucide-react";

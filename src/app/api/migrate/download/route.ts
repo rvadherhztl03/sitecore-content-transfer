@@ -1,6 +1,6 @@
 // src/app/api/migrate/download/route.ts
 import { NextResponse } from 'next/server';
-import { getOAuthToken } from '@/src/utils/auth';
+import { getOAuthToken } from '@/utils/auth';
 import JSZip from 'jszip';
 
 async function fetchItemId(host: string, token: string, path: string): Promise<string | null> {
