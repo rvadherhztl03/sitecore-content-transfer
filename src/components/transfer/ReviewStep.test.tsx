@@ -1,8 +1,11 @@
 import { fireEvent, render, screen, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { ProdConfirm, ReviewStep, needsProdConfirm } from '@/components/transfer/ReviewStep';
+import type { Preflight } from '@/components/transfer/usePreflight';
+import type { ItemCheck } from '@/lib/preflight';
 import type { Env } from '@/lib/sdk';
 import type { DataTree } from '@/lib/transfer';
+import { fakeClient, fieldDiffReply } from '@/test/fakeClient';
 
 const DEV: Env = { id: 'd', name: 'Acme · Development', contextId: 'cd', tenantName: 'acme-dev' };
 const QA: Env = { id: 'q', name: 'Acme · QA', contextId: 'cq', tenantName: 'acme-qa' };
@@ -157,5 +160,47 @@ describe('ReviewStep', () => {
     const path = `/sitecore/content/${'Very-Long-Segment/'.repeat(8)}Leaf`;
     setup({ trees: [{ ...HOME, itemPath: path }] });
     expect(screen.getByText(path)).toHaveAttribute('title', path);
+  });
+});
+
+describe('ReviewStep field changes', () => {
+  const KEEP: DataTree = { itemPath: '/sitecore/content/Acme/Keep', scope: 'SingleItem', mergeStrategy: 'KeepExistingItem' };
+  const NEW: DataTree = { itemPath: '/sitecore/content/Acme/New', scope: 'SingleItem', mergeStrategy: 'OverrideExistingItem' };
+  const check = (itemPath: string, onTarget: ItemCheck['onTarget']): [string, ItemCheck] => [
+    itemPath,
+    { itemPath, onSource: true, onTarget, missingParents: [], otherParents: [], deleted: [] },
+  ];
+  const preflight: Preflight = {
+    status: 'done',
+    checks: new Map([check(HOME.itemPath, 'same'), check(HERO.itemPath, 'same'), check(KEEP.itemPath, 'same'), check(NEW.itemPath, 'new')]),
+  };
+  const { client } = fakeClient({
+    'xmc.authoring.graphql': fieldDiffReply({ cd: { [HERO.itemPath]: { Alt: 'Hero' } }, cq: { [HERO.itemPath]: { Alt: 'Old hero' } } }),
+  });
+  const toggles = () => screen.queryAllByRole('button', { name: /^Show changes to / }).map((b) => b.getAttribute('aria-label'));
+
+  it('offers Show changes only on the same item being overwritten, and only with a client', () => {
+    const { unmount } = render(
+      <ReviewStep mode="transfer" source={DEV} target={QA} database="master" trees={[HOME, HERO, KEEP, NEW]} prodChecked={false} onProdChecked={() => {}} onEdit={() => {}} preflight={preflight} />,
+    );
+    expect(toggles()).toEqual([]);
+    unmount();
+    setup({ trees: [HOME, HERO, KEEP, NEW], preflight, client });
+    expect(toggles()).toEqual([`Show changes to ${HOME.itemPath}`, `Show changes to ${HERO.itemPath}`]);
+  });
+
+  it('opens the diff in a full-width row right after the item', async () => {
+    setup({ trees: [HOME, HERO, KEEP, NEW], preflight, client });
+    const show = screen.getByRole('button', { name: `Show changes to ${HERO.itemPath}` });
+    fireEvent.click(show);
+    expect(show).toHaveAttribute('aria-expanded', 'true');
+    const rows = screen.getAllByRole('row');
+    expect(rows).toHaveLength(6);
+    const cell = within(rows[3]).getByRole('cell');
+    expect(cell).toHaveAttribute('colspan', '4');
+    expect(within(cell).getByRole('group', { name: `Changes to ${HERO.itemPath}` })).toBeInTheDocument();
+    expect(await within(cell).findByRole('button', { name: 'Show values of Alt' })).toBeInTheDocument();
+    fireEvent.click(show);
+    expect(screen.getAllByRole('row')).toHaveLength(5);
   });
 });

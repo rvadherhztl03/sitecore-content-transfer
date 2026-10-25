@@ -1,3 +1,4 @@
+import { ChangesToggle, FieldDiff } from '@/components/transfer/FieldDiff';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
@@ -44,6 +45,8 @@ export function CompareView({ client, source, target, initialPath, onAdd, limit 
   const [shown, setShown] = useState<Set<CompareStatus>>(new Set(['new', 'changed', 'other', 'onlyTarget']));
   const [picked, setPicked] = useState<Set<string>>(new Set());
   const [added, setAdded] = useState<number | null>(null);
+  // The changed items whose field diff is open.
+  const [opened, setOpened] = useState<Set<string>>(new Set());
   // The comparison in progress; a result from any other (stopped or replaced) one is ignored.
   const run = useRef<AbortController | null>(null);
   useEffect(() => () => run.current?.abort(), []);
@@ -64,6 +67,7 @@ export function CompareView({ client, source, target, initialPath, onAdd, limit 
     run.current = ctrl;
     setPicked(new Set());
     setAdded(null);
+    setOpened(new Set());
     setState({ status: 'running', compared: 0 });
     const mine = () => run.current === ctrl;
     try {
@@ -199,26 +203,32 @@ export function CompareView({ client, source, target, initialPath, onAdd, limit 
               {visible.map((i) => (
                 <li
                   key={i.path}
-                  className="flex min-w-0 items-start gap-2.5 border-b px-3 py-2.5 last:border-b-0"
+                  className="flex min-w-0 flex-col gap-2.5 border-b px-3 py-2.5 last:border-b-0"
                   style={{ paddingLeft: 12 + i.depth * 14 }}
                 >
-                  {PICKABLE(i.status) ? (
-                    <Checkbox
-                      aria-label={`Pick ${i.path}`}
-                      className="relative mt-0.5 size-[18px] pointer-coarse:after:absolute pointer-coarse:after:-inset-3.5"
-                      checked={picked.has(i.path)}
-                      onCheckedChange={() => setPicked((set) => toggle(set, i.path))}
-                    />
-                  ) : (
-                    <span aria-hidden="true" className="size-[18px] shrink-0" />
-                  )}
-                  <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-                    <span className="text-sm font-semibold break-words">{i.name}</span>
-                    <span className="text-muted-foreground font-mono text-xs [overflow-wrap:anywhere]" title={i.path}>
-                      {i.path}
+                  <div className="flex min-w-0 items-start gap-2.5">
+                    {PICKABLE(i.status) ? (
+                      <Checkbox
+                        aria-label={`Pick ${i.path}`}
+                        className="relative mt-0.5 size-[18px] pointer-coarse:after:absolute pointer-coarse:after:-inset-3.5"
+                        checked={picked.has(i.path)}
+                        onCheckedChange={() => setPicked((set) => toggle(set, i.path))}
+                      />
+                    ) : (
+                      <span aria-hidden="true" className="size-[18px] shrink-0" />
+                    )}
+                    <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+                      <span className="text-sm font-semibold break-words">{i.name}</span>
+                      <span className="text-muted-foreground font-mono text-xs [overflow-wrap:anywhere]" title={i.path}>
+                        {i.path}
+                      </span>
+                      {i.status === 'changed' && (
+                        <ChangesToggle open={opened.has(i.path)} itemPath={i.path} onClick={() => setOpened((set) => toggle(set, i.path))} />
+                      )}
                     </span>
-                  </span>
-                  <span className={cn('shrink-0 rounded-full px-2.5 py-1 text-xs font-semibold', TONE[i.status])}>{statusText(i)}</span>
+                    <span className={cn('shrink-0 rounded-full px-2.5 py-1 text-xs font-semibold', TONE[i.status])}>{statusText(i)}</span>
+                  </div>
+                  {opened.has(i.path) && <FieldDiff client={client} source={source} target={target} itemPath={i.path} />}
                 </li>
               ))}
             </ul>

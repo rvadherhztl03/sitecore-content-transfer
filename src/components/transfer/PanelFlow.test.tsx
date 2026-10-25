@@ -1,7 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { PanelFlow } from '@/components/transfer/PanelFlow';
 import { TIMING } from '@/lib/transfer';
-import { fakeClient, isPreflight, isRelated, preflightReply, relatedReply, type FakeReply, type RelatedFake } from '@/test/fakeClient';
+import { fakeClient, fieldDiffReply, isFieldDiff, isPreflight, isRelated, preflightReply, relatedReply, type FakeReply, type RelatedFake } from '@/test/fakeClient';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
@@ -534,6 +534,31 @@ describe('PanelFlow', () => {
       show({});
       expect(screen.getByText(NO_PAGE)).toBeInTheDocument();
       expect(send()).toBeDisabled();
+    });
+  });
+
+  describe('Field changes', () => {
+    it('Show changes compares the page with the one it overwrites', async () => {
+      const h = handlers([DEV, QA, PROD], {}, EVERYWHERE);
+      const gql = h['xmc.authoring.graphql'];
+      const fields = fieldDiffReply({ [`ctx-${DEV}`]: { [HOME]: { Title: 'Home' } }, [`ctx-${QA}`]: { [HOME]: { Title: 'Old home' } } });
+      const { client } = fakeClient({ ...h, 'xmc.authoring.graphql': (p) => (isFieldDiff(p) ? fields(p) : gql(p)) });
+      render(<PanelFlow client={client} {...HOME_PAGE} />);
+      await ready();
+      pick('From', DEV);
+      pick('To', QA);
+      fireEvent.click(send());
+      const show = await screen.findByRole('button', { name: `Show changes to ${HOME}` });
+      fireEvent.click(show);
+      expect(show).toHaveAttribute('aria-expanded', 'true');
+      const diff = within(screen.getByRole('region', { name: 'Review' })).getByRole('group', { name: `Changes to ${HOME}` });
+      fireEvent.click(await within(diff).findByRole('button', { name: 'Show values of Title' }));
+      expect(within(diff).getByRole('group', { name: QA })).toHaveTextContent('Old home');
+    });
+
+    it('is not offered for a page the target does not have', async () => {
+      await toReview();
+      expect(screen.queryByRole('button', { name: /^Show changes/ })).not.toBeInTheDocument();
     });
   });
 });

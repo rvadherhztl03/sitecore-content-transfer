@@ -1,5 +1,6 @@
 import { ONE_ENV, cancelNote, treeWarning } from '@/components/transfer/copy';
 import { EnvBadge } from '@/components/transfer/EnvironmentCards';
+import { ChangesToggle, FieldDiff } from '@/components/transfer/FieldDiff';
 import { Logo } from '@/components/transfer/Logo';
 import { PreflightNotes, PreflightStatus } from '@/components/transfer/Preflight';
 import { backupName, download } from '@/components/transfer/download';
@@ -150,6 +151,8 @@ export function PanelFlow({ client, pageName, pagePath }: Props) {
   // publishes too, so the live site goes back as well.
   const [publishOn, setPublishOn] = useState(false);
   const [withPublish, setWithPublish] = useState(false);
+  // Whether the review shows how the page differs on the target.
+  const [diffOpen, setDiffOpen] = useState(false);
   const runner = useRun();
   const { run } = runner;
 
@@ -174,6 +177,7 @@ export function PanelFlow({ client, pageName, pagePath }: Props) {
     if (!routeOk || !pagePath) return;
     setProdFor(null);
     setExtra([]);
+    setDiffOpen(false);
     setHeld({ name: pageName, path: pagePath });
   };
   const close = () => {
@@ -258,6 +262,8 @@ export function PanelFlow({ client, pageName, pagePath }: Props) {
     );
   } else if (held && target) {
     const replacing = merge === 'OverrideExistingTree';
+    // The same page on the target, about to be overwritten: its fields can be compared.
+    const diffable = !!client && preflight?.status === 'done' && preflight.checks.get(held.path)?.onTarget === 'same' && merge !== 'KeepExistingItem';
     body = (
       <div className="flex flex-col gap-4">
         <div className="flex flex-col gap-1">
@@ -278,6 +284,12 @@ export function PanelFlow({ client, pageName, pagePath }: Props) {
               <span>
                 <PreflightStatus preflight={preflight} itemPath={held.path} source={source!} />
               </span>
+              {diffable && <ChangesToggle open={diffOpen} itemPath={held.path} onClick={() => setDiffOpen(!diffOpen)} />}
+              {diffable && diffOpen && (
+                <div className="mt-1.5">
+                  <FieldDiff client={client!} source={source!} target={target} itemPath={held.path} />
+                </div>
+              )}
             </Row>
             {extra.length > 0 && (
               <Row label="Also sends">

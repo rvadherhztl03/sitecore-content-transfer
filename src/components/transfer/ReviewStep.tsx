@@ -1,5 +1,6 @@
 import { cancelNote, treeWarning } from '@/components/transfer/copy';
 import { EnvBadge } from '@/components/transfer/EnvironmentCards';
+import { ChangesToggle, FieldDiff } from '@/components/transfer/FieldDiff';
 import { PageHeading } from '@/components/transfer/Layout';
 import { PreflightNotes, PreflightStatus } from '@/components/transfer/Preflight';
 import type { Preflight } from '@/components/transfer/usePreflight';
@@ -11,11 +12,11 @@ import { Icon } from '@/lib/icon';
 import { addMissingParents, removeNotFound } from '@/lib/preflight';
 import { addRelated } from '@/lib/related';
 import { SCOPES, labelOf, mergesFor, nameOf } from '@/lib/queue';
-import { envKind, type Env } from '@/lib/sdk';
+import { envKind, type Env, type SdkClient } from '@/lib/sdk';
 import type { DataTree } from '@/lib/transfer';
 import { cn } from '@/lib/utils';
 import { mdiArrowRight, mdiDatabaseOutline } from '@mdi/js';
-import { useId } from 'react';
+import { Fragment, useId, useState } from 'react';
 
 export const needsProdConfirm = (target?: Env): boolean => !!target && envKind(target) === 'prod';
 
@@ -142,16 +143,27 @@ type Props = {
   backup?: Omit<BackupChoiceProps, 'target'>;
   /** The "Publish to Experience Edge when done" choice (transfer only). */
   publish?: Omit<PublishChoiceProps, 'target'>;
+  /** Reads field values for "Show changes" on items the transfer overwrites (transfer only). */
+  client?: SdkClient;
 };
 
 /** What will be written, before it is: route, replace warning, production confirmation and the items. */
-export function ReviewStep({ mode, source, target, database, trees, prodChecked, onProdChecked, onEdit, preflight, onTreesChange, backup, publish }: Props) {
+export function ReviewStep({ mode, source, target, database, trees, prodChecked, onProdChecked, onEdit, preflight, onTreesChange, backup, publish, client }: Props) {
   const to = mode === 'transfer' ? target : undefined;
   const checks = preflight?.status === 'done' ? preflight.checks : undefined;
   const fix = (f: typeof addMissingParents) => (checks && onTreesChange ? () => onTreesChange(f(trees, checks)) : undefined);
   const related = preflight?.status === 'done' ? preflight.related : undefined;
   const replacing = trees.filter((t) => t.mergeStrategy === 'OverrideExistingTree').length;
   const detail = (env: Env, text: string) => [env.tenantName, text].filter(Boolean).join(' · ');
+  // The items whose field diff is open; only the same item on the target, about to be overwritten, has one.
+  const [opened, setOpened] = useState<Set<string>>(new Set());
+  const diffable = (t: DataTree) => !!client && !!to && checks?.get(t.itemPath)?.onTarget === 'same' && t.mergeStrategy !== 'KeepExistingItem';
+  const toggle = (path: string) =>
+    setOpened((set) => {
+      const next = new Set(set);
+      if (!next.delete(path)) next.add(path);
+      return next;
+    });
 
   return (
     <div className="flex flex-col gap-5">
@@ -229,33 +241,46 @@ export function ReviewStep({ mode, source, target, database, trees, prodChecked,
               </tr>
             </thead>
             <tbody className="[&>tr:last-child>td]:border-b-0">
-              {trees.map((t) => (
-                <tr key={t.itemPath}>
-                  <td className={TD}>
-                    <span className="flex min-w-0 flex-col gap-0.5">
-                      <span className="font-semibold break-words">{nameOf(t.itemPath)}</span>
-                      <span className="text-muted-foreground font-mono text-xs [overflow-wrap:anywhere]" title={t.itemPath}>
-                        {t.itemPath}
-                      </span>
-                    </span>
-                  </td>
-                  {to && (
-                    <td className={TD}>
-                      <PreflightStatus preflight={preflight} itemPath={t.itemPath} source={source} />
-                    </td>
-                  )}
-                  <td className={TD}>
-                    <span className={cn(PILL, t.scope !== 'SingleItem' ? 'bg-primary-100 text-primary-700' : 'bg-neutral-bg text-neutral-fg')}>
-                      {labelOf(SCOPES, t.scope, true)}
-                    </span>
-                  </td>
-                  <td className={TD}>
-                    <span className={cn(PILL, t.mergeStrategy === 'OverrideExistingTree' ? 'bg-warning-50 text-warning-600' : 'bg-neutral-bg text-neutral-fg')}>
-                      {labelOf(mergesFor(t.scope), t.mergeStrategy, true)}
-                    </span>
-                  </td>
-                </tr>
-              ))}
+              {trees.map((t) => {
+                const open = diffable(t) && opened.has(t.itemPath);
+                return (
+                  <Fragment key={t.itemPath}>
+                    <tr className={cn(open && '[&>td]:border-b-0')}>
+                      <td className={TD}>
+                        <span className="flex min-w-0 flex-col gap-0.5">
+                          <span className="font-semibold break-words">{nameOf(t.itemPath)}</span>
+                          <span className="text-muted-foreground font-mono text-xs [overflow-wrap:anywhere]" title={t.itemPath}>
+                            {t.itemPath}
+                          </span>
+                          {diffable(t) && <ChangesToggle open={open} itemPath={t.itemPath} onClick={() => toggle(t.itemPath)} />}
+                        </span>
+                      </td>
+                      {to && (
+                        <td className={TD}>
+                          <PreflightStatus preflight={preflight} itemPath={t.itemPath} source={source} />
+                        </td>
+                      )}
+                      <td className={TD}>
+                        <span className={cn(PILL, t.scope !== 'SingleItem' ? 'bg-primary-100 text-primary-700' : 'bg-neutral-bg text-neutral-fg')}>
+                          {labelOf(SCOPES, t.scope, true)}
+                        </span>
+                      </td>
+                      <td className={TD}>
+                        <span className={cn(PILL, t.mergeStrategy === 'OverrideExistingTree' ? 'bg-warning-50 text-warning-600' : 'bg-neutral-bg text-neutral-fg')}>
+                          {labelOf(mergesFor(t.scope), t.mergeStrategy, true)}
+                        </span>
+                      </td>
+                    </tr>
+                    {open && (
+                      <tr>
+                        <td colSpan={4} className="border-b px-4 pb-3.5 align-top">
+                          <FieldDiff client={client!} source={source} target={to!} itemPath={t.itemPath} />
+                        </td>
+                      </tr>
+                    )}
+                  </Fragment>
+                );
+              })}
             </tbody>
           </table>
         </div>

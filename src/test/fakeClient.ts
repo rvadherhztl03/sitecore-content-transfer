@@ -96,3 +96,16 @@ export const compareReply = (worlds: Record<string, Record<string, CompareFake>>
   }
   return { data: { data } };
 };
+
+/** Whether a GraphQL call is the field diff's query (src/lib/diff.ts). */
+export const isFieldDiff = (p: any) => typeof p?.body?.query === 'string' && p.body.query.startsWith('query FieldDiff');
+
+/**
+ * Answers the field diff from per-environment maps of path → field name → value (keyed by context ID), in map order; a
+ * path that isn't in its environment's map has no item there.
+ */
+export const fieldDiffReply = (items: Record<string, Record<string, Record<string, string>>>) => (p: any): FakeReply => {
+  const path: string = JSON.parse((p.body.query as string).match(/item\(where: \{ path: ("[^"]*")/)![1]);
+  const fields = items[p.query.sitecoreContextId]?.[path];
+  return { data: { data: { item: fields ? { fields: { nodes: Object.entries(fields).map(([name, value]) => ({ name, value })) } } : null } } };
+};

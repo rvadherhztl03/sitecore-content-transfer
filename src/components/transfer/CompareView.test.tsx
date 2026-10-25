@@ -3,7 +3,7 @@ import { act, fireEvent, render, screen, waitFor, within } from '@testing-librar
 import { describe, expect, it, vi } from 'vitest';
 import { CompareView } from '@/components/transfer/CompareView';
 import type { Env } from '@/lib/sdk';
-import { compareReply, fakeClient, type CompareFake, type FakeReply } from '@/test/fakeClient';
+import { compareReply, fakeClient, fieldDiffReply, isFieldDiff, type CompareFake, type FakeReply } from '@/test/fakeClient';
 
 const DEV: Env = { id: 'd', name: 'Acme · Dev', contextId: 'ctx-dev' };
 const QA: Env = { id: 'q', name: 'Acme · QA', contextId: 'ctx-qa' };
@@ -49,7 +49,7 @@ describe('CompareView', () => {
     compare();
     await screen.findByRole('list', { name: 'Differences' });
     expect(rows()).toEqual([
-      `Data${R}/DataChanged · newer on Acme · Dev`,
+      `Data${R}/DataShow changesChanged · newer on Acme · Dev`,
       `Footer${R}/FooterDifferent item`,
       `News${R}/Home/NewsNew on Acme · Dev`,
       `Launch${R}/Home/News/LaunchNew on Acme · Dev`,
@@ -106,6 +106,26 @@ describe('CompareView', () => {
     await act(async () => release());
     expect(await screen.findByText('Comparison stopped.')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Compare' })).toBeEnabled();
+  });
+
+  it('Show changes on a changed item opens its field diff, and picking still works', async () => {
+    const tree = compareReply({ 'ctx-dev': SOURCE, 'ctx-qa': TARGET });
+    const fields = fieldDiffReply({ 'ctx-dev': { [`${R}/Data`]: { Title: 'New' } }, 'ctx-qa': { [`${R}/Data`]: { Title: 'Old' } } });
+    setup({ gql: (p) => (isFieldDiff(p) ? fields(p) : tree(p)) });
+    compare();
+    const show = await screen.findByRole('button', { name: `Show changes to ${R}/Data` });
+    // Only the changed item has one.
+    expect(screen.getAllByRole('button', { name: /^Show changes/ })).toEqual([show]);
+    expect(show).toHaveAttribute('aria-expanded', 'false');
+    fireEvent.click(show);
+    expect(show).toHaveAccessibleName(`Hide changes to ${R}/Data`);
+    expect(show).toHaveAttribute('aria-expanded', 'true');
+    const diff = screen.getByRole('group', { name: `Changes to ${R}/Data` });
+    expect(await within(diff).findByRole('button', { name: 'Show values of Title' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('checkbox', { name: `Pick ${R}/Data` }));
+    expect(screen.getByRole('button', { name: 'Add 1 to the list' })).toBeEnabled();
+    fireEvent.click(show);
+    expect(screen.queryByRole('group', { name: `Changes to ${R}/Data` })).not.toBeInTheDocument();
   });
 
   it('says when nothing differs', async () => {

@@ -350,6 +350,7 @@ export function Flow({ client, mode, envs, onHome }: Props) {
             onTreesChange={setTrees}
             backup={transfer ? { available: backupTrees.length > 0, checked: backupOn, onChange: setBackupOn } : undefined}
             publish={transfer ? { checked: publishOn, onChange: setPublishOn } : undefined}
+            client={client}
           />
         </main>
       );
