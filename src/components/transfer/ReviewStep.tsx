@@ -105,7 +105,8 @@ const CARD = {
   to: { box: 'border border-primary-200 bg-primary-50', tile: 'bg-primary text-inverse-text', label: 'text-primary-600' },
 };
 
-function RouteCard({ kind, env, detail }: { kind: keyof typeof CARD; env: Env; detail: string }) {
+// `label` overrides From / To, e.g. to give several targets their order.
+function RouteCard({ kind, env, detail, label }: { kind: keyof typeof CARD; env: Env; detail: string; label?: string }) {
   const tone = CARD[kind];
   return (
     <div className={cn('flex min-w-0 items-center gap-3.5 rounded-xl p-4', tone.box)}>
@@ -113,7 +114,7 @@ function RouteCard({ kind, env, detail }: { kind: keyof typeof CARD; env: Env; d
         <Icon path={mdiDatabaseOutline} className="size-[22px]" aria-hidden="true" />
       </span>
       <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-        <span className={cn('text-xs font-semibold tracking-wider uppercase', tone.label)}>{kind === 'from' ? 'From' : 'To'}</span>
+        <span className={cn('text-xs font-semibold tracking-wider uppercase', tone.label)}>{label ?? (kind === 'from' ? 'From' : 'To')}</span>
         <span className="text-base font-semibold break-words" title={env.name}>
           {env.name}
         </span>
@@ -198,8 +199,9 @@ export function ReviewStep({ mode, source, targets = [], database, trees, prodCh
           <>
             <Icon path={mdiArrowRight} className="text-primary size-7 shrink-0 justify-self-center rotate-90 sm:rotate-0" aria-hidden="true" />
             <div className="flex min-w-0 flex-col gap-3">
-              {to.map((t) => (
-                <RouteCard key={t.id} kind="to" env={t} detail={detail(t, `writes to ${database}`)} />
+              {/* In write order: the transfer reaches each in turn. */}
+              {to.map((t, i) => (
+                <RouteCard key={t.id} kind="to" env={t} detail={detail(t, `writes to ${database}`)} label={i > 0 ? 'Then to' : undefined} />
               ))}
             </div>
           </>
@@ -224,6 +226,8 @@ export function ReviewStep({ mode, source, targets = [], database, trees, prodCh
             preflight={preflights?.[t.id]}
             source={source}
             target={t}
+            // What concerns only the source is said once, with the first finished check.
+            sourceNotes={t.id === to.find(checksOf)?.id}
             onAddParents={fix(t, addMissingParents)}
             onRemoveNotFound={fix(t, removeNotFound)}
             onAddRelated={related && onTreesChange ? () => onTreesChange(addRelated(trees, related)) : undefined}

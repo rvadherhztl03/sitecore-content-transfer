@@ -74,7 +74,10 @@ export function Flow({ client, mode, envs, onHome }: Props) {
 
   // An id that is no longer in `envs` (e.g. after a Retry) counts as unselected, and so does a target that is the source.
   const source = envs.find((e) => e.id === sourceId);
-  const targets = transfer ? targetIds.flatMap((id) => envs.filter((e) => e.id === id && e.id !== sourceId)) : [];
+  // In the order picked, but production last: a run that stops partway never leaves it ahead of the others.
+  const targets = transfer
+    ? targetIds.flatMap((id) => envs.filter((e) => e.id === id && e.id !== sourceId)).sort((a, b) => +needsProdConfirm(a) - +needsProdConfirm(b))
+    : [];
   const routeOk = !!source && (!transfer || targets.length > 0);
   const prodOk = targets.every((t) => !needsProdConfirm(t) || prodFor.includes(t.id));
   const names = listOf(targets.map((t) => t.name));
@@ -179,10 +182,11 @@ export function Flow({ client, mode, envs, onHome }: Props) {
     const status = (k: number, offset: number) => run.steps[(layout?.targetAt[k] ?? 0) + offset]?.status ?? 'pending';
     const written = ran.filter((_, k) => status(k, 2) !== 'pending').map((t) => t.id);
     const finished = ran.filter((_, k) => status(k, 3) === 'done');
-    // Installs a target's backup back into it, as a fresh run; from there the others the transfer wrote to stay restorable.
+    // Installs a target's backup back into it, as a fresh run. The targets the transfer wrote to stay restorable from
+    // there until their restore succeeds.
     const restore = (tgt: Env) => {
       const pkg = backupZips.find((b) => b.target.id === tgt.id)!;
-      setRestorable((ids) => (restoring ? ids : written).filter((id) => id !== tgt.id));
+      if (!restoring) setRestorable(written);
       runner.reset();
       setRestoringId(tgt.id);
       const labels = [`Upload backup to ${tgt.name}`, `Assemble package on ${tgt.name}`, `Import into ${DATABASE}`, 'Verify', ...(withPublish ? [PUBLISH_STEP] : [])];
@@ -192,7 +196,9 @@ export function Flow({ client, mode, envs, onHome }: Props) {
         const publish = withPublish
           ? items.map((i): DataTree => ({ itemPath: i.path, scope: i.scope as Scope, mergeStrategy: i.mergeStrategy as MergeStrategy }))
           : undefined;
-        return runImport(client, { target: tgt, database: DATABASE, parts, publish }, cb, signal);
+        const ok = await runImport(client, { target: tgt, database: DATABASE, parts, publish }, cb, signal);
+        if (ok) setRestorable((ids) => ids.filter((id) => id !== tgt.id));
+        return ok;
       });
     };
     body = (
@@ -213,6 +219,8 @@ export function Flow({ client, mode, envs, onHome }: Props) {
             const failed = run.result === 'fail';
             if (restoring && failed) return restore(run.targets![0]);
             if (!failed) setTrees([]);
+            // The targets that got the content before the failure aren't sent it again (nor backed up over their backup).
+            else if (finished.length) setTargetIds((ids) => ids.filter((id) => !finished.some((t) => t.id === id)));
             go(failed ? 2 : 0);
           }}
           onHome={onHome}
@@ -220,7 +228,8 @@ export function Flow({ client, mode, envs, onHome }: Props) {
           backups={backupZips.map((b) => ({
             target: b.target,
             onDownload: () => download(b.blob, b.name),
-            onRestore: (restoring ? restorable : written).includes(b.target.id) ? () => restore(b.target) : undefined,
+            // The target being restored has Try again instead.
+            onRestore: (restoring ? restorable.filter((id) => id !== restoringId) : written).includes(b.target.id) ? () => restore(b.target) : undefined,
           }))}
           finished={ran.length > 1 ? finished : undefined}
         />

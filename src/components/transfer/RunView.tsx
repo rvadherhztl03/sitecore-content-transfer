@@ -39,7 +39,7 @@ type Props = {
   onDownload?(): void;
   /** The targets the run backed up first, in order. */
   backups?: RunBackup[];
-  /** For a failed run to several targets: the ones that got the content before it stopped. */
+  /** For a failed run to several targets: the ones that got the content before it stopped, which Try again leaves out. */
   finished?: Env[];
 };
 
@@ -320,7 +320,7 @@ export function RunView({
     return (
       <p className="text-neutral-fg max-w-[520px] text-sm leading-normal break-words">
         {many
-          ? `Backups of ${listOf(names)} from before this transfer were downloaded. Install each into its own environment ${when}.`
+          ? `Backups of ${listOf(names)} from before this transfer were downloaded (if your browser blocked one, download it again here). Install a backup into its own environment ${when}.`
           : `A backup of ${names[0]} from before this transfer was downloaded. Install it into ${names[0]} ${when}.`}
       </p>
     );
@@ -354,8 +354,8 @@ export function RunView({
   );
 
   if (result === 'success') {
-    // A step that failed without failing the run (publishing): say so, since the result card doesn't show the steps.
-    const unfinished = steps.find((s) => s.status === 'fail');
+    // Steps that failed without failing the run (publishing): say so, since the result card doesn't show the steps.
+    const unfinished = steps.filter((s) => s.status === 'fail').map((s) => s.label);
     const stats = [
       info?.itemCount !== undefined && (['Items', info.itemCount] as const),
       info && (['Chunks', info.chunkCount] as const),
@@ -369,9 +369,9 @@ export function RunView({
           </span>
           <H className="text-[26px] leading-tight font-semibold break-words">{w.done}</H>
           <p className="text-neutral-fg max-w-[520px] text-[15px] leading-normal break-words">{w.summary(from, to)}</p>
-          {unfinished && (
+          {unfinished.length > 0 && (
             <p className="text-warning-700 max-w-[520px] text-sm leading-normal font-medium break-words">
-              {`${unfinished.label} didn't finish. See the activity log.`}
+              {`${listOf(unfinished)} didn't finish. See the activity log.`}
             </p>
           )}
           {backupNote('to undo the transfer')}
@@ -447,7 +447,9 @@ export function RunView({
                 </H>
                 {failed && <p className="text-neutral-fg text-sm">See the activity log for details.</p>}
                 {failed && finished.length > 0 && (
-                  <p className="text-neutral-fg text-sm break-words">{`${listOf(finished.map((t) => t.name))} got the content before the transfer stopped.`}</p>
+                  <p className="text-neutral-fg text-sm break-words">
+                    {`${listOf(finished.map((t) => t.name))} got the content before the transfer stopped, so Try again leaves ${finished.length === 1 ? 'it' : 'them'} out.`}
+                  </p>
                 )}
                 {failed && backupNote('to put it back as it was')}
               </div>

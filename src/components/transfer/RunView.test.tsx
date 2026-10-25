@@ -500,7 +500,7 @@ describe('RunView with several targets', () => {
 
   it('says which targets got the content when the run stops', () => {
     setup({ targets: [QA, UAT], running: false, result: 'fail', finished: [QA] });
-    expect(screen.getByText('Acme · QA got the content before the transfer stopped.')).toBeInTheDocument();
+    expect(screen.getByText('Acme · QA got the content before the transfer stopped, so Try again leaves it out.')).toBeInTheDocument();
   });
 
   it('one backup keeps the plain wording', () => {
@@ -516,7 +516,9 @@ describe('RunView with several targets', () => {
     const uat = { target: UAT, onDownload: vi.fn(), onRestore: vi.fn() };
     done('transfer', { targets: [QA, UAT], backups: [qa, uat] });
     expect(
-      screen.getByText('Backups of Acme · QA and Acme · UAT from before this transfer were downloaded. Install each into its own environment to undo the transfer.'),
+      screen.getByText(
+        'Backups of Acme · QA and Acme · UAT from before this transfer were downloaded (if your browser blocked one, download it again here). Install a backup into its own environment to undo the transfer.',
+      ),
     ).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Download Acme · UAT backup' }));
     expect(uat.onDownload).toHaveBeenCalledOnce();
@@ -526,5 +528,20 @@ describe('RunView with several targets', () => {
     fireEvent.click(within(screen.getByRole('group', { name: 'Restore Acme · UAT to how it was before this transfer?' })).getByRole('button', { name: 'Restore now' }));
     expect(uat.onRestore).toHaveBeenCalledOnce();
     expect(qa.onRestore).not.toHaveBeenCalled();
+  });
+});
+
+describe('RunView unfinished steps', () => {
+  it('names every step that failed without failing the run', () => {
+    done('transfer', {
+      steps: [
+        { label: 'Verify on QA', status: 'done' },
+        { label: 'Publish to Experience Edge on QA', status: 'fail' },
+        { label: 'Publish to Experience Edge on UAT', status: 'fail' },
+      ],
+    });
+    expect(
+      screen.getByText("Publish to Experience Edge on QA and Publish to Experience Edge on UAT didn't finish. See the activity log."),
+    ).toBeInTheDocument();
   });
 });

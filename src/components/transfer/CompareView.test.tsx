@@ -120,12 +120,12 @@ describe('CompareView', () => {
     fireEvent.click(show);
     expect(show).toHaveAccessibleName(`Hide changes to ${R}/Data`);
     expect(show).toHaveAttribute('aria-expanded', 'true');
-    const diff = screen.getByRole('group', { name: `Changes to ${R}/Data` });
+    const diff = screen.getByRole('group', { name: `Changes to ${R}/Data on ${QA.name}` });
     expect(await within(diff).findByRole('button', { name: 'Show values of Title' })).toBeInTheDocument();
     fireEvent.click(screen.getByRole('checkbox', { name: `Pick ${R}/Data` }));
     expect(screen.getByRole('button', { name: 'Add 1 to the list' })).toBeEnabled();
     fireEvent.click(show);
-    expect(screen.queryByRole('group', { name: `Changes to ${R}/Data` })).not.toBeInTheDocument();
+    expect(screen.queryByRole('group', { name: `Changes to ${R}/Data on ${QA.name}` })).not.toBeInTheDocument();
   });
 
   it('says when nothing differs', async () => {

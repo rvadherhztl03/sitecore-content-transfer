@@ -220,7 +220,8 @@ describe('runTransfer', () => {
     expect(r.steps).toContainEqual([1, 'fail']);
     expect(r.infos).toEqual([]);
     expect(r.logs.some(([, t]) => t === 'error')).toBe(true);
-    expect(ofKey(calls, 'deleteContentTransfer').map(ctxOf)).toEqual(['ctx-dev', 'ctx-qa']);
+    // Nothing reached QA, so only the source has the transfer to clean up.
+    expect(ofKey(calls, 'deleteContentTransfer').map(ctxOf)).toEqual(['ctx-dev']);
   });
 
   it('fails when the source has no content', async () => {
@@ -332,7 +333,7 @@ describe('runTransfer', () => {
     expect(r.logs).toContainEqual(['Cancelled.', 'warning']);
     expect(r.logs.some(([, t]) => t === 'error')).toBe(false);
     expect(ofKey(calls, 'getContentTransferStatus')).toHaveLength(0);
-    expect(ofKey(calls, 'deleteContentTransfer').map(ctxOf)).toEqual(['ctx-dev', 'ctx-qa']);
+    expect(ofKey(calls, 'deleteContentTransfer').map(ctxOf)).toEqual(['ctx-dev']);
   });
 
   it('cancels mid-copy without logging a chunk that never starts', async () => {
@@ -661,9 +662,9 @@ describe('several targets', () => {
     const r = recorder();
     expect(await runTransfer(client, { ...OPTS, targets: [...both(), { env: { id: 'r4', name: 'Prod', contextId: 'ctx-prod' } }] }, r.cb)).toBe(false);
     expect(ctxSeq(calls, 'consumeFile')).toEqual(['ctx-qa']);
-    expect(calls.some((c) => ctxOf(c) === 'ctx-prod' && c.key !== CT + 'deleteContentTransfer')).toBe(false);
-    // QA imported: never cleaned up. UAT only held chunks: cleaned up, with the source and the untouched Prod.
-    expect(ctxSeq(calls, 'deleteContentTransfer')).toEqual(['ctx-dev', 'ctx-uat', 'ctx-prod']);
+    expect(calls.some((c) => ctxOf(c) === 'ctx-prod')).toBe(false);
+    // QA imported: never cleaned up. UAT only held chunks: cleaned up, with the source. Prod was never written to.
+    expect(ctxSeq(calls, 'deleteContentTransfer')).toEqual(['ctx-dev', 'ctx-uat']);
     expect(r.steps).toContainEqual([7, 'fail']);
     expect(r.logs.some(([m]) => /may still finish importing/.test(m))).toBe(false);
   });

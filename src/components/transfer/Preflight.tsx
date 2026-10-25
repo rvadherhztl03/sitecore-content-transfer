@@ -52,10 +52,19 @@ const Action = ({ label, onClick }: { label: string; onClick(): void }) => (
   </Button>
 );
 
-type NotesProps = { preflight?: Preflight; source: Env; target: Env; onAddParents?(): void; onRemoveNotFound?(): void; onAddRelated?(): void };
+type NotesProps = {
+  preflight?: Preflight;
+  source: Env;
+  target: Env;
+  /** False to leave out what only concerns the source (items it lacks), when another target's notes already say it. */
+  sourceNotes?: boolean;
+  onAddParents?(): void;
+  onRemoveNotFound?(): void;
+  onAddRelated?(): void;
+};
 
 /** The pre-flight result for the whole list: progress, a clean bill, or one note per kind of problem. Nothing here blocks Start. */
-export function PreflightNotes({ preflight, source, target, onAddParents, onRemoveNotFound, onAddRelated }: NotesProps) {
+export function PreflightNotes({ preflight, source, target, sourceNotes = true, onAddParents, onRemoveNotFound, onAddRelated }: NotesProps) {
   if (!preflight) return null;
   if (preflight.status === 'checking') {
     return (
@@ -66,12 +75,12 @@ export function PreflightNotes({ preflight, source, target, onAddParents, onRemo
     );
   }
   if (preflight.status === 'failed') {
-    return <Note tone="warning" title={`Couldn't run the pre-flight check: ${preflight.error}. You can still start.`} />;
+    return <Note tone="warning" title={`Couldn't run the pre-flight check on ${target.name}: ${preflight.error}. You can still start.`} />;
   }
 
   const checks = [...preflight.checks.values()];
   const found = checks.filter((c) => c.onSource);
-  const notFound = checks.filter((c) => !c.onSource);
+  const notFound = sourceNotes ? checks.filter((c) => !c.onSource) : [];
   const missing = [...new Set(found.flatMap((c) => c.missingParents))];
   const otherParents = found.filter((c) => c.otherParents.length);
   const otherHere = found.filter((c) => c.onTarget === 'other');
@@ -149,7 +158,7 @@ export function PreflightNotes({ preflight, source, target, onAddParents, onRemo
           </ul>
         </Note>
       )}
-      {definitionsFailed && <Note tone="warning" title={`Couldn't check templates and renderings: ${definitionsFailed.replace(/\.?$/, '.')} You can still start.`} />}
+      {definitionsFailed && <Note tone="warning" title={`Couldn't check templates and renderings for ${target.name}: ${definitionsFailed.replace(/\.?$/, '.')} You can still start.`} />}
       {missing.length > 0 && (
         <Note
           tone="warning"
@@ -164,10 +173,10 @@ export function PreflightNotes({ preflight, source, target, onAddParents, onRemo
       {absent.length > 0 && (
         <Note
           tone="warning"
-          title="Used by your items but not in the list"
+          title={`Used by your items but not on ${target.name}`}
           action={onAddRelated && addable > 0 && <Action label={`Add ${addable} missing ${addable === 1 ? 'item' : 'items'}`} onClick={onAddRelated} />}
         >
-          <span>{`Missing on ${target.name}, so the items that use them may show gaps:`}</span>
+          <span>They aren&apos;t in the list either, so the items that use them may show gaps:</span>
           <ul className="flex flex-col gap-1">
             {absent.map((r) => (
               <li key={r.itemPath} className="break-words">
@@ -180,7 +189,7 @@ export function PreflightNotes({ preflight, source, target, onAddParents, onRemo
           {present > 0 && <span>{`${present} more ${present === 1 ? 'is' : 'are'} already on ${target.name} (not added; ${present === 1 ? 'it' : 'they'} may be older there).`}</span>}
         </Note>
       )}
-      {scanFailed && <Note tone="warning" title={`Couldn't scan for related content: ${scanFailed.replace(/\.?$/, '.')} You can still start.`} />}
+      {scanFailed && <Note tone="warning" title={`Couldn't scan for related content for ${target.name}: ${scanFailed.replace(/\.?$/, '.')} You can still start.`} />}
       {otherParents.length > 0 && (
         <Note tone="warning" title={`Different parent items on ${target.name}`}>
           {otherParents.flatMap((c) =>

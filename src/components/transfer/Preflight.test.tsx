@@ -48,7 +48,7 @@ describe('PreflightNotes', () => {
 
   it('says a failed check does not stop the transfer', () => {
     notes({ status: 'failed', error: 'HTTP 500' });
-    expect(screen.getByRole('note')).toHaveTextContent("Couldn't run the pre-flight check: HTTP 500. You can still start.");
+    expect(screen.getByRole('note')).toHaveTextContent("Couldn't run the pre-flight check on Acme · QA: HTTP 500. You can still start.");
   });
 
   it('says when everything is in place', () => {
@@ -114,7 +114,7 @@ describe('PreflightNotes', () => {
 describe('PreflightNotes related content', () => {
   const rel = (itemPath: string, onTarget: RelatedItem['onTarget'], usedBy = [HOME]): RelatedItem => ({ itemPath, name: itemPath.split('/').pop()!, usedBy, onTarget });
   const withRelated = (extra: { related?: RelatedItem[]; relatedError?: string }): Preflight => ({ status: 'done', checks: new Map([[HOME, ok(HOME)]]), ...extra });
-  const NOTE = 'Used by your items but not in the list';
+  const NOTE = `Used by your items but not on ${QA.name}`;
 
   it('lists what the items use that the target lacks, who uses it, and adds the missing ones', () => {
     const onAddRelated = vi.fn();
@@ -129,7 +129,7 @@ describe('PreflightNotes related content', () => {
       { onAddRelated },
     );
     const note = screen.getByRole('note', { name: NOTE });
-    expect(note).toHaveTextContent('Missing on Acme · QA, so the items that use them may show gaps:');
+    expect(note).toHaveTextContent("They aren't in the list either, so the items that use them may show gaps:");
     expect(within(note).getAllByRole('listitem').map((li) => li.textContent)).toEqual([
       'Hero /sitecore/media library/Acme/Hero · used by Home, News',
       'Promo /sitecore/content/Acme/Data/Promo · used by Home · a different item has this path on Acme · QA',
@@ -154,7 +154,7 @@ describe('PreflightNotes related content', () => {
 
   it('says when the scan could not run', () => {
     notes(withRelated({ relatedError: 'HTTP 500' }));
-    expect(screen.getByRole('note', { name: "Couldn't scan for related content: HTTP 500. You can still start." })).toBeInTheDocument();
+    expect(screen.getByRole('note', { name: "Couldn't scan for related content for Acme · QA: HTTP 500. You can still start." })).toBeInTheDocument();
     expect(screen.queryByRole('status')).not.toBeInTheDocument();
   });
 });
@@ -191,7 +191,7 @@ describe('PreflightNotes templates and renderings', () => {
 
   it('says when the check could not run', () => {
     notes(withDefinitions({ definitionsError: 'HTTP 500' }, ok(HOME)));
-    expect(screen.getByRole('note', { name: "Couldn't check templates and renderings: HTTP 500. You can still start." })).toBeInTheDocument();
+    expect(screen.getByRole('note', { name: "Couldn't check templates and renderings for Acme · QA: HTTP 500. You can still start." })).toBeInTheDocument();
     expect(screen.queryByRole('status')).not.toBeInTheDocument();
   });
 });

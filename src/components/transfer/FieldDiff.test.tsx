@@ -30,8 +30,8 @@ describe('FieldDiff', () => {
   it('reads the fields, then lists the changed ones in order', async () => {
     setup();
     expect(screen.getByRole('status')).toHaveTextContent('Reading fields…');
-    expect(await screen.findByText('Default language, latest version. Revision and updated dates are left out.')).toBeInTheDocument();
-    expect(screen.getByRole('group', { name: `Changes to ${HOME}` })).toBeInTheDocument();
+    expect(await screen.findByText(`${DEV.name} compared with ${QA.name}: default language, latest version. Revision and updated dates are left out.`)).toBeInTheDocument();
+    expect(screen.getByRole('group', { name: `Changes to ${HOME} on ${QA.name}` })).toBeInTheDocument();
     expect(listed()).toEqual(['Title', 'Text', 'Summary', 'Teaser', 'Legacy']);
     expect(screen.queryByText('No field values differ.')).not.toBeInTheDocument();
   });

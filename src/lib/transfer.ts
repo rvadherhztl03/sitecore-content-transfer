@@ -195,7 +195,8 @@ type Steps = { begin(i: number, message: string): void; done(percent: number): v
 type Imports = { accepted: Env[]; unverified?: Env };
 
 // Shared step bookkeeping: marks the running step failed on error, logs `Cancelled.` on abort,
-// returns `failed`, and cleans up `envs` (never a target that accepted an import). A target still importing
+// returns `failed`, and cleans up `envs` as they stand at the end (the body may add to them; never a target that
+// accepted an import). A target still importing
 // (`imports.unverified`) may finish anyway, so a failure or cancel also warns about it.
 async function runSteps<T>(
   client: SdkClient,
@@ -486,7 +487,9 @@ export async function runTransfer(
   const share = (100 - packaged) / targets.length;
   const transferId = crypto.randomUUID();
   const imports: Imports = { accepted: [] };
-  return runSteps(client, [source, ...targets.map((t) => t.env)], transferId, cb, signal, false, async ({ begin, done }) => {
+  // Where this transfer exists, to clean up: the source, and each target once chunks start going to it.
+  const envs = [source];
+  return runSteps(client, envs, transferId, cb, signal, false, async ({ begin, done }) => {
     for (const [i, { env, backup }] of backups.entries()) {
       const pct = span((BACKUP_SHARE * i) / backups.length, (BACKUP_SHARE * (i + 1)) / backups.length);
       begin(i, `Backing up ${env.name}.`);
@@ -521,6 +524,7 @@ export async function runTransfer(
       const at = targetAt[k];
 
       begin(at, `Copying chunks from ${source.name} to ${target.name}.`);
+      envs.push(target);
       let copied = 0;
       for (const set of sets) {
         for (let chunkId = 0; chunkId < set.ChunkCount; chunkId++) {

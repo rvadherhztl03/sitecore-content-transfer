@@ -198,7 +198,7 @@ describe('ReviewStep field changes', () => {
     expect(rows).toHaveLength(6);
     const cell = within(rows[3]).getByRole('cell');
     expect(cell).toHaveAttribute('colspan', '4');
-    expect(within(cell).getByRole('group', { name: `Changes to ${HERO.itemPath}` })).toBeInTheDocument();
+    expect(within(cell).getByRole('group', { name: `Changes to ${HERO.itemPath} on ${QA.name}` })).toBeInTheDocument();
     expect(await within(cell).findByRole('button', { name: 'Show values of Alt' })).toBeInTheDocument();
     fireEvent.click(show);
     expect(screen.getAllByRole('row')).toHaveLength(5);
@@ -222,8 +222,19 @@ describe('ReviewStep with several targets', () => {
     expect(screen.getByRole('columnheader', { name: 'On Acme · UAT' })).toBeInTheDocument();
     expect(screen.getByRole('columnheader', { name: 'If it exists' })).toBeInTheDocument();
     expect(screen.getByText('Checking Acme · QA…')).toBeInTheDocument();
-    expect(screen.getByText("Couldn't run the pre-flight check: Boom. You can still start.")).toBeInTheDocument();
+    expect(screen.getByText("Couldn't run the pre-flight check on Acme · UAT: Boom. You can still start.")).toBeInTheDocument();
     expect(screen.getByText('1 item replaces everything below it on Acme · QA and Acme · UAT.')).toBeInTheDocument();
+  });
+
+  it('gives the targets their order, and says what only concerns the source once', () => {
+    const missing: Preflight = {
+      status: 'done',
+      checks: new Map([[HERO.itemPath, { itemPath: HERO.itemPath, onSource: false, onTarget: 'new', missingParents: [], otherParents: [], deleted: [] }]]),
+    };
+    setup({ targets: [QA, UAT], trees: [HERO], preflights: { [QA.id]: missing, [UAT.id]: missing } });
+    const route = screen.getByRole('region', { name: 'Route' });
+    expect(within(route).getByText('Then to')).toBeInTheDocument();
+    expect(screen.getAllByRole('note', { name: 'Not found on Acme · Development' })).toHaveLength(1);
   });
 
   it('asks to confirm each production target', () => {

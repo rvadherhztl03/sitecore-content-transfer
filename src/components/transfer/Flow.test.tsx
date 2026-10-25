@@ -372,7 +372,7 @@ describe('Flow', () => {
     it('a failed check says so and does not block Start', async () => {
       setup({ find: () => ({ status: 500 }) });
       await toReview();
-      expect(await screen.findByRole('note', { name: "Couldn't run the pre-flight check: HTTP 500. You can still start." })).toBeInTheDocument();
+      expect(await screen.findByRole('note', { name: "Couldn't run the pre-flight check on Acme · QA: HTTP 500. You can still start." })).toBeInTheDocument();
       expect(screen.getByRole('button', { name: 'Start transfer' })).toBeEnabled();
     });
 
@@ -383,11 +383,11 @@ describe('Flow', () => {
         related: { 'ctx-dev': [{ id: 'h', path: HOME, fields: { Image: `<image mediaid="{${HERO_ID}}" />` } }, { id: HERO_ID, path: HERO, name: 'Hero' }], 'ctx-qa': [] },
       });
       await toReview();
-      const note = screen.getByRole('note', { name: 'Used by your items but not in the list' });
+      const note = screen.getByRole('note', { name: `Used by your items but not on ${QA.name}` });
       expect(within(note).getByRole('listitem')).toHaveTextContent(`Hero ${HERO} · used by Home`);
       fireEvent.click(within(note).getByRole('button', { name: 'Add 1 missing item' }));
       await checked();
-      expect(screen.queryByRole('note', { name: 'Used by your items but not in the list' })).not.toBeInTheDocument();
+      expect(screen.queryByRole('note', { name: `Used by your items but not on ${QA.name}` })).not.toBeInTheDocument();
       click('Start transfer');
       await screen.findByText('Transfer complete');
       expect(ofKey(calls, 'createContentTransfer')[0].params.body.configuration.dataTrees).toEqual([
@@ -589,9 +589,42 @@ describe('Flow', () => {
       fireEvent.click(screen.getByRole('checkbox', { name: 'I understand this writes to Acme Production' }));
       click('Start transfer');
       expect(await screen.findByRole('heading', { level: 1, name: 'Transfer failed' })).toBeInTheDocument();
-      expect(screen.getByText('Acme · QA got the content before the transfer stopped.')).toBeInTheDocument();
+      expect(screen.getByText('Acme · QA got the content before the transfer stopped, so Try again leaves it out.')).toBeInTheDocument();
       expect(screen.getByRole('button', { name: 'Restore Acme · QA' })).toBeInTheDocument();
       expect(screen.getByRole('button', { name: 'Download Acme Production backup' })).toBeInTheDocument();
+      // Try again goes back to Review for the rest only: QA already has the content (and its original backup).
+      click('Try again');
+      expect(screen.getByRole('heading', { level: 1, name: 'Ready to transfer' })).toBeInTheDocument();
+      expect(within(screen.getByRole('region', { name: 'Route' })).queryByText('Acme · QA')).not.toBeInTheDocument();
+      expect(screen.getByRole('columnheader', { name: 'On Acme Production' })).toBeInTheDocument();
+    });
+
+    it('writes to production last, whatever the pick order', () => {
+      setup();
+      fireEvent.click(radio('To', QA));
+      pickProd();
+      fireEvent.click(radio('To', QA));
+      expect(within(stepBar()).getByText('Acme · Development → Acme · QA and Acme Production · master')).toBeInTheDocument();
+    });
+
+    it('a failed restore can be tried again after restoring another target', async () => {
+      downloads();
+      let consumes = 0;
+      setup({ find: EVERYWHERE, overrides: { consumeFile: () => (++consumes === 3 ? { status: 500 } : {}) } });
+      pickProd();
+      await toReview();
+      fireEvent.click(screen.getByRole('checkbox', { name: 'I understand this writes to Acme Production' }));
+      click('Start transfer');
+      await screen.findByText('Transfer complete');
+      click('Restore Acme · QA');
+      click('Restore now');
+      expect(await screen.findByRole('heading', { level: 1, name: 'Restore failed' })).toBeInTheDocument();
+      click('Restore Acme Production');
+      fireEvent.click(screen.getByRole('checkbox', { name: 'I understand this writes to Acme Production' }));
+      click('Restore now');
+      expect(await screen.findByRole('heading', { level: 1, name: 'Restore complete' })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Restore Acme · QA' })).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Restore Acme Production' })).not.toBeInTheDocument();
     });
   });
 

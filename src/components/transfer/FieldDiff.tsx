@@ -113,7 +113,7 @@ export function FieldDiff({ client, source, target, itemPath }: Props) {
   const shown = all ? [...changed, ...fields.filter((f) => !f.changed)] : changed;
 
   return (
-    <div role="group" aria-label={`Changes to ${itemPath}`} className="flex min-w-0 flex-col gap-2.5 rounded-xl border bg-white p-3 text-sm font-normal">
+    <div role="group" aria-label={`Changes to ${itemPath} on ${target.name}`} className="flex min-w-0 flex-col gap-2.5 rounded-xl border bg-white p-3 text-sm font-normal">
       {state.status === 'loading' && (
         <p role="status" className="text-muted-foreground flex items-center gap-2 text-sm">
           <Icon path={mdiLoading} className="size-4 animate-spin" aria-hidden="true" />
@@ -128,7 +128,7 @@ export function FieldDiff({ client, source, target, itemPath }: Props) {
       {state.status === 'done' && (
         <>
           <div className="flex flex-wrap items-center justify-between gap-2">
-            <p className="text-muted-foreground text-xs">Default language, latest version. Revision and updated dates are left out.</p>
+            <p className="text-muted-foreground text-xs break-words">{`${source.name} compared with ${target.name}: default language, latest version. Revision and updated dates are left out.`}</p>
             <Button type="button" variant="outline" size="sm" className={BTN} aria-pressed={all} onClick={() => setAll(!all)}>
               {`Show all fields (${fields.length})`}
             </Button>

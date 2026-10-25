@@ -318,7 +318,7 @@ describe('PanelFlow', () => {
       const { calls } = await toReview(DEV, QA, {
         related: { [`ctx-${DEV}`]: [{ id: 'h', path: HOME, renderings: `<r s:ds="${SHARED}" />` }, { id: 's', path: SHARED, name: 'Shared' }] },
       });
-      const note = screen.getByRole('note', { name: 'Used by your items but not in the list' });
+      const note = screen.getByRole('note', { name: `Used by your items but not on ${QA}` });
       fireEvent.click(within(note).getByRole('button', { name: 'Add 1 missing item' }));
       expect(within(screen.getByRole('region', { name: 'Review' })).getByText('Also sends').closest('div')).toHaveTextContent(SHARED);
       await waitFor(() => expect(screen.queryAllByText(/^Checking/)).toHaveLength(0));
@@ -473,7 +473,8 @@ describe('PanelFlow', () => {
       click('Cancel transfer');
       expect(await screen.findByRole('heading', { name: 'Transfer failed' })).toBeInTheDocument();
       expect(ofKey(calls, 'saveChunk')).toHaveLength(0);
-      expect(ofKey(calls, 'deleteContentTransfer')).toHaveLength(2);
+      // Cancelled while the source was still packaging: only the source has the transfer to clean up.
+      expect(ofKey(calls, 'deleteContentTransfer')).toHaveLength(1);
     });
 
     it('unmount aborts the run', async () => {
@@ -551,7 +552,7 @@ describe('PanelFlow', () => {
       const show = await screen.findByRole('button', { name: `Show changes to ${HOME}` });
       fireEvent.click(show);
       expect(show).toHaveAttribute('aria-expanded', 'true');
-      const diff = within(screen.getByRole('region', { name: 'Review' })).getByRole('group', { name: `Changes to ${HOME}` });
+      const diff = within(screen.getByRole('region', { name: 'Review' })).getByRole('group', { name: `Changes to ${HOME} on ${QA}` });
       fireEvent.click(await within(diff).findByRole('button', { name: 'Show values of Title' }));
       expect(within(diff).getByRole('group', { name: QA })).toHaveTextContent('Old home');
     });
