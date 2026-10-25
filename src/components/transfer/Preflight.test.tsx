@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { PreflightNotes, PreflightStatus } from '@/components/transfer/Preflight';
 import type { Preflight } from '@/components/transfer/usePreflight';
 import type { ItemCheck } from '@/lib/preflight';
-import type { RelatedItem } from '@/lib/related';
+import type { Definition, RelatedItem } from '@/lib/related';
 import type { Env } from '@/lib/sdk';
 
 const DEV: Env = { id: 'd', name: 'Acme · Dev', contextId: 'cd' };
@@ -22,6 +22,14 @@ const ok = (itemPath: string, patch: Partial<ItemCheck> = {}): ItemCheck => ({
   ...patch,
 });
 const done = (...checks: ItemCheck[]): Preflight => ({ status: 'done', checks: new Map(checks.map((c) => [c.itemPath, c])) });
+const PAGE = '/sitecore/templates/Project/Acme/Page';
+const HERO = '/sitecore/layout/Renderings/Hero';
+const def = (itemPath: string, kind: Definition['kind'], usedBy = [HOME], templateOf: string[] = []): Definition => ({ itemPath, name: itemPath.split('/').pop()!, kind, usedBy, templateOf });
+const withDefinitions = (extra: { definitions?: Definition[]; definitionsError?: string }, ...checks: ItemCheck[]): Preflight => ({
+  status: 'done',
+  checks: new Map(checks.map((c) => [c.itemPath, c])),
+  ...extra,
+});
 
 function notes(preflight: Preflight | undefined, actions: { onAddParents?(): void; onRemoveNotFound?(): void; onAddRelated?(): void } = {}) {
   return render(<PreflightNotes preflight={preflight} source={DEV} target={QA} {...actions} />);
@@ -151,6 +159,43 @@ describe('PreflightNotes related content', () => {
   });
 });
 
+describe('PreflightNotes templates and renderings', () => {
+  const NOTE = 'Missing on Acme · QA: templates and renderings';
+
+  it('lists what the target lacks, by kind, with who uses it, and offers no fix', () => {
+    notes(withDefinitions({ definitions: [def(PAGE, 'Template', [HOME, NEWS], [HOME, NEWS]), def(HERO, 'Rendering')] }, ok(HOME), ok(NEWS)), {
+      onAddParents: vi.fn(),
+      onRemoveNotFound: vi.fn(),
+      onAddRelated: vi.fn(),
+    });
+    const note = screen.getByRole('note', { name: NOTE });
+    expect(note).toHaveTextContent(
+      "Items that use them won't open or render properly on Acme · QA. They usually ship with a code deployment: deploy them to Acme · QA first.",
+    );
+    expect(within(note).getAllByRole('listitem').map((li) => li.textContent)).toEqual([
+      `Template Page ${PAGE} · used by Home, News`,
+      `Rendering Hero ${HERO} · used by Home`,
+    ]);
+    expect(screen.queryByRole('button')).not.toBeInTheDocument();
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+  });
+
+  it('sits right after the items not found on the source', () => {
+    notes(withDefinitions({ definitions: [def(PAGE, 'Template')] }, ok(HOME, { missingParents: [ACME] }), ok(NEWS, { onSource: false })));
+    expect(screen.getAllByRole('note').map((n) => n.querySelector('strong')!.textContent)).toEqual([
+      'Not found on Acme · Dev',
+      NOTE,
+      'Missing parents on Acme · QA',
+    ]);
+  });
+
+  it('says when the check could not run', () => {
+    notes(withDefinitions({ definitionsError: 'HTTP 500' }, ok(HOME)));
+    expect(screen.getByRole('note', { name: "Couldn't check templates and renderings: HTTP 500. You can still start." })).toBeInTheDocument();
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+  });
+});
+
 describe('PreflightStatus', () => {
   const chip = (preflight: Preflight | undefined, itemPath = HOME) => {
     const { container } = render(<PreflightStatus preflight={preflight} itemPath={itemPath} source={DEV} />);
@@ -168,5 +213,13 @@ describe('PreflightStatus', () => {
     expect(chip(done(ok(HOME, { onTarget: 'new', missingParents: [ACME] })))).toBe('Parent missing');
     expect(chip(done(ok(HOME, { onTarget: 'new' })))).toBe('New');
     expect(chip(done(ok(HOME)))).toBe('Exists');
+  });
+
+  it("says when the item's own template is missing, after only Not on the source", () => {
+    const page = [def(PAGE, 'Template', [HOME], [HOME])];
+    expect(chip(withDefinitions({ definitions: page }, ok(HOME, { onSource: false })))).toBe('Not on Acme · Dev');
+    expect(chip(withDefinitions({ definitions: page }, ok(HOME, { onTarget: 'other', missingParents: [ACME] })))).toBe('Template missing');
+    // A missing rendering, or a template only another item is built on, is the note's to explain.
+    expect(chip(withDefinitions({ definitions: [def(HERO, 'Rendering'), def(PAGE, 'Template', [HOME, NEWS], [NEWS])] }, ok(HOME)))).toBe('Exists');
   });
 });

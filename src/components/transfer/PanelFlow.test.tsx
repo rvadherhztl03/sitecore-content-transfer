@@ -330,6 +330,16 @@ describe('PanelFlow', () => {
       ]);
     });
 
+    it('a page whose template the target lacks says so, and Start stays available', async () => {
+      const PAGE_ID = 'abcdef00-0000-0000-0000-000000000001';
+      const PAGE = '/sitecore/templates/Project/Acme/Page';
+      await toReview(DEV, QA, { related: { [`ctx-${DEV}`]: [{ id: 'h', path: HOME, template: PAGE_ID }, { id: PAGE_ID, path: PAGE, name: 'Page' }] } });
+      expect(within(screen.getByRole('region', { name: 'Review' })).getByText('On Acme · QA').closest('div')).toHaveTextContent('Template missing');
+      const note = screen.getByRole('note', { name: 'Missing on Acme · QA: templates and renderings' });
+      expect(within(note).getByRole('listitem')).toHaveTextContent(`Template Page ${PAGE} · used by Home`);
+      expect(screen.getByRole('button', { name: 'Start' })).toBeEnabled();
+    });
+
     it('a fresh review starts without the parents added last time', async () => {
       await toReview(DEV, QA, { find: (ctx, path) => (ctx === `ctx-${QA}` && path === ACME ? undefined : { id: path }) });
       fireEvent.click(within(await screen.findByRole('note', { name: 'Missing parents on Acme · QA' })).getByRole('button', { name: 'Add missing parents' }));

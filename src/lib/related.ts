@@ -84,6 +84,65 @@ export async function scanRelated(client: SdkClient, source: Env, target: Env, t
   });
 }
 
+/** A template, rendering or layout the queued items use that the target lacks. These ship with code deploys, not content. */
+export type Definition = {
+  itemPath: string;
+  name: string;
+  kind: 'Template' | 'Rendering' | 'Layout';
+  /** The queued items that use it, as their template or in their presentation, in list order. */
+  usedBy: string[];
+  /** The queued items built on it as their own template, in list order: those won't open on the target. */
+  templateOf: string[];
+};
+
+const DEFINITION = /^\/sitecore\/(?:templates|layout)\//i;
+// ponytail: anything else under /sitecore/layout (placeholder settings, devices) counts as a rendering; tell them apart by template if that label misleads.
+const kindOf = (path: string): Definition['kind'] =>
+  /^\/sitecore\/templates\//i.test(path) ? 'Template' : /^\/sitecore\/layout\/layouts\//i.test(path) ? 'Layout' : 'Rendering';
+const USES = 'template { templateId } r: field(name: "__Renderings") { value } f: field(name: "__Final Renderings") { value }';
+
+/**
+ * Finds the templates, renderings and layouts the queued items use that the target lacks. Looked up by ID, as items
+ * refer to them, so a different item at the same path doesn't count. Runs apart from scanRelated so its failure can't
+ * stop that scan. Reads the source twice (the items, then the IDs they name) and the target once; like scanRelated,
+ * only the queued items themselves are read.
+ */
+export async function scanDefinitions(client: SdkClient, source: Env, target: Env, trees: DataTree[]): Promise<Definition[]> {
+  if (!trees.length) return [];
+  const read = (await graphql(client, source, `query DefinitionsUsed {\n${trees.map((t, i) => item(`i${i}`, 'path', t.itemPath, USES)).join('\n')}\n}`, {})) ?? {};
+
+  // Each ID (lower case, with dashes), with the queued items that use it and those built on it as their template.
+  const refs = new Map<string, { usedBy: Set<string>; templateOf: Set<string> }>();
+  const note = (id: string, user: string, asTemplate = false) => {
+    if (!refs.has(id)) refs.set(id, { usedBy: new Set(), templateOf: new Set() });
+    refs.get(id)!.usedBy.add(user);
+    if (asTemplate) refs.get(id)!.templateOf.add(user);
+  };
+  trees.forEach((t, i) => {
+    const it = read[`i${i}`];
+    if (!it) return;
+    const template: string | undefined = it.template?.templateId;
+    if (template) note(dashed(template.replace(/[{}-]/g, '').toLowerCase()), t.itemPath, true);
+    referencesIn([it.r?.value, it.f?.value].filter(Boolean).join('\n')).ids.forEach((id) => note(id, t.itemPath));
+  });
+  const ids = [...refs.keys()];
+  if (!ids.length) return [];
+
+  const resolved = (await graphql(client, source, `query DefinitionsItems {\n${ids.map((id, i) => item(`r${i}`, 'itemId', `{${id}}`, 'itemId path name')).join('\n')}\n}`, {})) ?? {};
+  // Templates and layout items only, not what the list brings: datasources are scanRelated's, and layout uids resolve to nothing.
+  const list = ids.flatMap((id, i) => {
+    const found: Found | null = resolved[`r${i}`];
+    return found?.path && DEFINITION.test(found.path) && !brought(found.path, trees) ? [{ id, ...found, ...refs.get(id)! }] : [];
+  });
+  if (!list.length) return [];
+
+  const there = (await graphql(client, target, `query DefinitionsOnTarget {\n${list.map((d, i) => item(`t${i}`, 'itemId', `{${d.id}}`, 'itemId')).join('\n')}\n}`, {})) ?? {};
+  const inOrder = (users: Set<string>) => trees.map((t) => t.itemPath).filter((p) => users.has(p));
+  return list
+    .filter((_, i) => !there[`t${i}`]?.itemId)
+    .map((d) => ({ itemPath: d.path, name: d.name, kind: kindOf(d.path), usedBy: inOrder(d.usedBy), templateOf: inOrder(d.templateOf) }));
+}
+
 /** Adds the related items the target lacks, once each, as "This item" kept if it exists by then. */
 export function addRelated(trees: DataTree[], related: RelatedItem[]): DataTree[] {
   const queued = new Set(trees.map((t) => key(t.itemPath)));

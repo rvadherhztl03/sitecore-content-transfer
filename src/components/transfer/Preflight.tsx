@@ -82,8 +82,20 @@ export function PreflightNotes({ preflight, source, target, onAddParents, onRemo
   const addable = absent.filter((r) => r.onTarget === 'new').length;
   const present = related.length - absent.length;
   const scanFailed = preflight.relatedError;
+  const definitions = preflight.definitions ?? [];
+  const definitionsFailed = preflight.definitionsError;
 
-  if (!notFound.length && !missing.length && !otherParents.length && !otherHere.length && !deleted.length && !absent.length && !scanFailed) {
+  if (
+    !notFound.length &&
+    !missing.length &&
+    !otherParents.length &&
+    !otherHere.length &&
+    !deleted.length &&
+    !absent.length &&
+    !scanFailed &&
+    !definitions.length &&
+    !definitionsFailed
+  ) {
     return (
       <div className="flex flex-col gap-1">
         <p role="status" className="text-success-700 flex items-center gap-2 text-sm font-medium">
@@ -122,6 +134,22 @@ export function PreflightNotes({ preflight, source, target, onAddParents, onRemo
           <Paths paths={notFound.map((c) => c.itemPath)} />
         </Note>
       )}
+      {/* No add button: copying developer items through content would put them out of step with serialization. */}
+      {definitions.length > 0 && (
+        <Note tone="danger" title={`Missing on ${target.name}: templates and renderings`}>
+          <span>{`Items that use them won't open or render properly on ${target.name}. They usually ship with a code deployment: deploy them to ${target.name} first.`}</span>
+          <ul className="flex flex-col gap-1">
+            {definitions.map((d) => (
+              <li key={d.itemPath} className="break-words">
+                {`${d.kind} `}
+                <span className="font-semibold">{d.name}</span> <span className={PATH}>{d.itemPath}</span>
+                {` · used by ${d.usedBy.map(nameOf).join(', ')}`}
+              </li>
+            ))}
+          </ul>
+        </Note>
+      )}
+      {definitionsFailed && <Note tone="warning" title={`Couldn't check templates and renderings: ${definitionsFailed.replace(/\.?$/, '.')} You can still start.`} />}
       {missing.length > 0 && (
         <Note
           tone="warning"
@@ -178,18 +206,21 @@ export function PreflightNotes({ preflight, source, target, onAddParents, onRemo
 /** What the target holds for one item, most serious first, for the items table. */
 export function PreflightStatus({ preflight, itemPath, source }: { preflight?: Preflight; itemPath: string; source: Env }) {
   if (preflight?.status === 'checking') return <span className="text-muted-foreground text-xs">Checking…</span>;
-  const c = preflight?.status === 'done' ? preflight.checks.get(itemPath) : undefined;
+  const done = preflight?.status === 'done' ? preflight : undefined;
+  const c = done?.checks.get(itemPath);
   if (!c) return <span className="text-muted-foreground">—</span>;
   const [label, tone]: [string, keyof typeof CHIP] = !c.onSource
     ? [`Not on ${source.name}`, 'danger']
-    : c.onTarget === 'other'
-      ? ['Different item here', 'warning']
-      : c.otherParents.length
-        ? ['Different parent', 'warning']
-        : c.missingParents.length
-          ? ['Parent missing', 'warning']
-          : c.onTarget === 'new'
-            ? ['New', 'neutral']
-            : ['Exists', 'neutral'];
+    : done?.definitions?.some((d) => d.templateOf.includes(itemPath))
+      ? ['Template missing', 'danger']
+      : c.onTarget === 'other'
+        ? ['Different item here', 'warning']
+        : c.otherParents.length
+          ? ['Different parent', 'warning']
+          : c.missingParents.length
+            ? ['Parent missing', 'warning']
+            : c.onTarget === 'new'
+              ? ['New', 'neutral']
+              : ['Exists', 'neutral'];
   return <span className={cn(PILL, CHIP[tone])}>{label}</span>;
 }

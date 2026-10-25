@@ -44,14 +44,16 @@ export const preflightReply = (find: (contextId: string, path: string) => Found 
 /** Whether a GraphQL call is the pre-flight query. */
 export const isPreflight = (p: any) => typeof p?.body?.query === 'string' && p.body.query.startsWith('query Preflight');
 
-export type RelatedFake = { id: string; path: string; name?: string; fields?: Record<string, string>; renderings?: string; final?: string };
+/** `template` is the item's template ID. */
+export type RelatedFake = { id: string; path: string; name?: string; fields?: Record<string, string>; renderings?: string; final?: string; template?: string };
 
-/** Whether a GraphQL call is one of the related-content scan's queries (src/lib/related.ts). */
-export const isRelated = (p: any) => typeof p?.body?.query === 'string' && p.body.query.startsWith('query Related');
+/** Whether a GraphQL call is one of the related-content scan's or the template and rendering check's queries (src/lib/related.ts). */
+export const isRelated = (p: any) => typeof p?.body?.query === 'string' && /^query (Related|Definitions)/.test(p.body.query);
 
 /**
- * Answers the related-content scan from per-environment item lists (keyed by context ID). Each alias says what it asks
- * for: `i…` reads a queued item's fields by path, `r…` resolves an ID or path, `t…` looks a path up on the target.
+ * Answers the related-content scan and the template and rendering check from per-environment item lists (keyed by
+ * context ID). Each alias says what it asks for: `i…` reads a queued item's fields by path, `r…` resolves an ID or path,
+ * `t…` looks a path or ID up on the target.
  */
 export const relatedReply = (items: Record<string, RelatedFake[]>) => (p: any): FakeReply => {
   const all = items[p.query.sitecoreContextId] ?? [];
@@ -67,6 +69,7 @@ export const relatedReply = (items: Record<string, RelatedFake[]>) => (p: any): 
             fields: { nodes: Object.entries(it.fields ?? {}).map(([name, v]) => ({ name, value: v })) },
             r: it.renderings === undefined ? null : { value: it.renderings },
             f: it.final === undefined ? null : { value: it.final },
+            template: it.template === undefined ? null : { templateId: it.template },
           }
         : { itemId: it.id, path: it.path, name: it.name ?? it.path.split('/').pop() };
   }
