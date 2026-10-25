@@ -25,11 +25,11 @@ describe('useRun', () => {
     const job = pending();
     let started!: Promise<void>;
     act(() => {
-      started = result.current.start({ labels: ['One', 'Two'], target: QA, info: { chunkCount: 4 } }, job.exec);
+      started = result.current.start({ labels: ['One', 'Two'], targets: [QA], info: { chunkCount: 4 } }, job.exec);
     });
     expect(result.current.running).toBe(true);
     expect(result.current.run).toMatchObject({
-      target: QA,
+      targets: [QA],
       steps: [
         { label: 'One', status: 'pending' },
         { label: 'Two', status: 'pending' },

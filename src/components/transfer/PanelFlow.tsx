@@ -203,8 +203,8 @@ export function PanelFlow({ client, pageName, pagePath }: Props) {
       download(pkg.blob, pkg.name);
     };
     const labels = [...(backup.length ? ['Back up target'] : []), ...TRANSFER_STEPS, ...(publishOn ? ['Publish to Experience Edge'] : [])];
-    void runner.start({ labels, source, target }, (cb, signal) =>
-      runTransfer(client, { source, target, database: DATABASE, dataTrees, backup, publish: publishOn }, { ...cb, onBackup }, signal),
+    void runner.start({ labels, source, targets: [target] }, (cb, signal) =>
+      runTransfer(client, { source, targets: [{ env: target, backup }], database: DATABASE, dataTrees, publish: publishOn }, { ...cb, onBackup }, signal),
     );
   };
 
@@ -217,11 +217,11 @@ export function PanelFlow({ client, pageName, pagePath }: Props) {
     // Installs the backup into the target the send wrote to, as a fresh run.
     const restore = () => {
       const pkg = backupZip!;
-      const tgt = run.target!;
+      const tgt = run.targets![0];
       runner.reset();
       setRestoring(true);
       const labels = [...IMPORT_STEPS, ...(withPublish ? ['Publish to Experience Edge'] : [])];
-      void runner.start({ labels, target: tgt }, async (cb, signal) => {
+      void runner.start({ labels, targets: [tgt] }, async (cb, signal) => {
         const { parts, items } = await readPackage(new File([pkg.blob], pkg.name));
         // The send was published: publish what the backup puts back, so the live site goes back too.
         const publish = withPublish
@@ -236,7 +236,7 @@ export function PanelFlow({ client, pageName, pagePath }: Props) {
           compact
           kind={restoring ? 'restore' : 'transfer'}
           source={run.source}
-          target={run.target}
+          targets={run.targets}
           steps={run.steps}
           progress={run.progress}
           logs={run.logs}
@@ -255,8 +255,11 @@ export function PanelFlow({ client, pageName, pagePath }: Props) {
             } else close();
           }}
           onHome={close}
-          onDownloadBackup={backupZip ? () => download(backupZip.blob, backupZip.name) : undefined}
-          onRestore={backupZip && !restoring && changed ? restore : undefined}
+          backups={
+            backupZip
+              ? [{ target: run.targets![0], onDownload: () => download(backupZip.blob, backupZip.name), onRestore: !restoring && changed ? restore : undefined }]
+              : undefined
+          }
         />
       </section>
     );
@@ -326,8 +329,8 @@ export function PanelFlow({ client, pageName, pagePath }: Props) {
               : undefined
           }
         />
-        <BackupChoice target={target} available={backupTrees.length > 0} checked={backupOn} onChange={setBackupOn} />
-        <PublishChoice target={target} checked={publishOn} onChange={setPublishOn} />
+        <BackupChoice targets={[target]} available={backupTrees.length > 0} checked={backupOn} onChange={setBackupOn} />
+        <PublishChoice targets={[target]} checked={publishOn} onChange={setPublishOn} />
         {needsProdConfirm(target) && <ProdConfirm target={target} checked={prodChecked} onChange={(v) => setProdFor(v ? target.id : null)} />}
         <p className="text-muted-foreground text-[13px] leading-normal">
           {cancelNote(target.name)}

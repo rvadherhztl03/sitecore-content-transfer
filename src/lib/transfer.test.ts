@@ -8,6 +8,7 @@ import {
   TIMING,
   TRANSFER_STEPS,
   backupTreesFor,
+  transferSteps,
   runExport,
   runImport,
   runTransfer,
@@ -23,7 +24,8 @@ const QA = { id: 'r2', name: 'QA', contextId: 'ctx-qa' };
 const TREES: DataTree[] = [
   { itemPath: '/sitecore/media library/Images/Hero Banner', scope: 'SingleItem', mergeStrategy: 'OverrideExistingItem' },
 ];
-const OPTS = { source: DEV, target: QA, database: 'master', dataTrees: TREES };
+const UAT = { id: 'r3', name: 'UAT', contextId: 'ctx-uat' };
+const OPTS = { source: DEV, targets: [{ env: QA }], database: 'master', dataTrees: TREES };
 const CT = 'xmc.contentTransfer.';
 const KIND: Record<string, 'query' | 'mutate'> = {
   createContentTransfer: 'mutate',
@@ -410,7 +412,7 @@ describe('backup before the transfer', () => {
     const zips: Blob[] = [];
     r.cb.onBackup = (zip) => zips.push(zip);
     const { client, calls } = fakeClient(happyHandlers(overrides));
-    return { r, zips, calls, run: () => runTransfer(client, { ...OPTS, backup: BACKUP }, r.cb) };
+    return { r, zips, calls, run: () => runTransfer(client, { ...OPTS, targets: [{ env: QA, backup: BACKUP }] }, r.cb) };
   };
 
   it('exports the target under its own job first, hands over the zip, then transfers', async () => {
@@ -485,7 +487,7 @@ describe('backup before the transfer', () => {
   it('runs no backup step for an empty backup list', async () => {
     const { client, calls } = fakeClient(happyHandlers());
     const r = recorder();
-    expect(await runTransfer(client, { ...OPTS, backup: [] }, r.cb)).toBe(true);
+    expect(await runTransfer(client, { ...OPTS, targets: [{ env: QA, backup: [] }] }, r.cb)).toBe(true);
     expect(ofKey(calls, 'createContentTransfer').map(ctxOf)).toEqual(['ctx-dev']);
     expect(r.steps).not.toContainEqual([TRANSFER_STEPS.length, 'done']);
   });
@@ -590,6 +592,89 @@ describe('publish to Experience Edge', () => {
     expect(single.params.body.query).toContain(`rootItemPaths: ["${C}","${C}/C1"]`);
     expect(calls.filter((c) => c.key === GQL).every((c: any) => c.params.query.sitecoreContextId === 'ctx-qa')).toBe(true);
     expect(r.steps).toContainEqual([IMPORT_STEPS.length, 'done']);
+  });
+});
+
+describe('several targets', () => {
+  const both = (backup?: DataTree[]) => [{ env: QA, backup }, { env: UAT, backup }];
+  const ctxSeq = (calls: any[], k: string) => ofKey(calls, k).map(ctxOf);
+
+  it('lays the steps out: backups first, the source once, then each target named on every step', () => {
+    const plan = transferSteps(DEV, both(TREES), true);
+    expect(plan.labels).toEqual([
+      'Back up QA',
+      'Back up UAT',
+      'Create job on Dev',
+      'Package content',
+      'Copy chunks to QA',
+      'Assemble package on QA',
+      'Import into master on QA',
+      'Verify on QA',
+      'Publish to Experience Edge on QA',
+      'Copy chunks to UAT',
+      'Assemble package on UAT',
+      'Import into master on UAT',
+      'Verify on UAT',
+      'Publish to Experience Edge on UAT',
+    ]);
+    expect(plan.targetAt).toEqual([4, 9]);
+    expect(plan.firstImport).toBe(6);
+    // One target: the layout the single-target screens and IMPORT_STEP already use.
+    const one = transferSteps(DEV, [{ env: QA }]);
+    expect(one.labels).toEqual(['Create job on Dev', 'Package content', 'Copy chunks to QA', 'Assemble package on QA', 'Import into master', 'Verify']);
+    expect(one.firstImport).toBe(IMPORT_STEP.transfer);
+  });
+
+  it('packages on the source once, then imports into each target in turn, and never cleans up a target that imported', async () => {
+    const { client, calls } = fakeClient(happyHandlers());
+    const r = recorder();
+    expect(await runTransfer(client, { ...OPTS, targets: both() }, r.cb)).toBe(true);
+    expect(ctxSeq(calls, 'createContentTransfer')).toEqual(['ctx-dev']);
+    expect(ctxSeq(calls, 'saveChunk')).toEqual(['ctx-qa', 'ctx-qa', 'ctx-uat', 'ctx-uat']);
+    expect(ctxSeq(calls, 'consumeFile')).toEqual(['ctx-qa', 'ctx-uat']);
+    expect(ctxSeq(calls, 'deleteContentTransfer')).toEqual(['ctx-dev']);
+    // UAT starts only once QA is verified.
+    const qaVerified = calls.findLastIndex((c) => c.key === CT + 'getBlobState' && ctxOf(c) === 'ctx-qa');
+    expect(calls.findIndex((c) => c.key === CT + 'saveChunk' && ctxOf(c) === 'ctx-uat')).toBeGreaterThan(qaVerified);
+    expect(r.logs).toContainEqual(['QA has the content.', 'success']);
+    expect(r.logs).toContainEqual(['UAT has the content.', 'success']);
+    for (let i = 0; i < 10; i++) expect(r.steps).toContainEqual([i, 'done']);
+    expect(r.progress.at(-1)).toBe(100);
+    expect(r.progress).toEqual([...r.progress].sort((a, b) => a - b));
+  });
+
+  it('backs up every target before anything is written, and hands each backup over with its target', async () => {
+    const { client, calls } = fakeClient(happyHandlers());
+    const r = recorder();
+    const got: string[] = [];
+    r.cb.onBackup = (_zip, env) => got.push(env.name);
+    expect(await runTransfer(client, { ...OPTS, targets: both(TREES) }, r.cb)).toBe(true);
+    expect(ctxSeq(calls, 'createContentTransfer')).toEqual(['ctx-qa', 'ctx-uat', 'ctx-dev']);
+    expect(got).toEqual(['QA', 'UAT']);
+    expect(r.progress).toEqual([...r.progress].sort((a, b) => a - b));
+  });
+
+  it('stops at the first failure: earlier targets keep the content, later ones are left alone', async () => {
+    const { client, calls } = fakeClient(
+      happyHandlers({ completeChunkSetTransfer: (p) => (p.query.sitecoreContextId === 'ctx-uat' ? { status: 500 } : { data: { ContentTransferFileName: 'f.raif' } }) }),
+    );
+    const r = recorder();
+    expect(await runTransfer(client, { ...OPTS, targets: [...both(), { env: { id: 'r4', name: 'Prod', contextId: 'ctx-prod' } }] }, r.cb)).toBe(false);
+    expect(ctxSeq(calls, 'consumeFile')).toEqual(['ctx-qa']);
+    expect(calls.some((c) => ctxOf(c) === 'ctx-prod' && c.key !== CT + 'deleteContentTransfer')).toBe(false);
+    // QA imported: never cleaned up. UAT only held chunks: cleaned up, with the source and the untouched Prod.
+    expect(ctxSeq(calls, 'deleteContentTransfer')).toEqual(['ctx-dev', 'ctx-uat', 'ctx-prod']);
+    expect(r.steps).toContainEqual([7, 'fail']);
+    expect(r.logs.some(([m]) => /may still finish importing/.test(m))).toBe(false);
+  });
+
+  it('warns about the target that was importing when the run fails there', async () => {
+    const { client, calls } = fakeClient(happyHandlers({ getBlobState: (p) => ({ data: { status: p.query.sitecoreContextId === 'ctx-uat' ? 'Error' : 'OK' } }) }));
+    const r = recorder();
+    expect(await runTransfer(client, { ...OPTS, targets: both() }, r.cb)).toBe(false);
+    expect(r.logs).toContainEqual(STILL_IMPORTING('UAT'));
+    expect(r.logs).not.toContainEqual(STILL_IMPORTING('QA'));
+    expect(ctxSeq(calls, 'deleteContentTransfer')).toEqual(['ctx-dev']);
   });
 });
 

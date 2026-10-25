@@ -42,7 +42,7 @@ export function InstallFlow({ client, envs, onHome }: Props) {
     void runner.start(
       {
         labels: ['Upload package', `Assemble package on ${tgt.name}`, `Import into ${DATABASE}`, 'Verify'],
-        target: tgt,
+        targets: [tgt],
         // A bare .raif has no item list, so there is no count to show.
         info: { chunkCount: parts.reduce((n, p) => n + p.chunks.length, 0), itemCount: items.length || undefined },
       },
@@ -91,7 +91,7 @@ export function InstallFlow({ client, envs, onHome }: Props) {
         <div ref={runner.headingRef} className="flex flex-1 flex-col [&_h1]:outline-none">
           <RunView
             kind="install"
-            target={run.target}
+            targets={run.targets}
             steps={run.steps}
             progress={run.progress}
             logs={run.logs}

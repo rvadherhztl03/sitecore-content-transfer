@@ -13,8 +13,8 @@ type State = { status: 'loading' } | { status: 'failed'; error: string } | { sta
 
 const BTN = 'h-9 shrink-0 rounded-lg px-3 pointer-coarse:h-11';
 
-/** The "Show changes" button that opens an item's field diff. */
-export function ChangesToggle({ open, itemPath, onClick }: { open: boolean; itemPath: string; onClick(): void }) {
+/** The "Show changes" button that opens an item's field diff; `target` names it too, where several targets have one. */
+export function ChangesToggle({ open, itemPath, target, onClick }: { open: boolean; itemPath: string; target?: string; onClick(): void }) {
   return (
     <Button
       type="button"
@@ -22,7 +22,7 @@ export function ChangesToggle({ open, itemPath, onClick }: { open: boolean; item
       size="sm"
       className={cn(BTN, 'mt-1.5 self-start')}
       aria-expanded={open}
-      aria-label={`${open ? 'Hide' : 'Show'} changes to ${itemPath}`}
+      aria-label={`${open ? 'Hide' : 'Show'} changes to ${itemPath}${target ? ` on ${target}` : ''}`}
       onClick={onClick}
     >
       {open ? 'Hide changes' : 'Show changes'}

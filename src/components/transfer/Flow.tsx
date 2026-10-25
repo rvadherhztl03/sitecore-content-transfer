@@ -1,5 +1,6 @@
 import { CompareView } from '@/components/transfer/CompareView';
 import { ContentTree } from '@/components/transfer/ContentTree';
+import { listOf } from '@/components/transfer/copy';
 import { backupName, download, localDate } from '@/components/transfer/download';
 import { EnvironmentCards } from '@/components/transfer/EnvironmentCards';
 import { ActionBar, AppHeader, BTN, MAIN, PageHeading } from '@/components/transfer/Layout';
@@ -8,14 +9,26 @@ import { RunView } from '@/components/transfer/RunView';
 import { Segmented } from '@/components/transfer/Segmented';
 import { SelectionQueue } from '@/components/transfer/SelectionQueue';
 import { Stepper } from '@/components/transfer/Stepper';
-import { usePreflight } from '@/components/transfer/usePreflight';
+import { usePreflights } from '@/components/transfer/usePreflight';
 import { useRun } from '@/components/transfer/useRun';
 import { Button } from '@/components/ui/button';
 import { Icon } from '@/lib/icon';
 import { mergeTrees, newTree } from '@/lib/queue';
 import type { Env, SdkClient } from '@/lib/sdk';
 import { readPackage } from '@/lib/package';
-import { DATABASE, IMPORT_STEP, backupTreesFor, runExport, runImport, runTransfer, type DataTree, type MergeStrategy, type Scope } from '@/lib/transfer';
+import {
+  DATABASE,
+  IMPORT_STEP,
+  backupTreesFor,
+  runExport,
+  runImport,
+  runTransfer,
+  transferSteps,
+  type DataTree,
+  type MergeStrategy,
+  type Scope,
+  type TransferTarget,
+} from '@/lib/transfer';
 import { mdiArrowRight, mdiSwapHorizontal } from '@mdi/js';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 
@@ -24,62 +37,61 @@ type Props = { client: SdkClient; mode: Mode; envs: Env[]; onHome(): void };
 
 const PUBLISH_STEP = 'Publish to Experience Edge';
 
-const stepLabels = (mode: Mode, source: Env, target: Env | undefined, backup = false, publish = false) =>
-  mode === 'transfer'
-    ? [
-        ...(backup ? [`Back up ${target!.name}`] : []),
-        `Create job on ${source.name}`,
-        'Package content',
-        `Copy chunks to ${target!.name}`,
-        `Assemble package on ${target!.name}`,
-        `Import into ${DATABASE}`,
-        'Verify',
-        ...(publish ? [PUBLISH_STEP] : []),
-      ]
-    : [`Create job on ${source.name}`, 'Package content', 'Download & zip'];
+const exportSteps = (source: Env) => [`Create job on ${source.name}`, 'Package content', 'Download & zip'];
 
 /** The transfer and export flow: Route ▸ Content ▸ Review ▸ Run. Owns the route, the queue and the run. */
 export function Flow({ client, mode, envs, onHome }: Props) {
   const transfer = mode === 'transfer';
   const [step, setStep] = useState(0);
   const [sourceId, setSourceId] = useState<string | undefined>(envs[0]?.id);
-  const [targetId, setTargetId] = useState<string | undefined>(envs[1]?.id);
+  // The targets, in the order picked: a transfer writes to each in turn.
+  const [targetIds, setTargetIds] = useState<string[]>(envs[1] ? [envs[1].id] : []);
   const [trees, setTrees] = useState<DataTree[]>([]);
-  // The Content step's left panel (transfer only): the tree, or a comparison with the target, opened on first use and
-  // kept while switching.
-  const [view, setView] = useState<'browse' | 'compare'>('browse');
-  const [compared, setCompared] = useState(false);
-  // The target id the production box was ticked for: another target, or a fresh visit to Review, needs it ticked again.
-  const [prodFor, setProdFor] = useState<string | null>(null);
+  // The Content step's left panel (transfer only): the tree (`browse`), or a comparison with one target (its id), each
+  // opened on first use and kept while switching.
+  const [view, setView] = useState('browse');
+  const [compared, setCompared] = useState<string[]>([]);
+  // The production targets whose box is ticked: a fresh visit to Review needs them ticked again.
+  const [prodFor, setProdFor] = useState<string[]>([]);
   // `run` is null unless on the run step.
   const runner = useRun();
   const { run, running } = runner;
   // The export's package, kept for Download package.
   const [zip, setZip] = useState<{ blob: Blob; name: string }>();
-  // "Back up <target> first" (on by default), the backup the current run made, and whether that run has a backup step.
+  // "Back up <targets> first" (on by default), the backups the current transfer made (in target order) and where its
+  // steps sit (see transferSteps).
   const [backupOn, setBackupOn] = useState(true);
-  const [backupZip, setBackupZip] = useState<{ blob: Blob; name: string }>();
-  const [withBackup, setWithBackup] = useState(false);
-  // Whether the current run is a restore of that backup rather than the transfer itself.
-  const [restoring, setRestoring] = useState(false);
+  const [backupZips, setBackupZips] = useState<{ target: Env; blob: Blob; name: string }[]>([]);
+  const [layout, setLayout] = useState<{ firstImport: number; targetAt: number[] }>();
+  // The target the current run restores, when it is a restore rather than the transfer, and the targets whose backups
+  // can still be restored from there (the ones the transfer wrote to, less those restored since).
+  const [restoringId, setRestoringId] = useState<string>();
+  const [restorable, setRestorable] = useState<string[]>([]);
   // "Publish to Experience Edge when done" (off by default), and whether the current transfer publishes: a restore then
   // publishes too, so the live site goes back as well.
   const [publishOn, setPublishOn] = useState(false);
   const [withPublish, setWithPublish] = useState(false);
 
-  // An id that is no longer in `envs` (e.g. after a Retry) counts as unselected.
+  // An id that is no longer in `envs` (e.g. after a Retry) counts as unselected, and so does a target that is the source.
   const source = envs.find((e) => e.id === sourceId);
-  const target = transfer ? envs.find((e) => e.id === targetId && e.id !== sourceId) : undefined;
-  const routeOk = !!source && (!transfer || !!target);
-  const prodChecked = !!target && prodFor === target.id;
+  const targets = transfer ? targetIds.flatMap((id) => envs.filter((e) => e.id === id && e.id !== sourceId)) : [];
+  const routeOk = !!source && (!transfer || targets.length > 0);
+  const prodOk = targets.every((t) => !needsProdConfirm(t) || prodFor.includes(t.id));
+  const names = listOf(targets.map((t) => t.name));
+  // A comparison with a target that's no longer picked falls back to the tree.
+  const viewing = targets.some((t) => t.id === view) ? view : 'browse';
   // Lost the route on a later step (an environment vanished): back to Route, so re-picking a card doesn't
   // jump ahead to the remembered step. Render-phase reset; this pass still shows Route.
   if (!run && !routeOk && step) setStep(0);
   const current = run ? 3 : routeOk ? step : 0;
-  // Checks the target while on Review (transfer only); changing the list there re-checks it.
-  const preflight = usePreflight(client, transfer && current === 2 ? source : undefined, target, trees);
-  // Without a finished check (still checking, or it failed), every row that can overwrite is backed up.
-  const backupTrees = transfer ? backupTreesFor(trees, preflight?.status === 'done' ? preflight.checks : undefined) : [];
+  // Checks every target while on Review (transfer only); changing the list there re-checks them.
+  const preflights = usePreflights(client, transfer && current === 2 ? source : undefined, targets, trees);
+  // What to back up on a target. Without its finished check (still checking, or it failed), every row that can overwrite.
+  const backupTrees = (t: Env) => {
+    const p = preflights?.[t.id];
+    return backupTreesFor(trees, p?.status === 'done' ? p.checks : undefined);
+  };
+  const toBackUp = targets.filter((t) => backupTrees(t).length > 0);
 
   // Moving to another step puts focus on its heading. Not on first mount, and not into the run: useRun focuses its own.
   const page = useRef<HTMLDivElement>(null);
@@ -92,8 +104,8 @@ export function Flow({ client, mode, envs, onHome }: Props) {
 
   const go = (i: number) => {
     runner.reset();
-    setRestoring(false);
-    setProdFor(null);
+    setRestoringId(undefined);
+    setProdFor([]);
     setStep(i);
   };
   const changeSource = (id?: string) => {
@@ -102,45 +114,51 @@ export function Flow({ client, mode, envs, onHome }: Props) {
     // The queued paths may not exist on another source.
     setTrees([]);
   };
+  // Only offered with one target.
   const swap = () => {
-    changeSource(targetId);
-    setTargetId(sourceId);
+    changeSource(targets[0].id);
+    setTargetIds(sourceId ? [sourceId] : []);
   };
   const toggle = (path: string, checked: boolean) =>
     setTrees((t) => (checked ? mergeTrees(t, [newTree(path)]) : t.filter((x) => x.itemPath !== path)));
 
-  const canStart = routeOk && trees.length > 0 && !(transfer && needsProdConfirm(target) && !prodChecked);
+  const canStart = routeOk && trees.length > 0 && prodOk;
 
   const start = () => {
     if (!canStart) return;
     const src = source!;
-    const backup = transfer && backupOn ? backupTrees : [];
     setZip(undefined);
-    setBackupZip(undefined);
-    setWithBackup(backup.length > 0);
-    setRestoring(false);
-    const publish = transfer && publishOn;
+    setBackupZips([]);
+    setRestoringId(undefined);
+    setRestorable([]);
+    if (!transfer) {
+      void runner.start({ labels: exportSteps(src), source: src }, async (cb, signal) => {
+        const blob = await runExport(client, { source: src, dataTrees: trees }, cb, signal);
+        if (!blob) return false;
+        const pkg = { blob, name: `contentTransfer-${src.name}-${localDate()}.zip` };
+        setZip(pkg);
+        download(pkg.blob, pkg.name);
+        return true;
+      });
+      return;
+    }
+    const plan: TransferTarget[] = targets.map((env) => ({ env, backup: backupOn ? backupTrees(env) : [] }));
+    const publish = publishOn;
+    const steps = transferSteps(src, plan, publish);
+    setLayout(steps);
     setWithPublish(publish);
-    void runner.start({ labels: stepLabels(mode, src, target, backup.length > 0, publish), source: src, target }, async (cb, signal) => {
-      if (transfer) {
-        const onBackup = (blob: Blob) => {
-          const pkg = { blob, name: backupName(target!.name) };
-          setBackupZip(pkg);
-          download(pkg.blob, pkg.name);
-        };
-        return runTransfer(client, { source: src, target: target!, database: DATABASE, dataTrees: trees, backup, publish }, { ...cb, onBackup }, signal);
-      }
-      const blob = await runExport(client, { source: src, dataTrees: trees }, cb, signal);
-      if (!blob) return false;
-      const pkg = { blob, name: `contentTransfer-${src.name}-${localDate()}.zip` };
-      setZip(pkg);
+    const onBackup = (blob: Blob, env: Env) => {
+      const pkg = { target: env, blob, name: backupName(env.name) };
+      setBackupZips((zips) => [...zips, pkg]);
       download(pkg.blob, pkg.name);
-      return true;
-    });
+    };
+    void runner.start({ labels: steps.labels, source: src, targets }, (cb, signal) =>
+      runTransfer(client, { source: src, targets: plan, database: DATABASE, dataTrees: trees, publish }, { ...cb, onBackup }, signal),
+    );
   };
 
   const count = `${trees.length} ${trees.length === 1 ? 'item' : 'items'}`;
-  const pair = transfer ? `${source?.name} → ${target?.name}` : (source?.name ?? '');
+  const pair = transfer ? `${source?.name} → ${names}` : (source?.name ?? '');
   const routeText = transfer ? `${pair} · ${DATABASE}` : pair;
   const steps = [
     { label: 'Route', hint: routeOk ? routeText : transfer ? 'Source and target' : 'Source' },
@@ -152,19 +170,23 @@ export function Flow({ client, mode, envs, onHome }: Props) {
   let body: ReactNode;
   let footer: ReactNode = null;
   if (run) {
-    // Export has no import phase; a transfer can be cancelled until the target starts importing.
-    // From this step on the target may be importing: Cancel goes, and a failed run may have changed the target.
-    const importStep = restoring ? IMPORT_STEP.import : IMPORT_STEP.transfer + (withBackup ? 1 : 0);
+    const restoring = restoringId !== undefined;
+    // Export has no import phase; a transfer can be cancelled until the first target starts importing.
+    const importStep = restoring ? IMPORT_STEP.import : (layout?.firstImport ?? IMPORT_STEP.transfer);
     const cancellable = !transfer || runner.canCancelUntil(importStep);
-    const changed = run.result === 'success' || (run.result === 'fail' && !runner.canCancelUntil(importStep));
-    // Installs the backup into the target the transfer wrote to, as a fresh run.
-    const restore = () => {
-      const pkg = backupZip!;
-      const tgt = run.target!;
+    // Per target of the transfer: written to once its import started (a failed run may have changed it), finished once verified.
+    const ran = restoring ? [] : (run.targets ?? []);
+    const status = (k: number, offset: number) => run.steps[(layout?.targetAt[k] ?? 0) + offset]?.status ?? 'pending';
+    const written = ran.filter((_, k) => status(k, 2) !== 'pending').map((t) => t.id);
+    const finished = ran.filter((_, k) => status(k, 3) === 'done');
+    // Installs a target's backup back into it, as a fresh run; from there the others the transfer wrote to stay restorable.
+    const restore = (tgt: Env) => {
+      const pkg = backupZips.find((b) => b.target.id === tgt.id)!;
+      setRestorable((ids) => (restoring ? ids : written).filter((id) => id !== tgt.id));
       runner.reset();
-      setRestoring(true);
+      setRestoringId(tgt.id);
       const labels = [`Upload backup to ${tgt.name}`, `Assemble package on ${tgt.name}`, `Import into ${DATABASE}`, 'Verify', ...(withPublish ? [PUBLISH_STEP] : [])];
-      void runner.start({ labels, target: tgt }, async (cb, signal) => {
+      void runner.start({ labels, targets: [tgt] }, async (cb, signal) => {
         const { parts, items } = await readPackage(new File([pkg.blob], pkg.name));
         // The transfer was published: publish what the backup puts back, so the live site goes back too.
         const publish = withPublish
@@ -178,7 +200,7 @@ export function Flow({ client, mode, envs, onHome }: Props) {
         <RunView
           kind={restoring ? 'restore' : mode}
           source={run.source}
-          target={run.target}
+          targets={run.targets}
           steps={run.steps}
           progress={run.progress}
           logs={run.logs}
@@ -189,14 +211,18 @@ export function Flow({ client, mode, envs, onHome }: Props) {
           onCancel={cancellable ? runner.cancel : undefined}
           onAgain={() => {
             const failed = run.result === 'fail';
-            if (restoring && failed) return restore();
+            if (restoring && failed) return restore(run.targets![0]);
             if (!failed) setTrees([]);
             go(failed ? 2 : 0);
           }}
           onHome={onHome}
           onDownload={zip ? () => download(zip.blob, zip.name) : undefined}
-          onDownloadBackup={backupZip ? () => download(backupZip.blob, backupZip.name) : undefined}
-          onRestore={backupZip && !restoring && changed ? restore : undefined}
+          backups={backupZips.map((b) => ({
+            target: b.target,
+            onDownload: () => download(b.blob, b.name),
+            onRestore: (restoring ? restorable : written).includes(b.target.id) ? () => restore(b.target) : undefined,
+          }))}
+          finished={ran.length > 1 ? finished : undefined}
         />
       </div>
     );
@@ -204,7 +230,7 @@ export function Flow({ client, mode, envs, onHome }: Props) {
     body = (
       <main className={MAIN}>
         {transfer ? (
-          <PageHeading title="Where is the content going?" sub="Pick the environment to copy from and the one to copy into." />
+          <PageHeading title="Where is the content going?" sub="Pick the environment to copy from and one or more to copy into." />
         ) : (
           <PageHeading title="Where is the content coming from?" sub="Pick the environment to package content from." />
         )}
@@ -214,30 +240,35 @@ export function Flow({ client, mode, envs, onHome }: Props) {
             name="source"
             envs={envs}
             value={source?.id}
-            disabledId={target?.id}
-            disabledReason="Already the target"
+            disabledIds={targets.map((t) => t.id)}
+            disabledReason={targets.length > 1 ? 'Already a target' : 'Already the target'}
             onChange={changeSource}
           />
           {transfer && (
             <>
               <div className="flex items-center justify-center">
-                <button
-                  type="button"
-                  aria-label="Swap source and target"
-                  onClick={swap}
-                  className="focus-visible:ring-primary/50 hover:bg-neutral-bg grid size-12 cursor-pointer place-items-center rounded-full border bg-white shadow-[0_2px_8px_rgba(20,20,40,0.06)] outline-none focus-visible:ring-[3px]"
-                >
-                  <Icon path={mdiSwapHorizontal} className="text-primary-600 size-[22px] rotate-90 md:rotate-0" aria-hidden="true" />
-                </button>
+                {targets.length === 1 ? (
+                  <button
+                    type="button"
+                    aria-label="Swap source and target"
+                    onClick={swap}
+                    className="focus-visible:ring-primary/50 hover:bg-neutral-bg grid size-12 cursor-pointer place-items-center rounded-full border bg-white shadow-[0_2px_8px_rgba(20,20,40,0.06)] outline-none focus-visible:ring-[3px]"
+                  >
+                    <Icon path={mdiSwapHorizontal} className="text-primary-600 size-[22px] rotate-90 md:rotate-0" aria-hidden="true" />
+                  </button>
+                ) : (
+                  <Icon path={mdiArrowRight} className="text-primary size-[22px] rotate-90 md:rotate-0" aria-hidden="true" />
+                )}
               </div>
               <EnvironmentCards
+                multiple
                 legend="To"
                 name="target"
                 envs={envs}
-                value={target?.id}
-                disabledId={source?.id}
+                value={targets.map((t) => t.id)}
+                disabledIds={source ? [source.id] : []}
                 disabledReason="Already the source"
-                onChange={(id) => setTargetId(id)}
+                onChange={setTargetIds}
               />
             </>
           )}
@@ -249,11 +280,11 @@ export function Flow({ client, mode, envs, onHome }: Props) {
         summary={
           <>
             {source && <strong className="text-foreground font-semibold break-words">{source.name}</strong>}
-            {target && (
+            {targets.length > 0 && (
               <>
                 <Icon path={mdiArrowRight} className="text-primary size-[18px] shrink-0" aria-hidden="true" />
                 <span className="sr-only">to</span>
-                <strong className="text-foreground font-semibold break-words">{target.name}</strong>
+                <strong className="text-foreground font-semibold break-words">{names}</strong>
                 <span className="text-muted-foreground">{`· ${DATABASE}`}</span>
               </>
             )}
@@ -284,18 +315,15 @@ export function Flow({ client, mode, envs, onHome }: Props) {
               {transfer && (
                 <Segmented
                   label="Pick items by"
-                  value={view}
-                  options={[
-                    { value: 'browse', label: 'Browse' },
-                    { value: 'compare', label: `Compare with ${target!.name}` },
-                  ]}
+                  value={viewing}
+                  options={[{ value: 'browse', label: 'Browse' }, ...targets.map((t) => ({ value: t.id, label: `Compare with ${t.name}` }))]}
                   onChange={(v) => {
-                    setView(v as 'browse' | 'compare');
-                    if (v === 'compare') setCompared(true);
+                    setView(v);
+                    if (v !== 'browse') setCompared((ids) => (ids.includes(v) ? ids : [...ids, v]));
                   }}
                 />
               )}
-              <div hidden={view !== 'browse'} className={view === 'browse' ? 'flex flex-col' : undefined}>
+              <div hidden={viewing !== 'browse'} className={viewing === 'browse' ? 'flex flex-col' : undefined}>
                 <ContentTree
                   client={client}
                   env={source!}
@@ -304,19 +332,21 @@ export function Flow({ client, mode, envs, onHome }: Props) {
                   onToggle={toggle}
                 />
               </div>
-              {transfer && compared && (
-                <div hidden={view !== 'compare'} className={view === 'compare' ? 'flex flex-col' : undefined}>
-                  <CompareView
-                    // Another route is another comparison.
-                    key={`${source!.id}>${target!.id}`}
-                    client={client}
-                    source={source!}
-                    target={target!}
-                    initialPath={trees[0]?.itemPath}
-                    onAdd={(rows) => setTrees((t) => mergeTrees(t, rows))}
-                  />
-                </div>
-              )}
+              {targets
+                .filter((t) => compared.includes(t.id))
+                .map((t) => (
+                  <div key={t.id} hidden={viewing !== t.id} className={viewing === t.id ? 'flex flex-col' : undefined}>
+                    <CompareView
+                      // Another source is another comparison.
+                      key={source!.id}
+                      client={client}
+                      source={source!}
+                      target={t}
+                      initialPath={trees[0]?.itemPath}
+                      onAdd={(rows) => setTrees((tr) => mergeTrees(tr, rows))}
+                    />
+                  </div>
+                ))}
             </div>
             <div className="flex min-w-0 flex-[1_1_440px] flex-col">
               <SelectionQueue trees={trees} onChange={setTrees} />
@@ -340,15 +370,19 @@ export function Flow({ client, mode, envs, onHome }: Props) {
           <ReviewStep
             mode={mode}
             source={source!}
-            target={target}
+            targets={targets}
             database={DATABASE}
             trees={trees}
-            prodChecked={prodChecked}
-            onProdChecked={(v) => setProdFor(v ? target!.id : null)}
+            prodChecked={prodFor}
+            onProdChecked={(t, v) => setProdFor((ids) => (v ? [...ids, t.id] : ids.filter((id) => id !== t.id)))}
             onEdit={() => go(1)}
-            preflight={preflight}
+            preflights={preflights}
             onTreesChange={setTrees}
-            backup={transfer ? { available: backupTrees.length > 0, checked: backupOn, onChange: setBackupOn } : undefined}
+            backup={
+              transfer
+                ? { targets: toBackUp.length ? toBackUp : targets, available: toBackUp.length > 0, checked: backupOn, onChange: setBackupOn }
+                : undefined
+            }
             publish={transfer ? { checked: publishOn, onChange: setPublishOn } : undefined}
             client={client}
           />

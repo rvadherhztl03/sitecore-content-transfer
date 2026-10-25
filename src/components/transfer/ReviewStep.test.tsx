@@ -21,10 +21,10 @@ function setup(props: Partial<React.ComponentProps<typeof ReviewStep>> = {}) {
     <ReviewStep
       mode="transfer"
       source={DEV}
-      target={QA}
+      targets={[QA]}
       database="master"
       trees={[HOME, HERO]}
-      prodChecked={false}
+      prodChecked={[]}
       onProdChecked={onProdChecked}
       onEdit={onEdit}
       {...props}
@@ -131,14 +131,14 @@ describe('ReviewStep', () => {
   });
 
   it('asks to confirm a production target and reports the tick', () => {
-    const { onProdChecked } = setup({ target: PROD });
+    const { onProdChecked } = setup({ targets: [PROD] });
     expect(screen.getByText('Acme · Production looks like a production environment.')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('checkbox', { name: 'I understand this writes to Acme · Production' }));
-    expect(onProdChecked).toHaveBeenCalledWith(true);
+    expect(onProdChecked).toHaveBeenCalledWith(PROD, true);
   });
 
   it('shows From only, with no warnings, confirmation or note, in export mode', () => {
-    setup({ mode: 'export', target: PROD });
+    setup({ mode: 'export', targets: [PROD] });
     expect(screen.getByRole('heading', { level: 1, name: 'Ready to export' })).toBeInTheDocument();
     expect(screen.getByText('Check the items, then create the package.')).toBeInTheDocument();
     const route = screen.getByRole('region', { name: 'Route' });
@@ -181,16 +181,16 @@ describe('ReviewStep field changes', () => {
 
   it('offers Show changes only on the same item being overwritten, and only with a client', () => {
     const { unmount } = render(
-      <ReviewStep mode="transfer" source={DEV} target={QA} database="master" trees={[HOME, HERO, KEEP, NEW]} prodChecked={false} onProdChecked={() => {}} onEdit={() => {}} preflight={preflight} />,
+      <ReviewStep mode="transfer" source={DEV} targets={[QA]} database="master" trees={[HOME, HERO, KEEP, NEW]} prodChecked={[]} onProdChecked={() => {}} onEdit={() => {}} preflights={{ [QA.id]: preflight }} />,
     );
     expect(toggles()).toEqual([]);
     unmount();
-    setup({ trees: [HOME, HERO, KEEP, NEW], preflight, client });
+    setup({ trees: [HOME, HERO, KEEP, NEW], preflights: { [QA.id]: preflight }, client });
     expect(toggles()).toEqual([`Show changes to ${HOME.itemPath}`, `Show changes to ${HERO.itemPath}`]);
   });
 
   it('opens the diff in a full-width row right after the item', async () => {
-    setup({ trees: [HOME, HERO, KEEP, NEW], preflight, client });
+    setup({ trees: [HOME, HERO, KEEP, NEW], preflights: { [QA.id]: preflight }, client });
     const show = screen.getByRole('button', { name: `Show changes to ${HERO.itemPath}` });
     fireEvent.click(show);
     expect(show).toHaveAttribute('aria-expanded', 'true');
@@ -202,5 +202,42 @@ describe('ReviewStep field changes', () => {
     expect(await within(cell).findByRole('button', { name: 'Show values of Alt' })).toBeInTheDocument();
     fireEvent.click(show);
     expect(screen.getAllByRole('row')).toHaveLength(5);
+  });
+});
+
+describe('ReviewStep with several targets', () => {
+  const UAT: Env = { id: 'uat', name: 'Acme · UAT', contextId: 'cu', tenantName: 'acme-uat' };
+  const PROD2: Env = { id: 'prod', name: 'Acme · Production', contextId: 'cp', tenantName: 'acme-prod' };
+  const same = (itemPath: string): Preflight => ({
+    status: 'done',
+    checks: new Map([[itemPath, { itemPath, onSource: true, onTarget: 'same', missingParents: [], otherParents: [], deleted: [] }]]),
+  });
+
+  it('shows every target on the route, a column each, and their checks', () => {
+    setup({ targets: [QA, UAT], preflights: { [QA.id]: { status: 'checking' }, [UAT.id]: { status: 'failed', error: 'Boom' } } });
+    const route = screen.getByRole('region', { name: 'Route' });
+    expect(within(route).getByText('Acme · QA')).toBeInTheDocument();
+    expect(within(route).getByText('Acme · UAT')).toBeInTheDocument();
+    expect(screen.getByRole('columnheader', { name: 'On Acme · QA' })).toBeInTheDocument();
+    expect(screen.getByRole('columnheader', { name: 'On Acme · UAT' })).toBeInTheDocument();
+    expect(screen.getByRole('columnheader', { name: 'If it exists' })).toBeInTheDocument();
+    expect(screen.getByText('Checking Acme · QA…')).toBeInTheDocument();
+    expect(screen.getByText("Couldn't run the pre-flight check: Boom. You can still start.")).toBeInTheDocument();
+    expect(screen.getByText('1 item replaces everything below it on Acme · QA and Acme · UAT.')).toBeInTheDocument();
+  });
+
+  it('asks to confirm each production target', () => {
+    const { onProdChecked } = setup({ targets: [QA, PROD2], prodChecked: [] });
+    expect(screen.getAllByRole('checkbox', { name: /^I understand this writes to/ })).toHaveLength(1);
+    fireEvent.click(screen.getByRole('checkbox', { name: 'I understand this writes to Acme · Production' }));
+    expect(onProdChecked).toHaveBeenCalledWith(PROD2, true);
+  });
+
+  it('offers Show changes per target, named for it', () => {
+    const { client } = fakeClient({});
+    setup({ targets: [QA, UAT], trees: [HERO], preflights: { [QA.id]: same(HERO.itemPath), [UAT.id]: { status: 'checking' } }, client });
+    expect(screen.getAllByRole('button', { name: /^Show changes/ }).map((b) => b.getAttribute('aria-label'))).toEqual([
+      `Show changes to ${HERO.itemPath} on Acme · QA`,
+    ]);
   });
 });

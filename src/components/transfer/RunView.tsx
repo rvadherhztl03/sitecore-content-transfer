@@ -1,3 +1,4 @@
+import { listOf } from '@/components/transfer/copy';
 import { ActionBar } from '@/components/transfer/Layout';
 import { ProdConfirm, needsProdConfirm } from '@/components/transfer/ReviewStep';
 import { Button } from '@/components/ui/button';
@@ -14,13 +15,16 @@ export type LogLine = { text: string; type: LogType; time: string };
 export type RunKind = 'transfer' | 'export' | 'install' | 'restore';
 /** What the package holds; leave out `itemCount` when it isn't known (a bare .raif has no item list). */
 export type RunInfo = { chunkCount: number; itemCount?: number };
+/** A target the run backed up first: offers its backup again and, with `onRestore`, Restore (which asks first). */
+export type RunBackup = { target: Env; onDownload(): void; onRestore?(): void };
 
 type Props = {
   kind: RunKind;
   /** Single column with inline actions and no sticky footer, for the Pages panel. */
   compact?: boolean;
   source?: Env;
-  target?: Env;
+  /** Where the run writes, in order: more than one for a transfer to several targets. */
+  targets?: Env[];
   steps: { label: string; status: StepStatus; ms?: number }[];
   progress: number;
   logs: LogLine[];
@@ -33,10 +37,10 @@ type Props = {
   onAgain(): void;
   onHome(): void;
   onDownload?(): void;
-  /** Set when the run backed up the target first: offers the backup again, with how to restore it. */
-  onDownloadBackup?(): void;
-  /** Set when the target can be put back from that backup: offers Restore, which asks first. */
-  onRestore?(): void;
+  /** The targets the run backed up first, in order. */
+  backups?: RunBackup[];
+  /** For a failed run to several targets: the ones that got the content before it stopped. */
+  finished?: Env[];
 };
 
 export function formatDuration(ms: number): string {
@@ -162,7 +166,7 @@ export function RunView({
   kind,
   compact,
   source,
-  target,
+  targets,
   steps,
   progress,
   logs,
@@ -174,8 +178,8 @@ export function RunView({
   onAgain,
   onHome,
   onDownload,
-  onDownloadBackup,
-  onRestore,
+  backups = [],
+  finished = [],
 }: Props) {
   const logRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -200,7 +204,7 @@ export function RunView({
 
   const w = WORDS[kind];
   const from = source?.name ?? 'the source';
-  const to = target?.name ?? 'the target';
+  const to = targets?.length ? listOf(targets.map((t) => t.name)) : 'the target';
   const percent = Math.min(100, Math.max(0, Math.round(progress)));
   // The latest "<Verb> chunk N / M" line, found from the end.
   let chunk: RegExpExecArray | null = null;
@@ -283,58 +287,66 @@ export function RunView({
     </div>
   );
 
-  const backupButton = onDownloadBackup && (
-    <Button type="button" variant="outline" className={BTN} onClick={onDownloadBackup}>
-      Download backup
-    </Button>
-  );
-  const backupNote = (when: string) =>
-    onDownloadBackup && (
-      <p className="text-neutral-fg max-w-[520px] text-sm leading-normal break-words">
-        {`A backup of ${to} from before this transfer was downloaded. Install it into ${to} ${when}.`}
-      </p>
-    );
-
-  // Restore writes to the target again, so it asks first, with the production box for a production target.
-  const [asking, setAsking] = useState(false);
+  // Restore writes to a target again, so it asks first, with the production box for a production target.
+  const [askingId, setAskingId] = useState<string>();
+  const asking = backups.find((b) => b.onRestore && b.target.id === askingId);
   const [prodOk, setProdOk] = useState(false);
   const questionId = useId();
-  const prod = needsProdConfirm(target);
-  const restoreButton = onRestore && !asking && (
-    <Button
-      type="button"
-      variant="outline"
-      className={BTN}
-      onClick={() => {
-        setProdOk(false);
-        setAsking(true);
-      }}
-    >
-      {`Restore ${to}`}
-    </Button>
-  );
-  const restoreQuestion = onRestore && asking && (
+  const prod = needsProdConfirm(asking?.target);
+  // With several backups each button names its target.
+  const many = backups.length > 1;
+  const backupButtons = backups.flatMap((b) => [
+    <Button key={`get-${b.target.id}`} type="button" variant="outline" className={BTN} onClick={b.onDownload}>
+      {many ? `Download ${b.target.name} backup` : 'Download backup'}
+    </Button>,
+    b.onRestore && !asking && (
+      <Button
+        key={`restore-${b.target.id}`}
+        type="button"
+        variant="outline"
+        className={BTN}
+        onClick={() => {
+          setProdOk(false);
+          setAskingId(b.target.id);
+        }}
+      >
+        {`Restore ${b.target.name}`}
+      </Button>
+    ),
+  ]);
+  const backupNote = (when: string) => {
+    if (!backups.length) return null;
+    const names = backups.map((b) => b.target.name);
+    return (
+      <p className="text-neutral-fg max-w-[520px] text-sm leading-normal break-words">
+        {many
+          ? `Backups of ${listOf(names)} from before this transfer were downloaded. Install each into its own environment ${when}.`
+          : `A backup of ${names[0]} from before this transfer was downloaded. Install it into ${names[0]} ${when}.`}
+      </p>
+    );
+  };
+  const restoreQuestion = asking && (
     <div role="group" aria-labelledby={questionId} className="border-warning-200 bg-warning-50 flex w-full flex-col gap-3 rounded-xl border p-4 text-left">
       <strong id={questionId} className="text-[15px] font-semibold break-words">
-        {`Restore ${to} to how it was before this transfer?`}
+        {`Restore ${asking.target.name} to how it was before this transfer?`}
       </strong>
       <p className="text-neutral-fg text-sm leading-normal break-words">
-        {`This writes the backup back into ${to}: items in it are replaced, and trees backed up with + Everything below lose anything the transfer added under them. Changes made on ${to} since the transfer are overwritten.`}
+        {`This writes the backup back into ${asking.target.name}: items in it are replaced, and trees backed up with + Everything below lose anything the transfer added under them. Changes made on ${asking.target.name} since the transfer are overwritten.`}
       </p>
-      {prod && target && <ProdConfirm target={target} checked={prodOk} onChange={setProdOk} />}
+      {prod && <ProdConfirm target={asking.target} checked={prodOk} onChange={setProdOk} />}
       <div className="flex flex-wrap gap-2.5">
         <Button
           type="button"
           className={BTN}
           disabled={prod && !prodOk}
           onClick={() => {
-            setAsking(false);
-            onRestore();
+            setAskingId(undefined);
+            asking.onRestore!();
           }}
         >
           Restore now
         </Button>
-        <Button type="button" variant="outline" className={BTN} onClick={() => setAsking(false)}>
+        <Button type="button" variant="outline" className={BTN} onClick={() => setAskingId(undefined)}>
           Keep as is
         </Button>
       </div>
@@ -382,8 +394,7 @@ export function RunView({
             <Button type="button" variant={kind === 'export' && onDownload ? 'outline' : 'default'} className={BTN} onClick={onAgain}>
               {w.again}
             </Button>
-            {backupButton}
-            {restoreButton}
+            {backupButtons}
             {homeButton}
           </div>
           {restoreQuestion}
@@ -435,6 +446,9 @@ export function RunView({
                   {failed ? w.failed : w.running(from, to)}
                 </H>
                 {failed && <p className="text-neutral-fg text-sm">See the activity log for details.</p>}
+                {failed && finished.length > 0 && (
+                  <p className="text-neutral-fg text-sm break-words">{`${listOf(finished.map((t) => t.name))} got the content before the transfer stopped.`}</p>
+                )}
                 {failed && backupNote('to put it back as it was')}
               </div>
             </div>
@@ -461,8 +475,7 @@ export function RunView({
               <Button type="button" className={BTN} onClick={onAgain}>
                 Try again
               </Button>
-              {backupButton}
-              {restoreButton}
+              {backupButtons}
               {homeButton}
             </div>
           )}

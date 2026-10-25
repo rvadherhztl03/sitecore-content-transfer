@@ -14,20 +14,29 @@ type Props = {
   legend: string;
   name: string;
   envs: Env[];
-  value?: string;
-  disabledId?: string;
+  /** Shown but not pickable, with `disabledReason` under the name. */
+  disabledIds?: string[];
   disabledReason?: string;
-  onChange(id: string): void;
-};
+} & (
+  | { multiple?: false; value?: string; onChange(id: string): void }
+  /** Checkboxes: any number, kept in the order they were picked. */
+  | { multiple: true; value: string[]; onChange(ids: string[]): void }
+);
 
-/** A card of radio options, one per environment. Place it in a `flex flex-wrap` row: it grows from a 340px basis. */
-export function EnvironmentCards({ legend, name, envs, value, disabledId, disabledReason, onChange }: Props) {
+/** A card of radio options (or checkboxes, with `multiple`), one per environment. Place it in a `flex flex-wrap` row: it grows from a 340px basis. */
+export function EnvironmentCards(props: Props) {
+  const { legend, name, envs, disabledIds = [], disabledReason } = props;
+  const picked = props.multiple ? props.value : props.value ? [props.value] : [];
+  const pick = (id: string) => {
+    if (!props.multiple) return props.onChange(id);
+    props.onChange(picked.includes(id) ? picked.filter((p) => p !== id) : [...picked, id]);
+  };
   return (
     <fieldset className="m-0 flex min-w-0 flex-[1_1_340px] flex-col gap-2.5 rounded-[14px] border bg-white p-5">
       <legend className="text-muted-foreground px-1.5 text-sm font-semibold tracking-wider uppercase">{legend}</legend>
       {envs.map((env) => {
-        const disabled = env.id === disabledId;
-        const selected = !disabled && env.id === value;
+        const disabled = disabledIds.includes(env.id);
+        const selected = !disabled && picked.includes(env.id);
         return (
           <label
             key={env.id}
@@ -38,12 +47,12 @@ export function EnvironmentCards({ legend, name, envs, value, disabledId, disabl
             )}
           >
             <input
-              type="radio"
+              type={props.multiple ? 'checkbox' : 'radio'}
               name={name}
               value={env.id}
               checked={selected}
               disabled={disabled}
-              onChange={() => onChange(env.id)}
+              onChange={() => pick(env.id)}
               className="accent-primary m-0 size-[18px] shrink-0"
             />
             <span className="flex min-w-0 flex-1 flex-col gap-0.5">

@@ -16,9 +16,12 @@ export interface RunCallbacks {
   onStepChange(index: number, status: StepStatus): void;
   /** Called once, when the source package is ready. */
   onInfo?(info: { chunkCount: number; itemCount: number }): void;
-  /** Called once with the target's backup package, when a transfer backs it up first and it had something to back up. */
-  onBackup?(zip: Blob): void;
+  /** Called once per target a transfer backs up first, with its backup package, when it had something to back up. */
+  onBackup?(zip: Blob, target: Env): void;
 }
+
+/** One target of a transfer, and what to back up there first (see backupTreesFor; empty or left out for no backup). */
+export type TransferTarget = { env: Env; backup?: DataTree[] };
 
 /** Every import writes into this database; there is no choice. */
 export const DATABASE = 'master';
@@ -188,9 +191,12 @@ export async function cleanup(client: SdkClient, envs: Env[], transferId: string
 
 type Steps = { begin(i: number, message: string): void; done(percent: number): void };
 
+// The targets that accepted an import, and the one among them still importing (accepted, not yet verified), if any.
+type Imports = { accepted: Env[]; unverified?: Env };
+
 // Shared step bookkeeping: marks the running step failed on error, logs `Cancelled.` on abort,
-// returns `failed`, and cleans up `envs` (never a target that accepted an import). Once the target has accepted an import
-// (`importAt.started()`), it may still be importing, so a failure or cancel also warns that it may still finish.
+// returns `failed`, and cleans up `envs` (never a target that accepted an import). A target still importing
+// (`imports.unverified`) may finish anyway, so a failure or cancel also warns about it.
 async function runSteps<T>(
   client: SdkClient,
   envs: Env[],
@@ -199,7 +205,7 @@ async function runSteps<T>(
   signal: AbortSignal | undefined,
   failed: T,
   body: (steps: Steps) => Promise<T>,
-  importAt?: { target: Env; started(): boolean },
+  imports: Imports = { accepted: [] },
 ): Promise<T> {
   let step = 0;
   const steps: Steps = {
@@ -219,17 +225,22 @@ async function runSteps<T>(
     cb.onStepChange(step, 'fail');
     if (signal?.aborted) cb.onLog('Cancelled.', 'warning');
     else cb.onLog(e instanceof Error ? e.message : String(e), 'error');
-    if (importAt?.started()) {
-      cb.onLog(`${importAt.target.name} may still finish importing; check it before running again.`, 'warning');
+    if (imports.unverified) {
+      cb.onLog(`${imports.unverified.name} may still finish importing; check it before running again.`, 'warning');
     }
     return failed;
   } finally {
-    // The target imports from the package it assembled under this transfer and keeps syncing in the background
+    // A target imports from the package it assembled under this transfer and keeps syncing in the background
     // after GetBlobState reports Consumed; deleting the transfer there removes that package and the unsynced items.
-    const importing = importAt?.started() ? importAt.target : undefined;
-    await cleanup(client, envs.filter((e) => e !== importing), transferId, cb);
+    await cleanup(client, envs.filter((e) => !imports.accepted.includes(e)), transferId, cb);
   }
 }
+
+// consumeFiles' onAccepted for `env`: it has accepted an import and is importing until verified.
+const accepted = (imports: Imports, env: Env) => () => {
+  if (!imports.accepted.includes(env)) imports.accepted.push(env);
+  imports.unverified = env;
+};
 
 async function fetchChunk(
   client: SdkClient,
@@ -310,8 +321,18 @@ async function waitForPublish(client: SdkClient, env: Env, id: string, cb: RunCa
  * The publish step: publishes `trees` from master to Experience Edge on `env`, in every language it has, and waits.
  * "+ Everything below" rows go with their subitems; the rest (with + Children expanded, on `env` when `expand`) one by one.
  * Related items aren't published. A failure is logged and marks the step failed but doesn't fail the run: the import stands.
+ * Progress is `end` once it's over.
  */
-async function publishStep(client: SdkClient, env: Env, trees: DataTree[], cb: RunCallbacks, step: number, expand: boolean, signal?: AbortSignal) {
+async function publishStep(
+  client: SdkClient,
+  env: Env,
+  trees: DataTree[],
+  cb: RunCallbacks,
+  step: number,
+  expand: boolean,
+  end: number,
+  signal?: AbortSignal,
+) {
   try {
     const list = expand ? await expandTrees(client, env, trees, cb, signal) : trees;
     const languages = await languagesOf(client, env);
@@ -334,7 +355,7 @@ async function publishStep(client: SdkClient, env: Env, trees: DataTree[], cb: R
     const reason = (e instanceof Error ? e.message : String(e)).replace(/\.?$/, '.');
     cb.onLog(`Publishing to Experience Edge didn't finish: ${reason} Publish the items from Pages instead.`, 'error');
   }
-  cb.onProgress(100);
+  cb.onProgress(end);
 }
 
 // Downloads every chunk of a ready package; `onChunk(n, total)` runs before chunk n (1-based) is fetched.
@@ -386,8 +407,15 @@ export function backupTreesFor(trees: DataTree[], checks?: Map<string, ItemCheck
 }
 
 // Exports `trees` from the target under a job of its own, which is always cleaned up: it is never imported anywhere.
-// Returns null when the target has none of them.
-async function backUp(client: SdkClient, target: Env, trees: DataTree[], cb: RunCallbacks, signal?: AbortSignal): Promise<Blob | null> {
+// Returns null when the target has none of them. `pct` maps the backup's own 0–100 onto the progress bar.
+async function backUp(
+  client: SdkClient,
+  target: Env,
+  trees: DataTree[],
+  cb: RunCallbacks,
+  pct: (p: number) => number,
+  signal?: AbortSignal,
+): Promise<Blob | null> {
   const backupId = crypto.randomUUID();
   try {
     await createJob(client, target, backupId, trees, cb, signal);
@@ -395,7 +423,7 @@ async function backUp(client: SdkClient, target: Env, trees: DataTree[], cb: Run
     if (!sets.some((s) => s.ChunkCount > 0)) return null;
     const chunks = await downloadChunks(client, target, backupId, sets, (n, total) => {
       cb.onLog(`Backup chunk ${n} / ${total}`, 'info');
-      cb.onProgress(Math.round((BACKUP_SHARE * (n - 1)) / total));
+      cb.onProgress(pct((100 * (n - 1)) / total));
     }, signal);
     const zip = await buildPackage(chunks, await packageItems(client, target, trees, signal));
     signal?.throwIfAborted();
@@ -405,87 +433,131 @@ async function backUp(client: SdkClient, target: Env, trees: DataTree[], cb: Run
   }
 }
 
+/**
+ * A transfer's steps in run order: every backup first (so nothing is written to any target until all are backed up),
+ * then the source's package, then each target in turn: Copy, Assemble, Import, Verify and, with `publish`, Publish,
+ * starting at `targetAt[k]`. With one target, Import, Verify and Publish don't repeat its name.
+ */
+export function transferSteps(source: Env, targets: TransferTarget[], publish = false) {
+  const backups = targets.filter((t) => t.backup?.length);
+  const on = (env: Env) => (targets.length > 1 ? ` on ${env.name}` : '');
+  const first = backups.length + 2;
+  return {
+    labels: [
+      ...backups.map((t) => `Back up ${t.env.name}`),
+      `Create job on ${source.name}`,
+      'Package content',
+      ...targets.flatMap(({ env }) => [
+        `Copy chunks to ${env.name}`,
+        `Assemble package on ${env.name}`,
+        `Import into ${DATABASE}${on(env)}`,
+        `Verify${on(env)}`,
+        ...(publish ? [`Publish to Experience Edge${on(env)}`] : []),
+      ]),
+    ],
+    targetAt: targets.map((_, k) => first + k * (publish ? 5 : 4)),
+    /** The first target's Import step: Cancel is only safe until it starts. */
+    firstImport: first + 2,
+  };
+}
+
+// Maps 0–100 onto a part of the progress bar.
+const span = (a: number, b: number) => (p: number) => Math.round(a + ((b - a) * p) / 100);
+
 export async function runTransfer(
   client: SdkClient,
   /**
-   * `backup`: what to export from the target first (see backupTreesFor); empty or left out for no backup step.
-   * `publish`: publish what was sent to Experience Edge on the target, as a last step.
+   * `targets`: where to import, in order, each with what to back up there first.
+   * `publish`: publish what was sent to Experience Edge on each target, right after its import.
+   * A failure stops the run: the targets before it keep the content, the ones after it are left alone.
    */
-  opts: { source: Env; target: Env; database: string; dataTrees: DataTree[]; backup?: DataTree[]; publish?: boolean },
+  opts: { source: Env; targets: TransferTarget[]; database: string; dataTrees: DataTree[]; publish?: boolean },
   cb: RunCallbacks,
   signal?: AbortSignal,
 ): Promise<boolean> {
-  const { source, target, database, dataTrees } = opts;
-  const backup = opts.backup?.length ? opts.backup : undefined;
-  // With a backup it is step 0 and takes the first part of the progress bar; every other step moves along by one.
-  // A publish step comes last and takes the end of the bar.
-  const o = backup ? 1 : 0;
-  const from = backup ? BACKUP_SHARE : 0;
-  const to = opts.publish ? PUBLISH_FROM : 100;
-  const pct = (p: number) => Math.round(from + (p * (to - from)) / 100);
+  const { source, targets, database, dataTrees, publish = false } = opts;
+  const { targetAt } = transferSteps(source, targets, publish);
+  const backups = targets.filter((t) => t.backup?.length);
+  // Progress: the backups share the first BACKUP_SHARE, the source's package takes 15% of the rest, and the targets
+  // split what's left, each with its publish at the end of its part.
+  const from = backups.length ? BACKUP_SHARE : 0;
+  const packaged = from + (100 - from) * 0.15;
+  const pkg = span(from, packaged);
+  const share = (100 - packaged) / targets.length;
   const transferId = crypto.randomUUID();
-  // Set once the target accepts an import: from then on it may finish even if this run fails.
-  let importing = false;
-  return runSteps(client, [source, target], transferId, cb, signal, false, async ({ begin, done }) => {
-    if (backup) {
-      begin(0, `Backing up ${target.name}.`);
-      const zip = await backUp(client, target, backup, cb, signal).catch((e) => {
+  const imports: Imports = { accepted: [] };
+  return runSteps(client, [source, ...targets.map((t) => t.env)], transferId, cb, signal, false, async ({ begin, done }) => {
+    for (const [i, { env, backup }] of backups.entries()) {
+      const pct = span((BACKUP_SHARE * i) / backups.length, (BACKUP_SHARE * (i + 1)) / backups.length);
+      begin(i, `Backing up ${env.name}.`);
+      const zip = await backUp(client, env, backup!, cb, pct, signal).catch((e) => {
         if (signal?.aborted) throw e;
         const reason = (e instanceof Error ? e.message : String(e)).replace(/\.?$/, '.');
-        throw new Error(`Backup of ${target.name} failed: ${reason} Nothing was written to ${target.name}; to transfer without a backup, untick it on Review.`);
+        throw new Error(`Backup of ${env.name} failed: ${reason} Nothing was written to ${env.name}; to transfer without a backup, untick it on Review.`);
       });
       if (zip) {
-        cb.onBackup?.(zip);
-        cb.onLog(`Backed up ${target.name}.`, 'success');
-      } else cb.onLog(`Nothing on ${target.name} to back up.`, 'info');
-      done(BACKUP_SHARE);
+        cb.onBackup?.(zip, env);
+        cb.onLog(`Backed up ${env.name}.`, 'success');
+      } else cb.onLog(`Nothing on ${env.name} to back up.`, 'info');
+      done(pct(100));
     }
 
+    const o = backups.length;
     begin(o, `Creating transfer job on ${source.name}.`);
     const sent = await createJob(client, source, transferId, dataTrees, cb, signal);
-    done(pct(5));
+    done(pkg(33));
 
     begin(o + 1, `Waiting for ${source.name} to build the package.`);
     const sets = await waitForPackage(client, source, transferId, signal);
     cb.onInfo?.(infoOf(sets));
-    done(pct(15));
-
-    begin(o + 2, `Copying chunks from ${source.name} to ${target.name}.`);
+    done(pkg(100));
     const total = sets.reduce((n, s) => n + s.ChunkCount, 0);
-    let copied = 0;
-    for (const set of sets) {
-      for (let chunkId = 0; chunkId < set.ChunkCount; chunkId++) {
-        signal?.throwIfAborted();
-        cb.onLog(`Copying chunk ${copied + 1} / ${total}`, 'info');
-        const path = { transferId, chunksetId: set.ChunkSetId, chunkId };
-        const { blob, isMedia } = await fetchChunk(client, source, transferId, set.ChunkSetId, chunkId);
-        signal?.throwIfAborted();
-        await call(client, target, 'mutate', CT + 'saveChunk', { path, query: { isMedia }, body: blob });
-        copied++;
-        cb.onProgress(pct(Math.round(15 + (60 * copied) / total)));
+
+    // ponytail: each target copies the chunks from the source again, rather than holding the package in memory.
+    for (const [k, { env: target }] of targets.entries()) {
+      const whole = span(packaged + share * k, packaged + share * (k + 1));
+      // The import part of this target's share, up to where its publish starts.
+      const pct = (p: number) => whole(publish ? (p * PUBLISH_FROM) / 100 : p);
+      const at = targetAt[k];
+
+      begin(at, `Copying chunks from ${source.name} to ${target.name}.`);
+      let copied = 0;
+      for (const set of sets) {
+        for (let chunkId = 0; chunkId < set.ChunkCount; chunkId++) {
+          signal?.throwIfAborted();
+          cb.onLog(`Copying chunk ${copied + 1} / ${total}`, 'info');
+          const path = { transferId, chunksetId: set.ChunkSetId, chunkId };
+          const { blob, isMedia } = await fetchChunk(client, source, transferId, set.ChunkSetId, chunkId);
+          signal?.throwIfAborted();
+          await call(client, target, 'mutate', CT + 'saveChunk', { path, query: { isMedia }, body: blob });
+          copied++;
+          cb.onProgress(pct((70 * copied) / total));
+        }
       }
-    }
-    done(pct(75));
+      done(pct(70));
 
-    begin(o + 3, `Assembling the package on ${target.name}.`);
-    const files = await completeSets(client, target, transferId, sets.map((s) => s.ChunkSetId), signal);
-    done(pct(80));
+      begin(at + 1, `Assembling the package on ${target.name}.`);
+      const files = await completeSets(client, target, transferId, sets.map((s) => s.ChunkSetId), signal);
+      done(pct(78));
 
-    begin(o + 4, `Importing into ${database} on ${target.name}.`);
-    await consumeFiles(client, target, database, files, signal, () => (importing = true));
-    done(pct(88));
+      begin(at + 2, `Importing into ${database} on ${target.name}.`);
+      await consumeFiles(client, target, database, files, signal, accepted(imports, target));
+      done(pct(88));
 
-    begin(o + 5, `Verifying the import on ${target.name}.`);
-    await verifyFiles(client, target, files, cb, signal);
-    done(pct(100));
+      begin(at + 3, `Verifying the import on ${target.name}.`);
+      await verifyFiles(client, target, files, cb, signal);
+      imports.unverified = undefined;
+      done(pct(100));
 
-    if (opts.publish) {
-      begin(o + 6, `Publishing to Experience Edge on ${target.name}.`);
-      await publishStep(client, target, sent, cb, o + 6, false, signal);
+      if (publish) {
+        begin(at + 4, `Publishing to Experience Edge on ${target.name}.`);
+        await publishStep(client, target, sent, cb, at + 4, false, whole(100), signal);
+      }
+      if (targets.length > 1) cb.onLog(`${target.name} has the content.`, 'success');
     }
     cb.onLog('Transfer complete.', 'success');
     return true;
-  }, { target, started: () => importing });
+  }, imports);
 }
 
 export async function runExport(
@@ -530,8 +602,7 @@ export async function runImport(
   const publish = opts.publish?.length ? opts.publish : undefined;
   const pct = (p: number) => (publish ? Math.round((p * PUBLISH_FROM) / 100) : p);
   const transferId = crypto.randomUUID();
-  // Set once the target accepts an import: from then on it may finish even if this run fails.
-  let importing = false;
+  const imports: Imports = { accepted: [] };
   const chunksetIds = parts.map(() => crypto.randomUUID());
   return runSteps(client, [target], transferId, cb, signal, false, async ({ begin, done }) => {
     begin(0, `Uploading the package to ${target.name}.`);
@@ -557,18 +628,19 @@ export async function runImport(
     done(pct(65));
 
     begin(2, `Importing into ${database} on ${target.name}.`);
-    await consumeFiles(client, target, database, files, signal, () => (importing = true));
+    await consumeFiles(client, target, database, files, signal, accepted(imports, target));
     done(pct(80));
 
     begin(3, `Verifying the import on ${target.name}.`);
     await verifyFiles(client, target, files, cb, signal);
+    imports.unverified = undefined;
     done(pct(100));
 
     if (publish) {
       begin(4, `Publishing to Experience Edge on ${target.name}.`);
-      await publishStep(client, target, publish, cb, 4, true, signal);
+      await publishStep(client, target, publish, cb, 4, true, 100, signal);
     }
     cb.onLog('Import complete.', 'success');
     return true;
-  }, { target, started: () => importing });
+  }, imports);
 }

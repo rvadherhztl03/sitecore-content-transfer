@@ -1,4 +1,4 @@
-import { cancelNote, treeWarning } from '@/components/transfer/copy';
+import { cancelNote, listOf, treeWarning } from '@/components/transfer/copy';
 import { EnvBadge } from '@/components/transfer/EnvironmentCards';
 import { ChangesToggle, FieldDiff } from '@/components/transfer/FieldDiff';
 import { PageHeading } from '@/components/transfer/Layout';
@@ -69,28 +69,32 @@ function Choice({ title, hint, checked, onChange }: ChoiceProps) {
   );
 }
 
-type BackupChoiceProps = { target: Env; available: boolean; checked: boolean; onChange(v: boolean): void };
+/** `targets`: the ones it backs up when `available`, every target otherwise. */
+type BackupChoiceProps = { targets: Env[]; available: boolean; checked: boolean; onChange(v: boolean): void };
 
-/** "Back up <target> first": on by default; when nothing on the target would be overwritten, it says so instead. */
-export function BackupChoice({ target, available, ...choice }: BackupChoiceProps) {
-  if (!available) return <p className="text-muted-foreground text-sm">{`Nothing on ${target.name} to back up.`}</p>;
+/** "Back up <targets> first": on by default; when nothing on the targets would be overwritten, it says so instead. */
+export function BackupChoice({ targets, available, ...choice }: BackupChoiceProps) {
+  const names = listOf(targets.map((t) => t.name));
+  if (!available) return <p className="text-muted-foreground text-sm">{`Nothing on ${names} to back up.`}</p>;
   return (
     <Choice
-      title={`Back up ${target.name} first`}
-      hint={`Saves what this transfer overwrites on ${target.name} as a package, so you can restore it with Install a package. Large trees take longer.`}
+      title={`Back up ${names} first`}
+      hint={`Saves what this transfer overwrites on ${names} as ${targets.length > 1 ? 'a package each' : 'a package'}, so you can restore it with Install a package. Large trees take longer.`}
       {...choice}
     />
   );
 }
 
-type PublishChoiceProps = { target: Env; checked: boolean; onChange(v: boolean): void };
+type PublishChoiceProps = { targets: Env[]; checked: boolean; onChange(v: boolean): void };
 
 /** "Publish to Experience Edge when done": off by default, since it makes the content live. */
-export function PublishChoice({ target, ...choice }: PublishChoiceProps) {
+export function PublishChoice({ targets, ...choice }: PublishChoiceProps) {
+  const names = listOf(targets.map((t) => t.name));
+  const each = targets.length > 1 ? 'each of them has' : `${names} has`;
   return (
     <Choice
       title="Publish to Experience Edge when done"
-      hint={`Publishes the transferred items on ${target.name} once the import finishes, in every language ${target.name} has. Only changed items are sent.`}
+      hint={`Publishes the transferred items on ${names} once the import finishes, in every language ${each}. Only changed items are sent.`}
       {...choice}
     />
   );
@@ -129,39 +133,51 @@ const TD = 'border-b px-4 py-3.5 align-top';
 type Props = {
   mode: 'transfer' | 'export';
   source: Env;
-  target?: Env;
+  /** Where a transfer writes, in order (transfer only). */
+  targets?: Env[];
   database: string;
   trees: DataTree[];
-  prodChecked: boolean;
-  onProdChecked(v: boolean): void;
+  /** The ids of the production targets whose box is ticked. */
+  prodChecked: string[];
+  onProdChecked(target: Env, v: boolean): void;
   onEdit(): void;
-  /** The pre-flight check of the target (transfer only). */
-  preflight?: Preflight;
+  /** The pre-flight check of each target, by id (transfer only). */
+  preflights?: Record<string, Preflight>;
   /** Lets the pre-flight notes fix the list: add missing parents, remove items the source lacks. */
   onTreesChange?(trees: DataTree[]): void;
-  /** The "Back up <target> first" choice (transfer only). */
-  backup?: Omit<BackupChoiceProps, 'target'>;
+  /** The "Back up <targets> first" choice (transfer only). */
+  backup?: BackupChoiceProps;
   /** The "Publish to Experience Edge when done" choice (transfer only). */
-  publish?: Omit<PublishChoiceProps, 'target'>;
+  publish?: Omit<PublishChoiceProps, 'targets'>;
   /** Reads field values for "Show changes" on items the transfer overwrites (transfer only). */
   client?: SdkClient;
 };
 
 /** What will be written, before it is: route, replace warning, production confirmation and the items. */
-export function ReviewStep({ mode, source, target, database, trees, prodChecked, onProdChecked, onEdit, preflight, onTreesChange, backup, publish, client }: Props) {
-  const to = mode === 'transfer' ? target : undefined;
-  const checks = preflight?.status === 'done' ? preflight.checks : undefined;
-  const fix = (f: typeof addMissingParents) => (checks && onTreesChange ? () => onTreesChange(f(trees, checks)) : undefined);
-  const related = preflight?.status === 'done' ? preflight.related : undefined;
+export function ReviewStep({ mode, source, targets = [], database, trees, prodChecked, onProdChecked, onEdit, preflights, onTreesChange, backup, publish, client }: Props) {
+  const to = mode === 'transfer' ? targets : [];
+  const many = to.length > 1;
+  const names = listOf(to.map((t) => t.name));
+  const checksOf = (t: Env) => {
+    const p = preflights?.[t.id];
+    return p?.status === 'done' ? p : undefined;
+  };
+  // The list is shared, so a fix found on one target changes what every target gets.
+  const fix = (t: Env, f: typeof addMissingParents) => {
+    const checks = checksOf(t)?.checks;
+    return checks && onTreesChange ? () => onTreesChange(f(trees, checks)) : undefined;
+  };
   const replacing = trees.filter((t) => t.mergeStrategy === 'OverrideExistingTree').length;
   const detail = (env: Env, text: string) => [env.tenantName, text].filter(Boolean).join(' · ');
-  // The items whose field diff is open; only the same item on the target, about to be overwritten, has one.
+  // The field diffs that are open, as `<target id>|<path>`: only the same item on a target, about to be overwritten, has one.
   const [opened, setOpened] = useState<Set<string>>(new Set());
-  const diffable = (t: DataTree) => !!client && !!to && checks?.get(t.itemPath)?.onTarget === 'same' && t.mergeStrategy !== 'KeepExistingItem';
-  const toggle = (path: string) =>
+  const diffable = (t: DataTree, env: Env) =>
+    !!client && checksOf(env)?.checks.get(t.itemPath)?.onTarget === 'same' && t.mergeStrategy !== 'KeepExistingItem';
+  const isOpen = (t: DataTree, env: Env) => diffable(t, env) && opened.has(`${env.id}|${t.itemPath}`);
+  const toggle = (k: string) =>
     setOpened((set) => {
       const next = new Set(set);
-      if (!next.delete(path)) next.add(path);
+      if (!next.delete(k)) next.add(k);
       return next;
     });
 
@@ -175,43 +191,53 @@ export function ReviewStep({ mode, source, target, database, trees, prodChecked,
 
       <section
         aria-label="Route"
-        className={cn('grid items-center gap-4 rounded-[14px] border bg-white p-5', to && 'sm:grid-cols-[1fr_auto_1fr]')}
+        className={cn('grid items-center gap-4 rounded-[14px] border bg-white p-5', to.length > 0 && 'sm:grid-cols-[1fr_auto_1fr]')}
       >
         <RouteCard kind="from" env={source} detail={detail(source, 'reads from master')} />
-        {to && (
+        {to.length > 0 && (
           <>
             <Icon path={mdiArrowRight} className="text-primary size-7 shrink-0 justify-self-center rotate-90 sm:rotate-0" aria-hidden="true" />
-            <RouteCard kind="to" env={to} detail={detail(to, `writes to ${database}`)} />
+            <div className="flex min-w-0 flex-col gap-3">
+              {to.map((t) => (
+                <RouteCard key={t.id} kind="to" env={t} detail={detail(t, `writes to ${database}`)} />
+              ))}
+            </div>
           </>
         )}
       </section>
 
-      {to && replacing > 0 && (
+      {to.length > 0 && replacing > 0 && (
         <Alert variant="warning" role="note" className="border-warning-200 bg-warning-50 text-warning-700 items-start rounded-xl border px-4 py-3.5">
           <AlertDescription>
             <strong className="font-semibold break-words">
-              {treeWarning(replacing, to.name)}
+              {treeWarning(replacing, names)}
             </strong>
           </AlertDescription>
         </Alert>
       )}
 
-      {to && (
-        <PreflightNotes
-          preflight={preflight}
-          source={source}
-          target={to}
-          onAddParents={fix(addMissingParents)}
-          onRemoveNotFound={fix(removeNotFound)}
-          onAddRelated={related && onTreesChange ? () => onTreesChange(addRelated(trees, related)) : undefined}
-        />
-      )}
+      {to.map((t) => {
+        const related = checksOf(t)?.related;
+        return (
+          <PreflightNotes
+            key={t.id}
+            preflight={preflights?.[t.id]}
+            source={source}
+            target={t}
+            onAddParents={fix(t, addMissingParents)}
+            onRemoveNotFound={fix(t, removeNotFound)}
+            onAddRelated={related && onTreesChange ? () => onTreesChange(addRelated(trees, related)) : undefined}
+          />
+        );
+      })}
 
-      {to && backup && <BackupChoice target={to} {...backup} />}
+      {to.length > 0 && backup && <BackupChoice {...backup} />}
 
-      {to && publish && <PublishChoice target={to} {...publish} />}
+      {to.length > 0 && publish && <PublishChoice targets={to} {...publish} />}
 
-      {to && needsProdConfirm(to) && <ProdConfirm target={to} checked={prodChecked} onChange={onProdChecked} />}
+      {to.filter(needsProdConfirm).map((t) => (
+        <ProdConfirm key={t.id} target={t} checked={prodChecked.includes(t.id)} onChange={(v) => onProdChecked(t, v)} />
+      ))}
 
       <section className="overflow-hidden rounded-[14px] border bg-white">
         <div className="flex items-center justify-between gap-3 border-b px-4 py-3">
@@ -227,39 +253,48 @@ export function ReviewStep({ mode, source, target, database, trees, prodChecked,
                 <th scope="col" className={TH}>
                   Item
                 </th>
-                {to && (
-                  <th scope="col" className={TH}>
-                    {`On ${to.name}`}
+                {to.map((t) => (
+                  <th key={t.id} scope="col" className={TH}>
+                    {`On ${t.name}`}
                   </th>
-                )}
+                ))}
                 <th scope="col" className={TH}>
                   Includes
                 </th>
                 <th scope="col" className={TH}>
-                  {to ? `If it exists on ${to.name}` : 'If it exists'}
+                  {to.length === 1 ? `If it exists on ${names}` : 'If it exists'}
                 </th>
               </tr>
             </thead>
             <tbody className="[&>tr:last-child>td]:border-b-0">
               {trees.map((t) => {
-                const open = diffable(t) && opened.has(t.itemPath);
+                const open = to.filter((env) => isOpen(t, env));
                 return (
                   <Fragment key={t.itemPath}>
-                    <tr className={cn(open && '[&>td]:border-b-0')}>
+                    <tr className={cn(open.length > 0 && '[&>td]:border-b-0')}>
                       <td className={TD}>
                         <span className="flex min-w-0 flex-col gap-0.5">
                           <span className="font-semibold break-words">{nameOf(t.itemPath)}</span>
                           <span className="text-muted-foreground font-mono text-xs [overflow-wrap:anywhere]" title={t.itemPath}>
                             {t.itemPath}
                           </span>
-                          {diffable(t) && <ChangesToggle open={open} itemPath={t.itemPath} onClick={() => toggle(t.itemPath)} />}
                         </span>
                       </td>
-                      {to && (
-                        <td className={TD}>
-                          <PreflightStatus preflight={preflight} itemPath={t.itemPath} source={source} />
+                      {to.map((env) => (
+                        <td key={env.id} className={TD}>
+                          <span className="flex flex-col items-start gap-1">
+                            <PreflightStatus preflight={preflights?.[env.id]} itemPath={t.itemPath} source={source} />
+                            {diffable(t, env) && (
+                              <ChangesToggle
+                                open={isOpen(t, env)}
+                                itemPath={t.itemPath}
+                                target={many ? env.name : undefined}
+                                onClick={() => toggle(`${env.id}|${t.itemPath}`)}
+                              />
+                            )}
+                          </span>
                         </td>
-                      )}
+                      ))}
                       <td className={TD}>
                         <span className={cn(PILL, t.scope !== 'SingleItem' ? 'bg-primary-100 text-primary-700' : 'bg-neutral-bg text-neutral-fg')}>
                           {labelOf(SCOPES, t.scope, true)}
@@ -271,13 +306,13 @@ export function ReviewStep({ mode, source, target, database, trees, prodChecked,
                         </span>
                       </td>
                     </tr>
-                    {open && (
-                      <tr>
-                        <td colSpan={4} className="border-b px-4 pb-3.5 align-top">
-                          <FieldDiff client={client!} source={source} target={to!} itemPath={t.itemPath} />
+                    {open.map((env) => (
+                      <tr key={env.id}>
+                        <td colSpan={3 + to.length} className="border-b px-4 pb-3.5 align-top">
+                          <FieldDiff client={client!} source={source} target={env} itemPath={t.itemPath} />
                         </td>
                       </tr>
-                    )}
+                    ))}
                   </Fragment>
                 );
               })}
@@ -286,9 +321,9 @@ export function ReviewStep({ mode, source, target, database, trees, prodChecked,
         </div>
       </section>
 
-      {to && (
+      {to.length > 0 && (
         <p className="text-muted-foreground text-[13px] leading-normal">
-          {cancelNote(to.name)}
+          {cancelNote(to[0].name)}
         </p>
       )}
     </div>

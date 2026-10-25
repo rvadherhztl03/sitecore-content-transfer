@@ -6,7 +6,7 @@ import { useEffect, useRef, useState } from 'react';
 export type Run = {
   // The route as started: what the run writes and what RunView names, even if `envs` changes meanwhile.
   source?: Env;
-  target?: Env;
+  targets?: Env[];
   steps: { label: string; status: StepStatus; ms?: number }[];
   progress: number;
   logs: LogLine[];
@@ -16,7 +16,7 @@ export type Run = {
   info?: RunInfo;
 };
 
-type Init = { labels: string[]; source?: Env; target?: Env; info?: RunInfo };
+type Init = { labels: string[]; source?: Env; targets?: Env[]; info?: RunInfo };
 type Exec = (cb: RunCallbacks, signal: AbortSignal) => Promise<boolean>;
 
 /**
@@ -43,7 +43,7 @@ export function useRun() {
     h.focus();
   }, [result]);
 
-  const start = async ({ labels, source, target, info }: Init, exec: Exec) => {
+  const start = async ({ labels, source, targets, info }: Init, exec: Exec) => {
     if (abort.current) return;
     const ctrl = new AbortController();
     abort.current = ctrl;
@@ -51,7 +51,7 @@ export function useRun() {
     const stepStart: number[] = [];
     setRun({
       source,
-      target,
+      targets,
       steps: labels.map((label) => ({ label, status: 'pending' })),
       progress: 0,
       logs: [],

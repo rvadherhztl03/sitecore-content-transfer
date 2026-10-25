@@ -93,7 +93,8 @@ function setup({
 
 const click = (name: string | RegExp) => fireEvent.click(screen.getByRole('button', { name }));
 const group = (name: string) => screen.getByRole('group', { name });
-const radio = (legend: string, env: Env) => within(group(legend)).getByRole('radio', { name: new RegExp(env.name) });
+// From is one pick (radios); To can be several (checkboxes).
+const radio = (legend: string, env: Env) => within(group(legend)).getByRole(legend === 'To' ? 'checkbox' : 'radio', { name: new RegExp(env.name) });
 const stepBar = () => screen.getByRole('navigation', { name: 'Transfer steps' });
 const ofKey = (calls: { key: string }[], k: string) => calls.filter((c) => c.key === CT + k) as any[];
 // jsdom may lack these; the export test stubs them and afterEach puts the originals back.
@@ -108,6 +109,17 @@ function addPath(path = HOME) {
   fireEvent.change(screen.getByLabelText('Add by path'), { target: { value: path } });
   click('Add');
 }
+// Counts downloads by file name.
+function downloads() {
+  Object.assign(URL, { createObjectURL: vi.fn(() => 'blob:b'), revokeObjectURL: vi.fn() });
+  const names: string[] = [];
+  vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (this: HTMLAnchorElement) {
+    names.push(this.download);
+  });
+  return names;
+}
+const creates = (calls: { key: string }[]) => ofKey(calls, 'createContentTransfer').map((c) => c.params.query.sitecoreContextId);
+const ctxs = (calls: { key: string }[], k: string) => ofKey(calls, k).map((c) => c.params.query.sitecoreContextId);
 // Waits for a transfer's pre-flight check to finish, so Start runs with its result.
 const checked = () => waitFor(() => expect(screen.queryAllByText(/^Checking/)).toHaveLength(0));
 async function toReview(review = 'Review transfer') {
@@ -188,7 +200,7 @@ describe('Flow', () => {
     it('a vanished environment is unselected', () => {
       const { client, rerender } = setup();
       rerender(<Flow client={client} mode="transfer" envs={[DEV, PROD]} onHome={vi.fn()} />);
-      expect(within(group('To')).queryByRole('radio', { checked: true })).not.toBeInTheDocument();
+      expect(within(group('To')).queryByRole('checkbox', { checked: true })).not.toBeInTheDocument();
       expect(screen.getByRole('button', { name: 'Continue' })).toBeDisabled();
     });
 
@@ -393,17 +405,7 @@ describe('Flow', () => {
   });
 
   describe('Backup', () => {
-    // Counts downloads by file name.
-    function downloads() {
-      Object.assign(URL, { createObjectURL: vi.fn(() => 'blob:b'), revokeObjectURL: vi.fn() });
-      const names: string[] = [];
-      vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (this: HTMLAnchorElement) {
-        names.push(this.download);
-      });
-      return names;
-    }
     const box = () => screen.getByRole('checkbox', { name: 'Back up Acme · QA first' });
-    const creates = (calls: { key: string }[]) => ofKey(calls, 'createContentTransfer').map((c) => c.params.query.sitecoreContextId);
 
     it('is offered, ticked, when the transfer overwrites items on the target', async () => {
       setup({ find: EVERYWHERE });
@@ -522,6 +524,74 @@ describe('Flow', () => {
       await screen.findByRole('heading', { level: 1, name: 'Restore complete' });
       click('Start another transfer');
       expect(screen.getByRole('heading', { level: 1, name: 'Where is the content going?' })).toBeInTheDocument();
+    });
+  });
+
+  describe('Several targets', () => {
+    const pickProd = () => fireEvent.click(radio('To', PROD));
+
+    it('picks more than one target: names them all, drops the swap and keeps them out of From', () => {
+      setup();
+      pickProd();
+      expect(radio('To', QA)).toBeChecked();
+      expect(radio('To', PROD)).toBeChecked();
+      expect(within(stepBar()).getByText('Acme · Development → Acme · QA and Acme Production · master')).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Swap source and target' })).not.toBeInTheDocument();
+      expect(radio('From', PROD)).toBeDisabled();
+      expect(within(group('From')).getAllByText('Already a target')).toHaveLength(2);
+      // Unpicking every target leaves no route.
+      fireEvent.click(radio('To', QA));
+      pickProd();
+      expect(screen.getByRole('button', { name: 'Continue' })).toBeDisabled();
+    });
+
+    it('compares with each target on its own tab', async () => {
+      setup();
+      pickProd();
+      await toContent();
+      const tabs = within(screen.getByRole('radiogroup', { name: 'Pick items by' })).getAllByRole('radio').map((r) => r.textContent);
+      expect(tabs).toEqual(['Browse', 'Compare with Acme · QA', 'Compare with Acme Production']);
+      fireEvent.click(screen.getByRole('radio', { name: 'Compare with Acme Production' }));
+      expect(screen.getByRole('heading', { name: 'Compare Acme · Development with Acme Production' })).toBeInTheDocument();
+    });
+
+    it('backs up and transfers to each target in turn, confirming production, and restores each on its own', async () => {
+      const names = downloads();
+      const { calls } = setup({ find: EVERYWHERE });
+      pickProd();
+      await toReview();
+      expect(screen.getByRole('columnheader', { name: 'On Acme Production' })).toBeInTheDocument();
+      expect(screen.getByRole('checkbox', { name: 'Back up Acme · QA and Acme Production first' })).toBeChecked();
+      expect(screen.getByRole('button', { name: 'Start transfer' })).toBeDisabled();
+      fireEvent.click(screen.getByRole('checkbox', { name: 'I understand this writes to Acme Production' }));
+      click('Start transfer');
+      expect(await screen.findByText('Transfer complete')).toBeInTheDocument();
+      expect(creates(calls)).toEqual(['ctx-qa', 'ctx-prod', 'ctx-dev']);
+      expect(ctxs(calls, 'consumeFile')).toEqual(['ctx-qa', 'ctx-prod']);
+      expect(names).toHaveLength(2);
+      expect(screen.getByText('Content from Acme · Development is now in Acme · QA and Acme Production.')).toBeInTheDocument();
+
+      click('Restore Acme · QA');
+      click('Restore now');
+      expect(await screen.findByRole('heading', { level: 1, name: 'Restore complete' })).toBeInTheDocument();
+      expect(ctxs(calls, 'consumeFile')).toEqual(['ctx-qa', 'ctx-prod', 'ctx-qa']);
+      // Production can still be restored from here; QA, just restored, can't again.
+      expect(screen.queryByRole('button', { name: 'Restore Acme · QA' })).not.toBeInTheDocument();
+      click('Restore Acme Production');
+      expect(screen.getByRole('button', { name: 'Restore now' })).toBeDisabled();
+    });
+
+    it('a failure on a later target says which got the content', async () => {
+      downloads();
+      setup({ find: EVERYWHERE, overrides: { consumeFile: (p) => (p.query.sitecoreContextId === 'ctx-prod' ? { status: 500 } : {}) } });
+      pickProd();
+      await toReview();
+      fireEvent.click(screen.getByRole('checkbox', { name: 'I understand this writes to Acme Production' }));
+      click('Start transfer');
+      expect(await screen.findByRole('heading', { level: 1, name: 'Transfer failed' })).toBeInTheDocument();
+      expect(screen.getByText('Acme · QA got the content before the transfer stopped.')).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Restore Acme · QA' })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Download Acme Production backup' })).toBeInTheDocument();
     });
   });
 

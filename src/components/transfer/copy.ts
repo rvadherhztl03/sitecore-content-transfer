@@ -7,3 +7,6 @@ export const treeWarning = (count: number, target: string) =>
 
 export const cancelNote = (target: string) =>
   `Large trees can take a few minutes. You can cancel until the import into ${target} starts; after that the target finishes on its own.`;
+
+/** "A", "A and B", "A, B and C". */
+export const listOf = (names: string[]) => (names.length < 2 ? names.join('') : `${names.slice(0, -1).join(', ')} and ${names.at(-1)}`);

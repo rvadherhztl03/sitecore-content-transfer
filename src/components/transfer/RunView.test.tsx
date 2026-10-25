@@ -20,7 +20,7 @@ function setup(props: Partial<React.ComponentProps<typeof RunView>> = {}) {
     <RunView
       kind="transfer"
       source={DEV}
-      target={QA}
+      targets={[QA]}
       steps={steps(['done', 3000], ['running'], ['pending'])}
       progress={58}
       logs={LOGS}
@@ -449,7 +449,7 @@ describe('RunView restore', () => {
 
   it('asks first; Keep as is closes the question without restoring, Restore now restores', () => {
     const onRestore = vi.fn();
-    done('transfer', { onRestore });
+    done('transfer', { backups: [{ target: QA, onDownload: vi.fn(), onRestore }] });
     expect(screen.queryByRole('group', { name: QUESTION })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Restore Acme · QA' }));
     const question = screen.getByRole('group', { name: QUESTION });
@@ -468,7 +468,7 @@ describe('RunView restore', () => {
   });
 
   it('a production target needs the checkbox before Restore now, every time it asks', () => {
-    done('transfer', { target: PROD, onRestore: vi.fn() });
+    done('transfer', { targets: [PROD], backups: [{ target: PROD, onDownload: vi.fn(), onRestore: vi.fn() }] });
     const ask = () => fireEvent.click(screen.getByRole('button', { name: 'Restore Acme · Production' }));
     ask();
     expect(screen.getByRole('button', { name: 'Restore now' })).toBeDisabled();
@@ -480,12 +480,51 @@ describe('RunView restore', () => {
   });
 
   it('a failed run offers it too', () => {
-    setup({ running: false, result: 'fail', onRestore: vi.fn() });
+    setup({ running: false, result: 'fail', backups: [{ target: QA, onDownload: vi.fn(), onRestore: vi.fn() }] });
     expect(screen.getByRole('button', { name: 'Restore Acme · QA' })).toBeInTheDocument();
   });
 
   it('is not offered without onRestore', () => {
-    done('transfer');
+    done('transfer', { backups: [{ target: QA, onDownload: vi.fn() }] });
     expect(screen.queryByRole('button', { name: /^Restore/ })).not.toBeInTheDocument();
+  });
+});
+
+describe('RunView with several targets', () => {
+  const UAT: Env = { id: 'uat', name: 'Acme · UAT', contextId: 'c4', tenantName: 'acme-uat' };
+
+  it('names every target while running and when done', () => {
+    setup({ targets: [QA, UAT] });
+    expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('Copying content to Acme · QA and Acme · UAT');
+  });
+
+  it('says which targets got the content when the run stops', () => {
+    setup({ targets: [QA, UAT], running: false, result: 'fail', finished: [QA] });
+    expect(screen.getByText('Acme · QA got the content before the transfer stopped.')).toBeInTheDocument();
+  });
+
+  it('one backup keeps the plain wording', () => {
+    const onDownload = vi.fn();
+    done('transfer', { backups: [{ target: QA, onDownload }] });
+    expect(screen.getByText('A backup of Acme · QA from before this transfer was downloaded. Install it into Acme · QA to undo the transfer.')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Download backup' }));
+    expect(onDownload).toHaveBeenCalledOnce();
+  });
+
+  it('offers each backup and restore by target, and restores only the one confirmed', () => {
+    const qa = { target: QA, onDownload: vi.fn(), onRestore: vi.fn() };
+    const uat = { target: UAT, onDownload: vi.fn(), onRestore: vi.fn() };
+    done('transfer', { targets: [QA, UAT], backups: [qa, uat] });
+    expect(
+      screen.getByText('Backups of Acme · QA and Acme · UAT from before this transfer were downloaded. Install each into its own environment to undo the transfer.'),
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Download Acme · UAT backup' }));
+    expect(uat.onDownload).toHaveBeenCalledOnce();
+    fireEvent.click(screen.getByRole('button', { name: 'Restore Acme · UAT' }));
+    // While it asks, no other restore can start.
+    expect(screen.queryByRole('button', { name: 'Restore Acme · QA' })).not.toBeInTheDocument();
+    fireEvent.click(within(screen.getByRole('group', { name: 'Restore Acme · UAT to how it was before this transfer?' })).getByRole('button', { name: 'Restore now' }));
+    expect(uat.onRestore).toHaveBeenCalledOnce();
+    expect(qa.onRestore).not.toHaveBeenCalled();
   });
 });

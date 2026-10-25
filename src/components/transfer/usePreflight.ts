@@ -20,38 +20,57 @@ export type Preflight =
     }
   | { status: 'failed'; error: string };
 
+const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
+
+// One target's check: the pre-flight check itself, with the related-content scan and the template and rendering check
+// alongside, whose failures are reported rather than failing it.
+async function check(client: SdkClient, source: Env, target: Env, trees: DataTree[]): Promise<Preflight> {
+  const scan = scanRelated(client, source, target, trees).then(
+    (related) => ({ related }),
+    (e) => ({ relatedError: message(e) }),
+  );
+  const defs = scanDefinitions(client, source, target, trees).then(
+    (definitions) => ({ definitions }),
+    (e) => ({ definitionsError: message(e) }),
+  );
+  try {
+    const [checks, found, missing] = await Promise.all([runPreflight(client, source, target, trees), scan, defs]);
+    return { status: 'done', checks, ...found, ...missing };
+  } catch (e) {
+    return { status: 'failed', error: message(e) };
+  }
+}
+
 /**
- * Runs the pre-flight check, the related-content scan and the template and rendering check for the route and list,
- * again whenever either changes; a failed scan or template check doesn't fail the check. Without a source, target or
- * items it doesn't run and returns undefined; a result for an older route or list is never returned.
+ * Checks each target for the route and list, in parallel, again whenever any of them changes; each target's result
+ * shows as soon as it's ready (keyed by target id). Without a source, targets or items it doesn't run and returns
+ * undefined; a result for an older route or list is never returned.
  */
-export function usePreflight(client: SdkClient | null, source: Env | undefined, target: Env | undefined, trees: DataTree[]): Preflight | undefined {
-  const key = client && source && target && trees.length ? JSON.stringify([source.id, target.id, trees]) : null;
-  const [result, setResult] = useState<{ key: string; value: Preflight }>();
+export function usePreflights(client: SdkClient | null, source: Env | undefined, targets: Env[], trees: DataTree[]): Record<string, Preflight> | undefined {
+  const key = client && source && targets.length && trees.length ? JSON.stringify([source.id, targets.map((t) => t.id), trees]) : null;
+  const [result, setResult] = useState<{ key: string; values: Record<string, Preflight> }>();
 
   useEffect(() => {
     if (!key) return;
     let live = true;
-    const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
-    const scan = scanRelated(client!, source!, target!, trees).then(
-      (related) => ({ related }),
-      (e) => ({ relatedError: message(e) }),
-    );
-    const defs = scanDefinitions(client!, source!, target!, trees).then(
-      (definitions) => ({ definitions }),
-      (e) => ({ definitionsError: message(e) }),
-    );
-    Promise.all([runPreflight(client!, source!, target!, trees), scan, defs]).then(
-      ([checks, found, missing]) => live && setResult({ key, value: { status: 'done', checks, ...found, ...missing } }),
-      (e) => live && setResult({ key, value: { status: 'failed', error: message(e) } }),
-    );
+    for (const target of targets) {
+      void check(client!, source!, target, trees).then(
+        (value) => live && setResult((r) => ({ key, values: { ...(r?.key === key ? r.values : {}), [target.id]: value } })),
+      );
+    }
     return () => {
       live = false;
     };
-    // The key stands for the source, target and list.
+    // The key stands for the source, targets and list.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key]);
 
   if (!key) return undefined;
-  return result?.key === key ? result.value : { status: 'checking' };
+  const values = result?.key === key ? result.values : {};
+  return Object.fromEntries(targets.map((t) => [t.id, values[t.id] ?? { status: 'checking' }]));
+}
+
+/** usePreflights for one target. */
+export function usePreflight(client: SdkClient | null, source: Env | undefined, target: Env | undefined, trees: DataTree[]): Preflight | undefined {
+  return usePreflights(client, source, target ? [target] : [], trees)?.[target!.id];
 }

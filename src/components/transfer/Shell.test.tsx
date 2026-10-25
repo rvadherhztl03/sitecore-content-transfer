@@ -141,12 +141,12 @@ describe('EnvironmentCards', () => {
   });
 
   it('never marks the disabled environment as selected', () => {
-    setup({ value: 'dev', disabledId: 'dev', disabledReason: 'Already the source' });
+    setup({ value: 'dev', disabledIds: ['dev'], disabledReason: 'Already the source' });
     expect(screen.getAllByRole('radio').filter((r) => (r as HTMLInputElement).checked)).toHaveLength(0);
   });
 
   it('disables the excluded environment and shows the reason instead of its tenant', () => {
-    setup({ disabledId: 'dev', disabledReason: 'Already the source' });
+    setup({ disabledIds: ['dev'], disabledReason: 'Already the source' });
     const radio = screen.getByRole('radio', { name: /Acme · Development/ });
     expect(radio).toBeDisabled();
     expect(screen.getByText('Already the source')).toBeInTheDocument();
