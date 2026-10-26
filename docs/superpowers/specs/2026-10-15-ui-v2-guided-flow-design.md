@@ -1,0 +1,187 @@
+# UI v2: guided flow
+
+Date: 2026-10-15 · Branch: `feat/sdk-transfer-redesign` · Builds on `2026-10-15-sdk-transfer-redesign-design.md` (engine, SDK and package format unchanged)
+
+## Goal
+
+Replace the single tabbed workspace with a guided, plain-language flow that feels smooth for occasional users and stays quick for repeat use. The approved visual design is the canvas **Content Transfer redesign** (https://claude.ai/artifact/CgZ4aU5yGgELhv5QJAUX4a): Home, Route, Content, Review, Running, Complete, Install a package, and the Pages editor panel. Build it as drawn, with Blok components and tokens (primary `#6E3FFF`, 10 px radius, Geist), light theme.
+
+Success: in XM Cloud a user goes Home → Start a transfer → picks two environments by card → ticks items → reviews a summary that says exactly what will be written → watches progress → sees a completion summary, without meeting any Sitecore enum name.
+
+## Bug fix carried in
+
+`toEnvs` uses `resourceId` as `Env.id`. In XM Cloud every entry shares the same `resourceId` (the product), so source and target collapse into one environment ("Source and target must be different environments." with two different names shown). `Env.id` becomes `tenantId`, falling back to the context ID. Add a test where two entries share a `resourceId`.
+
+## Navigation
+
+The extension routes stay as they are (`/fullscreen-extension`, `/standalone-extension`, `/pages-contextpanel-extension`). Screens are in-app state inside the top-level component: no new Next routes and no URL changes (the app runs in an iframe).
+
+```
+home ─▶ transfer: route ▸ content ▸ review ▸ run (running → complete | failed)
+     ─▶ export:   route(source only) ▸ content ▸ review ▸ run (→ download)
+     ─▶ install:  package+target ▸ run
+```
+
+- A step bar shows the four steps. Finished steps show what was chosen (e.g. `Dev → QA · master`, `2 items`) and are clickable to go back. Future steps are inert.
+- Every screen except Running has Cancel (to Home) in the header. A sticky footer carries the route summary on the left, and Back + the primary action on the right.
+- Leaving a flow and returning to Home resets that flow's state.
+
+## Screens
+
+**Home**
+- Three action cards:
+  - **Transfer between environments**: primary, opens transfer at Route
+  - **Export a package**: opens export at Route
+  - **Install a package**: opens install
+- **Environments this app can reach**: name, `tenantName` in mono, kind badge, plus the footer "Missing an environment? Grant this app access to it in Cloud Portal, then reopen the app."
+- "How a transfer works": 4 static lines.
+- Header chip: `<n> environments connected`. Loading → skeleton. Context error → danger alert + Retry.
+- With fewer than 2 environments, the Transfer card's button is disabled and shows the one-environment message.
+
+**Route**
+- Two radio-card groups, **From** and **To**, with a round swap button between them.
+- The current source is disabled in **To**, labelled "Already the source", and vice versa. So the same environment can't be picked twice.
+- Database is a segmented control (`master` / `web`), with the helper "Items are read from master on the source and written to this database on the target."
+- Export shows only **From** and no database.
+- Continue is enabled when the route is valid.
+- Defaults: From = first environment, To = second.
+
+**Content**
+- Left: the existing lazy tree (`ContentTree`), titled "Browse <source>", with search.
+- Right: **Selected** cards. Each shows the item name and mono path, a segmented scope control (`This item` / `+ Everything below`), an "If it exists" select with plain-language labels, and Remove.
+- Header actions: Add by path, Import list (JSON), Clear all. Empty state: `Pick items from the tree or paste a path.`
+- Continue (label "Review transfer" / "Review export") needs ≥1 item.
+
+**Review**
+- Title "Ready to transfer". Sub: "Nothing has been written yet. Check the route and items, then start."
+- Route banner: From card → To card with the database.
+- Warning callouts, built from the queue and target:
+  - Any `OverrideExistingTree` → "<n> item(s) replace everything below them on <target>."
+  - Target kind Production → a danger callout, plus the required checkbox "I understand this writes to <target>". Start stays disabled until it is ticked.
+- Items table: Item (name + mono path), Includes, If it exists, plus an Edit link back to Content.
+- Note: "Large trees can take a few minutes. You can cancel until the import into <target> starts; after that the target finishes on its own."
+- Primary: **Start transfer** (export: **Create package**). This screen replaces the old confirm dialog.
+
+**Running**
+- Header line "In progress", title "Copying content to <target>" (export: "Packaging content from <source>"; install: "Installing package into <target>").
+- Large percentage with a progress bar, then "Copying chunk N of M" (from the existing chunk log pattern).
+- A step timeline with a duration per finished step, measured in the UI from `onStepChange`.
+- A dark activity log with a Copy log button (existing behaviour).
+- Footer: **Cancel transfer** until the import step starts, then the text "The import can't be cancelled once it starts." There's no dismiss while running.
+
+**Complete**
+- Success icon, "Transfer complete" (export: "Package ready"; install: "Package installed").
+- One-line summary, and stats: Items (sum of `TotalItemCount`), Chunks, Took.
+- Actions: **Start another transfer** (back to Route with the route kept and the queue cleared) and **Back to home**.
+- Export also gets **Download package** (the Blob is kept until leaving; download is also triggered automatically once).
+- The activity log sits in a collapsed `<details>`.
+
+**Failed**: the Running layout with a danger header ("Transfer failed"), the failing step marked, the log expanded, and actions **Try again** (back to Review) and **Back to home**.
+
+**Install a package**
+- One screen: drop zone; selected file card (name, size, chunk count, media count, Replace); "What's inside" read-only table, or "No metadata in this package."; **Install into** radio cards with kind badges; database segmented control.
+- Production target → the same required checkbox as Review.
+- Footer: `<n> items → <target> · <db>`. **Install package** goes to Running.
+
+**Pages editor panel (compact)**
+- A single narrow column: Current page card (name + mono path), From select, To select (no preselect), an **Include subpages** switch (scope), an "If it already exists on <target>" select, and a primary **Send to <target>** button.
+- Below the button: "You'll confirm before anything is written."
+- Send shows a compact inline Review (route, item, warnings, prod checkbox, Start), then inline Running and Complete.
+
+## Plain-language labels (`src/lib/queue.ts`)
+
+| Value | Short (controls) | Long (review / tables) |
+|---|---|---|
+| `SingleItem` | This item | This item only |
+| `ItemAndDescendants` | + Everything below | Item + everything below |
+| `OverrideExistingTree` | Replace it and everything below | same |
+| `OverrideExistingItem` | Replace this item only | same |
+| `KeepExistingItem` | Keep what's there | same |
+| `LatestWin` | Keep the newer one | same |
+
+The Panel uses "Replace this page only" for `OverrideExistingItem`.
+
+## Environment kind (`src/lib/sdk.ts`)
+
+`envKind(env): 'prod' | 'test' | 'dev' | null`, checked in this order against `name` and `tenantName`:
+- `/prod|prd|live/i` → `prod` (badge "Production", warning tone)
+- `/qa|test|uat|stag/i` → `test` (badge "Test", primary tone)
+- `/dev|local/i` → `dev` (badge "Dev", neutral)
+- otherwise no badge
+
+This replaces the `/prod/i` check in Workspace. `Env` gains an optional `tenantName` for display.
+
+## Engine additions (`src/lib/transfer.ts`)
+
+`RunCallbacks` gains an optional `onInfo?(info: { chunkCount: number; itemCount: number })`, called once after the package is ready (sums over chunk sets; `TotalItemCount` may be missing → 0). Nothing else in the engine changes.
+
+## Component structure
+
+| New / changed | Replaces / notes |
+|---|---|
+| `transfer/App.tsx`: screen state (home / flow / install), environments, top-level shell | `Workspace.tsx` (deleted); extension pages render `<App …/>` |
+| `transfer/AppHeader.tsx`: logo, title, breadcrumb, connection chip, Cancel slot | — |
+| `transfer/Home.tsx` | Tabs |
+| `transfer/Stepper.tsx`: step bar with done/current/pending, back-links | — |
+| `transfer/EnvironmentCards.tsx`: radio-card group with kind badge and disabled reason | `EnvironmentBar.tsx` (deleted) |
+| `transfer/Flow.tsx`: transfer/export steps, owns route, queue and run state | the transfer/export half of `Workspace.tsx` |
+| `transfer/ContentStep.tsx`: tree + selected cards (uses `ContentTree`, restyled `SelectionQueue`) | — |
+| `transfer/ReviewStep.tsx` | the AlertDialog confirm |
+| `transfer/RunView.tsx`: running / complete / failed, full page or compact | `RunPanel.tsx` + Sheet (deleted) |
+| `transfer/InstallFlow.tsx`: uses `ImportPanel` pieces | import tab |
+| `transfer/PanelFlow.tsx`: compact form → inline review → inline run | compact Workspace |
+| `ContentTree.tsx`, `SelectionQueue.tsx`, `ImportPanel.tsx` | kept, restyled to the canvas |
+
+Kept unchanged: `src/lib/{sdk,transfer,package}.ts` (except the two additions above), `useEnvironments`, `useMarketplaceClient`, `Spike.tsx` (still pending the user's XM Cloud run).
+
+**Files to delete** (needs the user's OK, which the controller asks for with this spec): `Workspace.tsx` + test, `EnvironmentBar.tsx` + test, `RunPanel.tsx` + test, plus any `src/components/ui/*` left unused at the end (likely `tabs`, `sheet`, `alert-dialog`).
+
+## Behaviour carried over (must not regress)
+
+All the safety behaviour from v1:
+- The queue and page path are held during review and run.
+- A run can't be started twice.
+- Cancel ends at the import step, followed by the "may still finish importing" warning.
+- Abort via `AbortController`.
+- The export download revoke is deferred.
+- One environment → transfer is blocked, while export and install still work.
+- Exact copy strings from the v1 Global Constraints, except where this spec renames them:
+  - the confirm dialog text is replaced by Review
+  - the prod warning becomes the Review/Install callout plus checkbox
+
+## Testing
+
+- **Unit:** `toEnvs` id = `tenantId` (two entries share a `resourceId`); `envKind` table; label maps; `onInfo` called with summed counts.
+- **Component** (jsdom, `fakeClient`):
+  - Home lists environments, and its actions open the right flows.
+  - Route disables the source in To, Swap swaps, Continue gating works.
+  - Content gating.
+  - Review shows the items, the OverrideExistingTree callout, and a prod checkbox that gates Start.
+  - Running → Complete shows the stats.
+  - Failure shows Try again.
+  - Export Complete has Download package.
+  - Install requires file + target, with the prod checkbox.
+  - The Panel has no preselect, and Send → inline review → run.
+  - The page path is held during review/run.
+- **Visual:** a local preview of each screen against the canvas, checked once by the controller.
+
+## Out of scope
+
+Run history across sessions; dark theme; host-environment detection for the Pages panel (pending Phase 0 `host.state`); "skipped items" analysis.
+
+## Amendments (user feedback, 2026-10-15)
+
+- **Environment badges show the environment's own type.** The badge reads `Prod`, `Live`, `Staging`, `UAT`, `QA`, `Test`, `Dev` or `Local` (`envLabel`: the first pattern in that order matching the name or tenant name; no badge when none matches) instead of the `Production` / `Test` / `Dev` category. Production environments keep the warning tone, every other badge is neutral. `envKind` is unchanged and still gates the production checkbox.
+- **The write database is always `master`.** The "Write into database" card on Route and the Database control on Install are removed; every transfer, install and panel send imports into `master` (`DATABASE` in `src/lib/transfer.ts`). Review still shows `writes to master`. Earlier sections that mention a `master` / `web` choice are superseded.
+- **`+ Children` scope (`ItemAndChildren`).** A third scope between `This item` and `+ Everything below` (long label `Item + its children`), in the Content step's scope control, Review, the Install preview and JSON queue import. The Content Transfer API has no such scope, so `expandTrees` (`src/lib/transfer.ts`) replaces the row when a transfer or export starts with the item and each direct child (via `fetchChildren` on the source) as `SingleItem` rows with the row's merge strategy; a child that the queue lists on its own keeps that row; 1,000 or more children stops the run before the job is created. Export metadata keeps the row as chosen. `Replace it and everything below` isn't offered for `+ Children` (`mergesFor`), and switching to it moves the merge to `Replace this item only` (`withScope`). The Pages panel's `Include subpages` switch becomes an **Include** select: `This page only`, `This page + child pages`, `This page + all subpages` (default).
+- **Replace options follow the scope** (`mergesFor`). `Replace it and everything below` is only offered with `+ Everything below`. `This item` offers `Replace this item only`; `+ Children` offers `Replace it and its children` (Pages panel: `Replace it and its child pages`), which is `OverrideExistingItem` on the item and each child, never anything deeper (`expandTrees` also turns an `OverrideExistingTree` row into `OverrideExistingItem`). Switching scope moves an unavailable strategy to `OverrideExistingItem` (`withScope`), and JSON import does the same.
+- **`LatestWin` ("Keep the newer one") is removed.** The Content Transfer API spec lists only `OverrideExistingItem`, `KeepExistingItem` and `OverrideExistingTree`; `LatestWin` appears only in the SDK's types. No picker offers it, `MergeStrategy` no longer includes it, and JSON import reads it as `KeepExistingItem` (never the destructive default). An older package's metadata that names it is shown as is in the Install preview.
+- **Pre-flight check on Review (transfer) and the Pages panel review.** `runPreflight` (`src/lib/preflight.ts`) sends one authoring GraphQL query per environment, aliasing an `item(path)` lookup for every queued item and its parents below `/sitecore`, plus `children` for `Replace it and everything below` rows. Per item it reports `onSource`, `onTarget` (`new` / `same` / `other` by ID), `missingParents` (absent on the target and not brought by the list: a row, under a `+ Everything below` row, or a child of a `+ Children` row), `otherParents` (different ID) and `deleted` (the target's direct children the source lacks; first 1,000). `usePreflight` re-runs it when the route or list changes. Review gets an `On <target>` column (`PreflightStatus`) and notes (`PreflightNotes`) with **Remove from the list** and **Add missing parents** (`SingleItem` + `KeepExistingItem`, inserted before the first item that needs them). The panel shows the status row, the notes and an `Also sends` row. Nothing blocks Start; a failed check shows `Couldn't run the pre-flight check: … You can still start.` Export and Install don't run it.
+- **Backup before overwriting (transfer and Pages panel).** Review shows `BackupChoice`: `Back up <target> first`, ticked by default, or `Nothing on <target> to back up.` when `backupTreesFor(trees, checks)` is empty. `backupTreesFor` keeps rows that aren't `KeepExistingItem` and, with a finished pre-flight check, only those whose target item is the same (`onTarget: 'same'`); `ItemAndDescendants` rows are backed up as `ItemAndDescendants` + `OverrideExistingTree` (restoring puts the tree back exactly), others keep their scope with `OverrideExistingItem`. `runTransfer`'s `backup` option adds step 0 `Back up <target>` (the first 20% of the progress bar): a content transfer job on the target under its own id (always cleaned up), the same chunk download as export, `buildPackage`, then `onBackup(zip)`; an empty package logs `Nothing on <target> to back up.` and carries on; a failure stops the run before the source job with `Backup of <target> failed: … Nothing was written to <target>; to transfer without a backup, untick it on Review.` Every later step index moves by one, so Cancel is gated on `IMPORT_STEP.transfer + 1`. The zip downloads as `backup-<target>-YYYY-MM-DD-HHmm.zip`; Complete and Failed show `Download backup` with how to restore it (Install a package). No one-click restore yet.
+- **One-click restore.** With a backup from the run, Complete (and Failed once the import step had started) shows `Restore <target>`. It asks inline first (`Restore <target> to how it was before this transfer?`, what gets replaced, `Restore now` / `Keep as is`, plus `ProdConfirm` for a production target), then resets the run and starts `runImport` of the backup zip (`readPackage`) into the run's target. RunView has a `restore` kind: `Restoring <target>`, `Restore complete`, `<target> is back as it was before the transfer.`, `Restore failed` (Try again restores again), `Start another transfer`. Cancel is gated on `IMPORT_STEP.import`; Download backup stays; a restore offers no further Restore.
+- **Publish after transfer.** Review and the panel review show `PublishChoice` (`Publish to Experience Edge when done`, off by default). `runTransfer`'s `publish` option adds a last step `Publish to Experience Edge` (from 95% of the bar): `xmc.sites.listLanguages` on the target (names; `en` when none), then authoring GraphQL `publishItem` with literal input (`sourceDatabase: "master"`, `targetDatabases: ["experienceedge"]`, `publishItemMode: SMART`, `publishRelatedItems: false`, all languages): one call for `ItemAndDescendants` rows with `publishSubItems: true`, one for the rest (as sent, + Children expanded) with `false`; each polled with `publishingStatus` until `isDone` / `isFailed` (`TIMING.publishTimeoutMs`, 10 min). A publish failure marks the step failed, logs `Publishing to Experience Edge didn't finish: … Publish the items from Pages instead.` and still returns success; RunView's Complete card then says `<step> didn't finish. See the activity log.` A restore of a published transfer passes the backup's rows as `runImport`'s `publish` (+ Children expanded on the target).
+- **Related-content scan.** `scanRelated` (`src/lib/related.ts`) runs next to the pre-flight check in `usePreflight` (its failure becomes `relatedError`, not a failed check). Three literal-input GraphQL queries: `RelatedFields` on the source (each queued item's `fields(excludeStandardFields: true)`, `__Renderings`, `__Final Renderings`), `RelatedItems` on the source (resolve every referenced ID, braced/dashed or the 32-digit `_id=` / `/media/` form, and every `/sitecore/content` or `/sitecore/media library` path), `RelatedOnTarget` (each kept item by path). Kept: content or media paths the list doesn't bring (`brought`), once per path, with the queued items that use them. `PreflightNotes` shows `Used by your items but not in the list` for items the target lacks (`new`) or has as a different item (`other`, not addable), counts those it has, and offers `Add N missing items` (`addRelated`: `SingleItem` + `KeepExistingItem`, appended). The panel adds them to its extra items (`Also sends`).
+- **Compare environments (Content step, transfer only).** A `Pick items by` control switches the left panel between `Browse` (the tree) and `Compare with <target>` (`CompareView`, mounted on first use and kept, keyed by the route). `compareTrees` (`src/lib/compare.ts`) reads the starting item on both sides (`CompareRoot`), then each level's children (`CompareLevel`, 100 parents per query, `children(first: 1000)`) only on the sides that have the parent, pairing children by path; per item `itemId`, `name`, `path`, `__Revision`, `__Updated`. Status: `new`, `onlyTarget`, `other` (different ID), `same` / `changed` by revision, `newer` by the later `__Updated`. It stops at `COMPARE_LIMIT` (2,000, `truncated`) and on abort; items come back in tree order. The view: start path (defaults to the first queued item, else `/sitecore/content`), Compare / Stop with `Compared N items…`, filter chips with counts (`Same` off by default), a nested list with checkboxes for new and changed, `Select all new and changed`, `Add N to the list` → `rowsFor` (changed: `SingleItem` + `OverrideExistingItem`; new: `SingleItem` + `KeepExistingItem`; a new item picked with everything compared below it: one `ItemAndDescendants` + `KeepExistingItem` row) merged into the queue.
+- **Template and rendering check (pre-flight).** `scanDefinitions` (`src/lib/related.ts`) runs next to the pre-flight check and the related scan in `usePreflight` (its failure becomes `definitionsError`). Three literal-input queries: `DefinitionsUsed` on the source (each queued item's `template { templateId }`, `__Renderings`, `__Final Renderings`), `DefinitionsItems` on the source (every ID found, by `itemId`), `DefinitionsOnTarget` (the ones under `/sitecore/templates/` or `/sitecore/layout/` the list doesn't bring, by `itemId`). Each one the target lacks becomes a `Definition` (`Template`, `Layout` under `/sitecore/layout/layouts/`, otherwise `Rendering`; `usedBy`, `templateOf`). Review shows a danger note `Missing on <target>: templates and renderings` (no fix button: they ship with code) and the chip `Template missing` (after `Not on <source>`). Picked items only, like the related scan.
+- **Field-level diff.** `fieldDiff` (`src/lib/diff.ts`) reads `fields(excludeStandardFields: false)` of the item on both environments (`query FieldDiff`, default language, latest version) and returns every field but `__Revision`, `__Updated` and `__Updated by`, marked changed or not. `FieldDiff` (`src/components/transfer/FieldDiff.tsx`) lists the changed fields, each with `Show values` (both full values, never cut short; `(empty)`, `Not on <env>`), and `Show all fields (N)` adds the unchanged ones. `Show changes` opens it on Compare's `Changed` rows, on Review rows whose target has the same item and that overwrite it (per target), and in the Pages panel review.
+- **Several targets (full-screen transfer).** Route's **To** takes any number of targets (checkboxes); they're written in pick order with production-looking targets last, and Review lists them in that order (`To`, then `Then to`). The swap button shows only with one. Content gets one `Compare with <target>` tab per target. Review: every target on the route, an `On <target>` column and `PreflightNotes` per target (`usePreflights`), a `ProdConfirm` per production target, one backup choice (`Back up <targets> first`, each target backed up for what it would lose) and one publish choice. `runTransfer` takes `targets: { env, backup? }[]`: every backup first, then the source job and package once, then per target Copy, Assemble, Import, Verify (and Publish); `transferSteps` gives the labels (target named on Import, Verify and Publish only with several), `targetAt` and `firstImport` (Cancel until then). A failure stops the run; cleanup reaches only the source and the targets chunks were sent to, never one that accepted an import, and only the one still importing gets the "may still finish" warning. `Try again` after a failure leaves out the targets that got the content. Pre-flight notes name their target, and what only concerns the source (`Not found on <source>`) shows once. RunView takes `targets`, `backups` (`Download <target> backup` and `Restore <target>` per target, `Download backup` with one) and `finished` (`<targets> got the content before the transfer stopped.`). A restore's result still offers the other targets' restores; a target leaves that list only when its restore succeeds. The Pages panel stays single-target.

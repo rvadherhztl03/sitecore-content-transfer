@@ -46,7 +46,9 @@ async function getMarketplaceClient() {
 
   const config = {
     target: window.parent,
-     modules: [XMC],
+    modules: [XMC],
+    // Every SDK call (xmc.* goes through host.request) times out after this; the 30 s default is too short for large chunks.
+    timeout: 300_000,
   };
 
   client = await ClientSDK.init(config);

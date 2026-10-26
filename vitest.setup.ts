@@ -10,3 +10,16 @@ if (typeof window !== 'undefined') {
     writable: true
   });
 }
+
+// jsdom polyfills for Radix UI
+if (typeof Element !== 'undefined') {
+  Element.prototype.hasPointerCapture ??= () => false;
+  Element.prototype.setPointerCapture ??= () => {};
+  Element.prototype.releasePointerCapture ??= () => {};
+  Element.prototype.scrollIntoView ??= () => {};
+}
+globalThis.ResizeObserver ??= class {
+  observe() {}
+  unobserve() {}
+  disconnect() {}
+} as unknown as typeof ResizeObserver;

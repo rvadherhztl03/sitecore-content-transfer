@@ -4,7 +4,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, act } from '@testing-library/react';
 import MigrationDashboard from './MigrationDashboard';
 
-vi.mock('@/src/utils/migrationService', () => {
+vi.mock('@/utils/migrationService', () => {
   return {
     MigrationService: class {
       private config: any;
