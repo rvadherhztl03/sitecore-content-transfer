@@ -210,7 +210,7 @@ export class MigrationService {
     let state = 'Processing';
     let chunksetsMetadata: any[] = [];
     let attempts = 0;
-    const maxAttempts = 30; // 30 * 4s = 120 seconds
+    const maxAttempts = 450; // 450 * 4s = 30 minutes
 
     while (state === 'Processing' && attempts < maxAttempts) {
       attempts++;
@@ -359,7 +359,7 @@ export class MigrationService {
     let isSuccessState = false;
     let verifyData: any = null;
     let verifyPollCount = 0;
-    const maxVerifyPolls = 15; // Poll up to 15 times (about 45 seconds total)
+    const maxVerifyPolls = 600; // 600 * 3s = 30 minutes
     const delay = (ms: number) => {
       if (typeof process !== 'undefined' && process.env.NODE_ENV === 'test') {
         return Promise.resolve();
@@ -539,7 +539,7 @@ export class MigrationService {
     let chunksetId = '';
     let chunkCount = 0;
     let pollCount = 0;
-    const maxPolls = 60; // 5 minutes
+    const maxPolls = 360; // 360 * 5s = 30 minutes
 
     while (!isCompleted && pollCount < maxPolls) {
       pollCount++;
@@ -760,7 +760,7 @@ export class MigrationService {
       let isSuccessState = false;
       let verifyData: any = null;
       let verifyPollCount = 0;
-      const maxVerifyPolls = 15;
+      const maxVerifyPolls = 600; // 600 * 3s = 30 minutes
       const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
       while (!isSuccessState && verifyPollCount < maxVerifyPolls) {

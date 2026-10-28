@@ -30,7 +30,7 @@ export const TRANSFER_STEPS = ['Create job', 'Wait for package', 'Copy chunks', 
 export const IMPORT_STEPS = ['Upload package', 'Assemble on target', 'Import into database', 'Verify'];
 // Index of 'Import into database' in each step list; from here on a failure or cancel may leave the target importing.
 export const IMPORT_STEP = { transfer: 4, import: 2 } as const;
-export const TIMING = { pollMs: 3000, statusTimeoutMs: 600_000, verifyTimeoutMs: 300_000, publishTimeoutMs: 600_000 };
+export const TIMING = { pollMs: 3000, statusTimeoutMs: 1_800_000, verifyTimeoutMs: 1_800_000, publishTimeoutMs: 1_800_000 };
 export const BLOB_SUCCESS = ['OK', 'Transferred', 'Consumed'];
 export const BLOB_FAILURE = ['Error', 'Failed', 'Discarded'];
 // The share of the progress bar the backup step takes, when there is one, and where the publish step starts.
