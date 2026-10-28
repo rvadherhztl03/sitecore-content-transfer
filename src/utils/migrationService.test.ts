@@ -131,6 +131,46 @@ describe('MigrationService', () => {
       expect(mockFetch.mock.calls[5][0]).toBe('/api/migrate/verify');
     });
 
+    it('copies, assembles, imports and verifies every chunk set the source returns', async () => {
+      const ok = (body: unknown) => ({ ok: true, json: () => Promise.resolve(body), text: () => Promise.resolve(JSON.stringify(body)) });
+      const mockFetch = vi.fn()
+        .mockResolvedValueOnce(ok({ success: true }))
+        .mockResolvedValueOnce(ok({
+          State: 'Completed',
+          ChunkSetsMetadata: [{ ChunkSetId: 'set-a', ChunkCount: 2 }, { ChunkSetId: 'set-b', ChunkCount: 1 }]
+        }))
+        .mockResolvedValueOnce(ok({ isMedia: false }))
+        .mockResolvedValueOnce(ok({ isMedia: false }))
+        .mockResolvedValueOnce(ok({ isMedia: true }))
+        .mockResolvedValueOnce(ok({ ContentTransferFileName: 'a.raif' }))
+        .mockResolvedValueOnce(ok({ ContentTransferFileName: 'b.raif' }))
+        .mockResolvedValueOnce(ok({ success: true }))
+        .mockResolvedValueOnce(ok({ success: true }))
+        .mockResolvedValueOnce(ok({ BlobState: 'Transferred', Error: null }))
+        .mockResolvedValueOnce(ok({ BlobState: 'Consumed', Error: null }));
+      global.fetch = mockFetch;
+      config.demoMode = false;
+
+      const result = await new MigrationService(config, callbacks).runMigration();
+
+      expect(result).toBe(true);
+      const calls = mockFetch.mock.calls.slice(2).map(([url, init]) => {
+        const body = JSON.parse(init.body);
+        return [url.replace('/api/migrate/', ''), body.chunksetId, body.chunkIndex];
+      });
+      expect(calls).toEqual([
+        ['transfer-chunk', 'set-a', 0],
+        ['transfer-chunk', 'set-a', 1],
+        ['transfer-chunk', 'set-b', 0],
+        ['complete', 'set-a', undefined],
+        ['complete', 'set-b', undefined],
+        ['consume', 'set-a', undefined],
+        ['consume', 'set-b', undefined],
+        ['verify', 'set-a', undefined],
+        ['verify', 'set-b', undefined],
+      ]);
+    });
+
     it('successfully completes migration when blob state is Consumed during verification', async () => {
       const mockFetch = vi.fn()
         // 1. Initiate
