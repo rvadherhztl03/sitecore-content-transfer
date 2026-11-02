@@ -210,7 +210,7 @@ export class MigrationService {
     let state = 'Processing';
     let chunksetsMetadata: any[] = [];
     let attempts = 0;
-    const maxAttempts = 30; // 30 * 4s = 120 seconds
+    const maxAttempts = 450; // 450 * 4s = 30 minutes
 
     while (state === 'Processing' && attempts < maxAttempts) {
       attempts++;
@@ -253,123 +253,62 @@ export class MigrationService {
       throw new Error('Source transfer job timed out or failed to complete.');
     }
 
-    const { ChunkSetId: chunksetId, ChunkCount: chunkCount } = chunksetsMetadata[0];
-    this.log(`Source transfer job completed. ChunkSetId: ${chunksetId}, ChunkCount: ${chunkCount}`, 'success');
+    // A big package can come in several chunk sets; each is copied, assembled, imported and verified.
+    const chunkSets: { ChunkSetId: string; ChunkCount: number }[] = chunksetsMetadata;
+    const totalChunks = chunkSets.reduce((n, s) => n + s.ChunkCount, 0);
+    const setList = chunkSets.map(s => `${s.ChunkSetId} (${s.ChunkCount} chunks)`).join(', ');
+    this.log(`Source transfer job completed. ${chunkSets.length} chunk set(s): ${setList}`, 'success');
     this.step(1, 'done');
     this.progress(35);
 
     // Step 3: Transfer Chunks Download & Upload Loop
     this.step(2, 'running');
-    this.log(`[Step 3/6] Starting chunk-by-chunk proxy transfer (${chunkCount} chunks)...`, 'info');
+    this.log(`[Step 3/6] Starting chunk-by-chunk proxy transfer (${totalChunks} chunks)...`, 'info');
 
-    for (let i = 0; i < chunkCount; i++) {
-      this.log(`⏳ [Chunk ${i + 1}/${chunkCount}] Downloading from Source & uploading to Target...`, 'info');
-      const chunkRes = await fetch('/api/migrate/transfer-chunk', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          sourceHost: this.config.sourceHost,
-          sourceClientId: this.config.sourceClientId,
-          sourceClientSecret: this.config.sourceClientSecret,
-          sourceAuthority: this.config.sourceAuthority,
-          sourceAudience: this.config.sourceAudience,
-          targetHost: this.config.targetHost,
-          targetClientId: this.config.targetClientId,
-          targetClientSecret: this.config.targetClientSecret,
-          targetAuthority: this.config.targetAuthority,
-          targetAudience: this.config.targetAudience,
-          transferId: this.config.transferId,
-          chunksetId,
-          chunkIndex: i
-        })
-      });
+    let copied = 0;
+    for (const { ChunkSetId: chunksetId, ChunkCount: chunkCount } of chunkSets) {
+      for (let i = 0; i < chunkCount; i++) {
+        this.log(`⏳ [Chunk ${copied + 1}/${totalChunks}] Downloading from Source & uploading to Target...`, 'info');
+        const chunkRes = await fetch('/api/migrate/transfer-chunk', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            sourceHost: this.config.sourceHost,
+            sourceClientId: this.config.sourceClientId,
+            sourceClientSecret: this.config.sourceClientSecret,
+            sourceAuthority: this.config.sourceAuthority,
+            sourceAudience: this.config.sourceAudience,
+            targetHost: this.config.targetHost,
+            targetClientId: this.config.targetClientId,
+            targetClientSecret: this.config.targetClientSecret,
+            targetAuthority: this.config.targetAuthority,
+            targetAudience: this.config.targetAudience,
+            transferId: this.config.transferId,
+            chunksetId,
+            chunkIndex: i
+          })
+        });
 
-      if (!chunkRes.ok) {
-        const errText = await chunkRes.text();
-        throw new Error(`Failed to transfer chunk ${i}: ${errText}`);
+        if (!chunkRes.ok) {
+          const errText = await chunkRes.text();
+          throw new Error(`Failed to transfer chunk ${i} of chunk set ${chunksetId}: ${errText}`);
+        }
+
+        const resData = await chunkRes.json();
+        copied++;
+        this.log(`[Chunk ${copied}/${totalChunks}] Transferred successfully. IsMedia: ${resData.isMedia}`, 'success');
+
+        const chunkProgress = 35 + (copied / totalChunks) * 35; // scales 35% -> 70%
+        this.progress(Math.round(chunkProgress));
       }
-
-      const resData = await chunkRes.json();
-      this.log(`[Chunk ${i + 1}/${chunkCount}] Transferred successfully. IsMedia: ${resData.isMedia}`, 'success');
-      
-      const chunkProgress = 35 + ((i + 1) / chunkCount) * 35; // scales 35% -> 70%
-      this.progress(Math.round(chunkProgress));
     }
     this.step(2, 'done');
 
-    // Step 4: Complete Target Chunkset (Stitch .raif file)
+    // Step 4: Complete Target Chunksets (Stitch .raif files)
     this.step(3, 'running');
     this.log('[Step 4/6] Finishing chunk upload and stitching package on target...', 'info');
-    const completeRes = await fetch('/api/migrate/complete', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        targetHost: this.config.targetHost,
-        targetClientId: this.config.targetClientId,
-        targetClientSecret: this.config.targetClientSecret,
-        targetAuthority: this.config.targetAuthority,
-        targetAudience: this.config.targetAudience,
-        transferId: this.config.transferId,
-        chunksetId
-      })
-    });
-
-    if (!completeRes.ok) {
-      const errText = await completeRes.text();
-      throw new Error(`Failed to complete chunkset on target: ${errText}`);
-    }
-
-    const completeData = await completeRes.json();
-    const blobName = completeData.ContentTransferFileName;
-    this.log(`Package assembled on target: ${blobName}`, 'success');
-    this.step(3, 'done');
-    this.progress(80);
-
-    // Step 5: Consume Target Items
-    this.step(4, 'running');
-    this.log(`[Step 5/6] Consuming .raif package into target database...`, 'info');
-    const consumeRes = await fetch('/api/migrate/consume', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        targetHost: this.config.targetHost,
-        targetClientId: this.config.targetClientId,
-        targetClientSecret: this.config.targetClientSecret,
-        targetAuthority: this.config.targetAuthority,
-        targetAudience: this.config.targetAudience,
-        transferId: this.config.transferId,
-        chunksetId,
-        database: this.config.database
-      })
-    });
-
-    if (!consumeRes.ok) {
-      const errText = await consumeRes.text();
-      throw new Error(`Failed to consume items on target: ${errText}`);
-    }
-
-    this.log(`Items successfully consumed into database: ${this.config.database}`, 'success');
-    this.step(4, 'done');
-    this.progress(90);
-
-    // Step 6: Verify Target Blob
-    this.step(5, 'running');
-    this.log('[Step 6/6] Verifying target blob state...', 'info');
-
-    let isSuccessState = false;
-    let verifyData: any = null;
-    let verifyPollCount = 0;
-    const maxVerifyPolls = 15; // Poll up to 15 times (about 45 seconds total)
-    const delay = (ms: number) => {
-      if (typeof process !== 'undefined' && process.env.NODE_ENV === 'test') {
-        return Promise.resolve();
-      }
-      return new Promise(resolve => setTimeout(resolve, ms));
-    };
-
-    while (!isSuccessState && verifyPollCount < maxVerifyPolls) {
-      verifyPollCount++;
-      const verifyRes = await fetch('/api/migrate/verify', {
+    for (const { ChunkSetId: chunksetId } of chunkSets) {
+      const completeRes = await fetch('/api/migrate/complete', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -383,28 +322,103 @@ export class MigrationService {
         })
       });
 
-      if (!verifyRes.ok) {
-        const errText = await verifyRes.text();
-        throw new Error(`Failed to verify target blob state: ${errText}`);
+      if (!completeRes.ok) {
+        const errText = await completeRes.text();
+        throw new Error(`Failed to complete chunkset ${chunksetId} on target: ${errText}`);
       }
 
-      verifyData = await verifyRes.json();
-      isSuccessState = verifyData.BlobState === 'Transferred' || verifyData.BlobState === 'Consumed';
+      const completeData = await completeRes.json();
+      const blobName = completeData.ContentTransferFileName;
+      this.log(`Package assembled on target: ${blobName}`, 'success');
+    }
+    this.step(3, 'done');
+    this.progress(80);
 
-      this.log(`Verification completed. BlobState: ${verifyData.BlobState}, Error: ${verifyData.Error}`, 
-        isSuccessState ? 'success' : verifyData.BlobState === 'Initializing' ? 'info' : 'warning');
+    // Step 5: Consume Target Items
+    this.step(4, 'running');
+    this.log(`[Step 5/6] Consuming .raif package into target database...`, 'info');
+    for (const { ChunkSetId: chunksetId } of chunkSets) {
+      const consumeRes = await fetch('/api/migrate/consume', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          targetHost: this.config.targetHost,
+          targetClientId: this.config.targetClientId,
+          targetClientSecret: this.config.targetClientSecret,
+          targetAuthority: this.config.targetAuthority,
+          targetAudience: this.config.targetAudience,
+          transferId: this.config.transferId,
+          chunksetId,
+          database: this.config.database
+        })
+      });
 
-      if (!isSuccessState) {
-        if (verifyData.BlobState === 'Initializing') {
-          await delay(3000);
-        } else {
-          break;
-        }
+      if (!consumeRes.ok) {
+        const errText = await consumeRes.text();
+        throw new Error(`Failed to consume chunkset ${chunksetId} on target: ${errText}`);
       }
     }
 
-    if (!isSuccessState) {
-      throw new Error(`Blob transfer verification state is ${verifyData?.BlobState || 'unknown'}. Error: ${verifyData?.Error}`);
+    this.log(`Items successfully consumed into database: ${this.config.database}`, 'success');
+    this.step(4, 'done');
+    this.progress(90);
+
+    // Step 6: Verify Target Blobs
+    this.step(5, 'running');
+    this.log('[Step 6/6] Verifying target blob state...', 'info');
+
+    const maxVerifyPolls = 600; // 600 * 3s = 30 minutes
+    const delay = (ms: number) => {
+      if (typeof process !== 'undefined' && process.env.NODE_ENV === 'test') {
+        return Promise.resolve();
+      }
+      return new Promise(resolve => setTimeout(resolve, ms));
+    };
+
+    for (const { ChunkSetId: chunksetId } of chunkSets) {
+      let isSuccessState = false;
+      let verifyData: any = null;
+      let verifyPollCount = 0;
+
+      while (!isSuccessState && verifyPollCount < maxVerifyPolls) {
+        verifyPollCount++;
+        const verifyRes = await fetch('/api/migrate/verify', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            targetHost: this.config.targetHost,
+            targetClientId: this.config.targetClientId,
+            targetClientSecret: this.config.targetClientSecret,
+            targetAuthority: this.config.targetAuthority,
+            targetAudience: this.config.targetAudience,
+            transferId: this.config.transferId,
+            chunksetId
+          })
+        });
+
+        if (!verifyRes.ok) {
+          const errText = await verifyRes.text();
+          throw new Error(`Failed to verify target blob state: ${errText}`);
+        }
+
+        verifyData = await verifyRes.json();
+        isSuccessState = verifyData.BlobState === 'Transferred' || verifyData.BlobState === 'Consumed';
+
+        this.log(`Verification completed (${chunksetId}). BlobState: ${verifyData.BlobState}, Error: ${verifyData.Error}`,
+          isSuccessState ? 'success' : verifyData.BlobState === 'Initializing' ? 'info' : 'warning');
+
+        if (!isSuccessState) {
+          if (verifyData.BlobState === 'Initializing') {
+            await delay(3000);
+          } else {
+            break;
+          }
+        }
+      }
+
+      if (!isSuccessState) {
+        throw new Error(`Blob transfer verification state for chunkset ${chunksetId} is ${verifyData?.BlobState || 'unknown'}. Error: ${verifyData?.Error}`);
+      }
     }
 
     this.step(5, 'done');
@@ -539,7 +553,7 @@ export class MigrationService {
     let chunksetId = '';
     let chunkCount = 0;
     let pollCount = 0;
-    const maxPolls = 60; // 5 minutes
+    const maxPolls = 360; // 360 * 5s = 30 minutes
 
     while (!isCompleted && pollCount < maxPolls) {
       pollCount++;
@@ -760,7 +774,7 @@ export class MigrationService {
       let isSuccessState = false;
       let verifyData: any = null;
       let verifyPollCount = 0;
-      const maxVerifyPolls = 15;
+      const maxVerifyPolls = 600; // 600 * 3s = 30 minutes
       const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
       while (!isSuccessState && verifyPollCount < maxVerifyPolls) {
