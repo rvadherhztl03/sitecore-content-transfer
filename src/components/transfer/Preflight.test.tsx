@@ -1,10 +1,12 @@
-import { fireEvent, render, screen, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { PreflightNotes, PreflightStatus } from '@/components/transfer/Preflight';
 import type { Preflight } from '@/components/transfer/usePreflight';
+import type { MissingLanguage } from '@/lib/checks';
 import type { ItemCheck } from '@/lib/preflight';
 import type { Definition, RelatedItem } from '@/lib/related';
 import type { Env } from '@/lib/sdk';
+import { fakeClient, type FakeReply } from '@/test/fakeClient';
 
 const DEV: Env = { id: 'd', name: 'Acme · Dev', contextId: 'cd' };
 const QA: Env = { id: 'q', name: 'Acme · QA', contextId: 'cq' };
@@ -221,5 +223,158 @@ describe('PreflightStatus', () => {
     expect(chip(withDefinitions({ definitions: page }, ok(HOME, { onTarget: 'other', missingParents: [ACME] })))).toBe('Template missing');
     // A missing rendering, or a template only another item is built on, is the note's to explain.
     expect(chip(withDefinitions({ definitions: [def(HERO, 'Rendering'), def(PAGE, 'Template', [HOME, NEWS], [NEWS])] }, ok(HOME)))).toBe('Exists');
+  });
+});
+
+type Done = Extract<Preflight, { status: 'done' }>;
+const withExtra = (extra: Partial<Done>): Preflight => ({ status: 'done', checks: new Map([[HOME, ok(HOME)]]), ...extra });
+
+describe('PreflightNotes locked and unapproved items', () => {
+  it('lists the items locked on the target, with who holds the lock', () => {
+    notes(withExtra({ locked: [{ itemPath: HOME, lockedBy: 'sitecore\\jane' }, { itemPath: NEWS }] }));
+    const note = screen.getByRole('note', { name: 'Locked on Acme · QA' });
+    expect(note).toHaveTextContent('Someone may be editing them; the transfer overwrites their changes.');
+    expect(within(note).getAllByRole('listitem').map((li) => li.textContent)).toEqual([`${HOME} · locked by sitecore\\jane`, NEWS]);
+    expect(within(note).getByText(HOME)).toHaveClass('font-mono');
+    expect(screen.queryByRole('button')).not.toBeInTheDocument();
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+  });
+
+  it('speaks of one locked item in the singular, right after what replacing deletes', () => {
+    notes({ ...withExtra({ locked: [{ itemPath: HOME }] }), checks: new Map([[HOME, ok(HOME, { deleted: ['Old'] })]]) });
+    expect(screen.getByRole('note', { name: 'Locked on Acme · QA' })).toHaveTextContent('Someone may be editing it; the transfer overwrites their changes.');
+    expect(screen.getAllByRole('note').map((n) => n.querySelector('strong')!.textContent)).toEqual(['Deleted on Acme · QA', 'Locked on Acme · QA']);
+  });
+
+  it('says when the lock check could not run', () => {
+    notes(withExtra({ lockedError: 'HTTP 500' }));
+    expect(screen.getByRole('note', { name: "Couldn't check for locked items on Acme · QA: HTTP 500. You can still start." })).toBeInTheDocument();
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+  });
+
+  it('lists the items not in a final workflow state on the source', () => {
+    notes(withExtra({ unapproved: [{ itemPath: HOME, state: 'Draft' }, { itemPath: NEWS, state: 'Awaiting approval' }] }));
+    const note = screen.getByRole('note', { name: 'Not approved on Acme · Dev' });
+    expect(note).toHaveTextContent('The transfer copies them as they are.');
+    expect(within(note).getAllByRole('listitem').map((li) => li.textContent)).toEqual([`${HOME} · in Draft`, `${NEWS} · in Awaiting approval`]);
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+  });
+
+  it('speaks of one unapproved item in the singular, after the items not found', () => {
+    notes({ ...withExtra({ unapproved: [{ itemPath: HOME, state: 'Draft' }] }), checks: new Map([[HOME, ok(HOME)], [NEWS, ok(NEWS, { onSource: false })]]) });
+    expect(screen.getByRole('note', { name: 'Not approved on Acme · Dev' })).toHaveTextContent('The transfer copies it as it is.');
+    expect(screen.getAllByRole('note').map((n) => n.querySelector('strong')!.textContent)).toEqual(['Not found on Acme · Dev', 'Not approved on Acme · Dev']);
+  });
+
+  it('says when the approval check could not run', () => {
+    notes(withExtra({ unapprovedError: 'HTTP 500' }));
+    expect(screen.getByRole('note', { name: "Couldn't check approval states on Acme · Dev: HTTP 500. You can still start." })).toBeInTheDocument();
+  });
+
+  it('leaves out what the source says when another target already said it', () => {
+    render(
+      <PreflightNotes
+        preflight={withExtra({ unapproved: [{ itemPath: HOME, state: 'Draft' }], unapprovedError: 'HTTP 500' })}
+        source={DEV}
+        target={QA}
+        sourceNotes={false}
+      />,
+    );
+    expect(screen.queryByRole('note')).not.toBeInTheDocument();
+    expect(screen.getByRole('status')).toHaveTextContent('Pre-flight check: everything is in place on Acme · QA.');
+  });
+
+  it('says everything is in place when the scans found nothing', () => {
+    notes(withExtra({ languages: [], locked: [], unapproved: [] }));
+    expect(screen.getByRole('status')).toHaveTextContent('Pre-flight check: everything is in place on Acme · QA.');
+  });
+});
+
+describe('PreflightNotes languages', () => {
+  const FR: MissingLanguage = { code: 'fr-FR', label: 'French (fr-FR)', body: { languageCode: 'fr', regionCode: 'FR' } };
+  const DE: MissingLanguage = { code: 'de-DE', label: 'German (de-DE)', body: { languageCode: 'de', regionCode: 'DE' } };
+  const NOTE = "Languages Acme · QA doesn't have";
+  const create = (reply: (body: { languageCode: string }) => FakeReply | Promise<FakeReply> = () => ({ data: {} })) =>
+    fakeClient({ 'xmc.sites.createLanguage': (p) => reply(p.body) });
+  const button = (name: string) => within(screen.getByRole('note', { name: NOTE })).getByRole('button', { name });
+  // A promise to settle by hand.
+  const gate = () => {
+    let open!: () => void;
+    const opened = new Promise<void>((resolve) => (open = resolve));
+    return { open, opened };
+  };
+
+  it('names the languages the target lacks and what that means for the items', () => {
+    notes(withExtra({ languages: [FR, DE] }));
+    expect(screen.getByRole('note', { name: NOTE })).toHaveTextContent(
+      "Acme · Dev has French (fr-FR) and German (de-DE). Acme · QA doesn't, so versions of your items in those languages may not show there until you add them.",
+    );
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+  });
+
+  it('speaks of one language in the singular', () => {
+    notes(withExtra({ languages: [FR] }));
+    expect(screen.getByRole('note', { name: "Language Acme · QA doesn't have" })).toHaveTextContent(
+      "Acme · Dev has French (fr-FR). Acme · QA doesn't, so versions of your items in that language may not show there until you add it.",
+    );
+  });
+
+  it('offers no button without a client', () => {
+    notes(withExtra({ languages: [FR, DE] }));
+    expect(screen.queryByRole('button')).not.toBeInTheDocument();
+  });
+
+  it('adds each language on the target with progress, then checks again', async () => {
+    const [first, second, checked] = [gate(), gate(), gate()];
+    const { client, calls } = create((body) => (body.languageCode === 'fr' ? first : second).opened.then(() => ({ data: {} })));
+    const recheck = vi.fn(() => checked.opened);
+    render(<PreflightNotes preflight={withExtra({ languages: [FR, DE], recheck })} source={DEV} target={QA} client={client} />);
+    fireEvent.click(button('Add them to Acme · QA'));
+    expect(await screen.findByRole('button', { name: 'Adding 1 of 2…' })).toBeDisabled();
+    first.open();
+    expect(await screen.findByRole('button', { name: 'Adding 2 of 2…' })).toBeDisabled();
+    expect(recheck).not.toHaveBeenCalled();
+    second.open();
+    expect(await screen.findByRole('button', { name: 'Checking again…' })).toBeDisabled();
+    expect(recheck).toHaveBeenCalledOnce();
+    expect(calls.map((c) => [c.kind, c.key, c.params.query.sitecoreContextId, c.params.body])).toEqual([
+      ['mutate', 'xmc.sites.createLanguage', 'cq', FR.body],
+      ['mutate', 'xmc.sites.createLanguage', 'cq', DE.body],
+    ]);
+    checked.open();
+    await waitFor(() => expect(button('Add them to Acme · QA')).toBeEnabled());
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it('says which language could not be added and why, once it has checked again', async () => {
+    const { client, calls } = create((body) => (body.languageCode === 'fr' ? { status: 400, error: { title: 'Already exists' } } : { data: {} }));
+    const recheck = vi.fn(async () => {});
+    render(<PreflightNotes preflight={withExtra({ languages: [FR, DE], recheck })} source={DEV} target={QA} client={client} />);
+    fireEvent.click(button('Add them to Acme · QA'));
+    expect(await screen.findByRole('alert')).toHaveTextContent("Couldn't add French (fr-FR): HTTP 400: Already exists.");
+    expect(calls).toHaveLength(2);
+    expect(recheck).toHaveBeenCalledOnce();
+    expect(button('Add them to Acme · QA')).toBeEnabled();
+    // Trying again runs the whole list once more.
+    fireEvent.click(button('Add them to Acme · QA'));
+    await waitFor(() => expect(calls).toHaveLength(4));
+    expect(await screen.findByRole('alert')).toHaveTextContent("Couldn't add French (fr-FR)");
+  });
+
+  it('adds a single language, with or without a way to check again', async () => {
+    const added = gate();
+    const { client, calls } = create(() => added.opened.then(() => ({ data: {} })));
+    render(<PreflightNotes preflight={withExtra({ languages: [FR] })} source={DEV} target={QA} client={client} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Add it to Acme · QA' }));
+    expect(await screen.findByRole('button', { name: 'Adding…' })).toBeDisabled();
+    added.open();
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Add it to Acme · QA' })).toBeEnabled());
+    expect(calls).toHaveLength(1);
+  });
+
+  it('says when the languages could not be compared', () => {
+    notes(withExtra({ languagesError: 'Acme · QA listed no languages.' }));
+    expect(screen.getByRole('note', { name: "Couldn't compare languages for Acme · QA: Acme · QA listed no languages. You can still start." })).toBeInTheDocument();
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
   });
 });

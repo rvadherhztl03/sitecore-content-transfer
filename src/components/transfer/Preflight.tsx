@@ -1,12 +1,14 @@
+import { listOf } from '@/components/transfer/copy';
 import type { Preflight } from '@/components/transfer/usePreflight';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
+import { addLanguages, type LanguageFailure, type MissingLanguage } from '@/lib/checks';
 import { Icon } from '@/lib/icon';
 import { nameOf } from '@/lib/queue';
-import type { Env } from '@/lib/sdk';
+import type { Env, SdkClient } from '@/lib/sdk';
 import { cn } from '@/lib/utils';
 import { mdiCheckCircle, mdiLoading } from '@mdi/js';
-import { useId, type ReactNode } from 'react';
+import { useId, useState, type ReactNode } from 'react';
 
 const NOTE = {
   warning: 'border-warning-200 bg-warning-50 text-warning-700',
@@ -46,25 +48,72 @@ const Paths = ({ paths }: { paths: string[] }) => (
   </ul>
 );
 
-const Action = ({ label, onClick }: { label: string; onClick(): void }) => (
-  <Button type="button" variant="outline" size="sm" className="h-9 rounded-lg bg-white px-3 pointer-coarse:h-11" onClick={onClick}>
+const Action = ({ label, onClick, disabled }: { label: string; onClick(): void; disabled?: boolean }) => (
+  <Button type="button" variant="outline" size="sm" className="h-9 rounded-lg bg-white px-3 pointer-coarse:h-11" onClick={onClick} disabled={disabled}>
     {label}
   </Button>
 );
+
+type LanguagesNoteProps = {
+  languages: MissingLanguage[];
+  source: Env;
+  target: Env;
+  client?: SdkClient;
+  /** Checks the target again once the languages are added. */
+  recheck?(): Promise<void>;
+};
+
+/** The languages the source has and the target lacks, with a button that adds them on the target, then checks again. */
+function LanguagesNote({ languages, source, target, client, recheck }: LanguagesNoteProps) {
+  const [added, setAdded] = useState<number>();
+  const [failed, setFailed] = useState<LanguageFailure[]>([]);
+  const many = languages.length > 1;
+  const add = async () => {
+    setFailed([]);
+    setAdded(0);
+    try {
+      const errors = await addLanguages(client!, target, languages, setAdded);
+      await recheck?.();
+      setFailed(errors);
+    } finally {
+      setAdded(undefined);
+    }
+  };
+  const label =
+    added === undefined
+      ? `Add ${many ? 'them' : 'it'} to ${target.name}`
+      : added < languages.length
+        ? many ? `Adding ${added + 1} of ${languages.length}…` : 'Adding…'
+        : 'Checking again…';
+  return (
+    <Note
+      tone="warning"
+      title={`${many ? 'Languages' : 'Language'} ${target.name} doesn't have`}
+      action={client && <Action label={label} onClick={add} disabled={added !== undefined} />}
+    >
+      <span>{`${source.name} has ${listOf(languages.map((l) => l.label))}. ${target.name} doesn't, so versions of your items in ${many ? 'those languages' : 'that language'} may not show there until you add ${many ? 'them' : 'it'}.`}</span>
+      {failed.map((f) => (
+        <span key={f.label} role="alert" className="break-words">{`Couldn't add ${f.label}: ${f.error.replace(/\.?$/, '.')}`}</span>
+      ))}
+    </Note>
+  );
+}
 
 type NotesProps = {
   preflight?: Preflight;
   source: Env;
   target: Env;
-  /** False to leave out what only concerns the source (items it lacks), when another target's notes already say it. */
+  /** False to leave out what only concerns the source (items it lacks, items not approved), when another target's notes already say it. */
   sourceNotes?: boolean;
+  /** Lets the languages note add the missing languages on the target. */
+  client?: SdkClient;
   onAddParents?(): void;
   onRemoveNotFound?(): void;
   onAddRelated?(): void;
 };
 
 /** The pre-flight result for the whole list: progress, a clean bill, or one note per kind of problem. Nothing here blocks Start. */
-export function PreflightNotes({ preflight, source, target, sourceNotes = true, onAddParents, onRemoveNotFound, onAddRelated }: NotesProps) {
+export function PreflightNotes({ preflight, source, target, sourceNotes = true, client, onAddParents, onRemoveNotFound, onAddRelated }: NotesProps) {
   if (!preflight) return null;
   if (preflight.status === 'checking') {
     return (
@@ -93,6 +142,13 @@ export function PreflightNotes({ preflight, source, target, sourceNotes = true, 
   const scanFailed = preflight.relatedError;
   const definitions = preflight.definitions ?? [];
   const definitionsFailed = preflight.definitionsError;
+  const languages = preflight.languages ?? [];
+  const languagesFailed = preflight.languagesError;
+  const locked = preflight.locked ?? [];
+  const lockedFailed = preflight.lockedError;
+  // Like the items the source lacks, what the source says about the items is said once.
+  const unapproved = sourceNotes ? (preflight.unapproved ?? []) : [];
+  const unapprovedFailed = sourceNotes ? preflight.unapprovedError : undefined;
 
   if (
     !notFound.length &&
@@ -103,7 +159,13 @@ export function PreflightNotes({ preflight, source, target, sourceNotes = true, 
     !absent.length &&
     !scanFailed &&
     !definitions.length &&
-    !definitionsFailed
+    !definitionsFailed &&
+    !languages.length &&
+    !languagesFailed &&
+    !locked.length &&
+    !lockedFailed &&
+    !unapproved.length &&
+    !unapprovedFailed
   ) {
     return (
       <div className="flex flex-col gap-1">
@@ -133,6 +195,20 @@ export function PreflightNotes({ preflight, source, target, sourceNotes = true, 
           </ul>
         </Note>
       )}
+      {locked.length > 0 && (
+        <Note tone="warning" title={`Locked on ${target.name}`}>
+          <span>{`Someone may be editing ${locked.length > 1 ? 'them' : 'it'}; the transfer overwrites their changes.`}</span>
+          <ul className="flex flex-col gap-1">
+            {locked.map((l) => (
+              <li key={l.itemPath} className="break-words">
+                <span className={PATH}>{l.itemPath}</span>
+                {l.lockedBy && ` · locked by ${l.lockedBy}`}
+              </li>
+            ))}
+          </ul>
+        </Note>
+      )}
+      {lockedFailed && <Note tone="warning" title={`Couldn't check for locked items on ${target.name}: ${lockedFailed.replace(/\.?$/, '.')} You can still start.`} />}
       {notFound.length > 0 && (
         <Note
           tone="danger"
@@ -143,6 +219,20 @@ export function PreflightNotes({ preflight, source, target, sourceNotes = true, 
           <Paths paths={notFound.map((c) => c.itemPath)} />
         </Note>
       )}
+      {unapproved.length > 0 && (
+        <Note tone="warning" title={`Not approved on ${source.name}`}>
+          <span>{`The transfer copies ${unapproved.length > 1 ? 'them as they are' : 'it as it is'}.`}</span>
+          <ul className="flex flex-col gap-1">
+            {unapproved.map((u) => (
+              <li key={u.itemPath} className="break-words">
+                <span className={PATH}>{u.itemPath}</span>
+                {` · in ${u.state}`}
+              </li>
+            ))}
+          </ul>
+        </Note>
+      )}
+      {unapprovedFailed && <Note tone="warning" title={`Couldn't check approval states on ${source.name}: ${unapprovedFailed.replace(/\.?$/, '.')} You can still start.`} />}
       {/* No add button: copying developer items through content would put them out of step with serialization. */}
       {definitions.length > 0 && (
         <Note tone="danger" title={`Missing on ${target.name}: templates and renderings`}>
@@ -190,6 +280,8 @@ export function PreflightNotes({ preflight, source, target, sourceNotes = true, 
         </Note>
       )}
       {scanFailed && <Note tone="warning" title={`Couldn't scan for related content for ${target.name}: ${scanFailed.replace(/\.?$/, '.')} You can still start.`} />}
+      {languages.length > 0 && <LanguagesNote languages={languages} source={source} target={target} client={client} recheck={preflight.recheck} />}
+      {languagesFailed && <Note tone="warning" title={`Couldn't compare languages for ${target.name}: ${languagesFailed.replace(/\.?$/, '.')} You can still start.`} />}
       {otherParents.length > 0 && (
         <Note tone="warning" title={`Different parent items on ${target.name}`}>
           {otherParents.flatMap((c) =>
