@@ -53,6 +53,15 @@ describe('addEntry', () => {
     expect(creates[2]).toContain('fields: [{ name: "__Long description", value: ');
   });
 
+  it('gives each entry a sort order that counts down in minutes, so the newest run lists first', async () => {
+    const store = historyStore('ctx-qa');
+    const { client, calls } = fakeClient({ [GQL]: historyReply(store) });
+    await addEntry(client, QA, entry());
+    const created = calls.map((c) => c.params.body.query as string).filter((q) => q.startsWith('mutation')).pop()!;
+    const minutes = Math.floor(new Date(entry().at).getTime() / 60_000);
+    expect(created).toContain(`{ name: "__Sortorder", value: "-${minutes}" }`);
+  });
+
   it('adds to an existing History folder without creating folders', async () => {
     const store = historyStore('ctx-qa');
     const { client } = fakeClient({ [GQL]: historyReply(store) });

@@ -81,6 +81,32 @@ ${
 ${p.definitions.map((d) => html`<tr><td>${d.kind}</td><td><strong>${d.name}</strong><br><span class="path">${d.itemPath}</span></td><td>${usedBy(d.usedBy)}</td></tr>\n`)}</tbody></table>`
       : html`<p class="muted">None.</p>`
     : html`<p class="warning">Couldn't check templates and renderings: ${p.definitionsError ?? 'unknown error'}</p>`
+}
+<h3>Languages ${target.name} doesn't have</h3>
+${
+  p.languages
+    ? p.languages.length
+      ? html`<p>${p.languages.map((l) => l.label).join(', ')}</p>`
+      : html`<p class="muted">None.</p>`
+    : html`<p class="warning">Couldn't compare languages: ${p.languagesError ?? 'unknown error'}</p>`
+}
+<h3>Locked on ${target.name}</h3>
+${
+  p.locked
+    ? p.locked.length
+      ? html`<table><thead><tr><th>Item</th><th>Locked by</th></tr></thead><tbody>
+${p.locked.map((l) => html`<tr><td class="path">${l.itemPath}</td><td>${l.lockedBy}</td></tr>\n`)}</tbody></table>`
+      : html`<p class="muted">None.</p>`
+    : html`<p class="warning">Couldn't check locks: ${p.lockedError ?? 'unknown error'}</p>`
+}
+<h3>Not approved on ${source.name}</h3>
+${
+  p.unapproved
+    ? p.unapproved.length
+      ? html`<table><thead><tr><th>Item</th><th>Workflow state</th></tr></thead><tbody>
+${p.unapproved.map((u) => html`<tr><td class="path">${u.itemPath}</td><td>${u.state}</td></tr>\n`)}</tbody></table>`
+      : html`<p class="muted">None.</p>`
+    : html`<p class="warning">Couldn't check workflow: ${p.unapprovedError ?? 'unknown error'}</p>`
 }`;
 }
 

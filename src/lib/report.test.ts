@@ -107,8 +107,34 @@ describe('buildReport', () => {
   });
 
   it('tolerates extra fields on a pre-flight result', () => {
-    const extra = { ...done, languages: ['en', 'de'], somethingNew: { nested: true } } as Preflight;
+    const extra = { ...done, somethingNew: { nested: true } } as Preflight;
     expect(text(report({ preflights: { q: extra } }))).toContain(`${HOME} Exists`);
+  });
+
+  it('has the languages the target lacks, locked items and items not approved on the source', () => {
+    const t = text(
+      report({
+        preflights: {
+          q: {
+            ...done,
+            languages: [{ code: 'fr-FR', label: 'French (fr-FR)', body: { languageCode: 'fr', regionCode: 'FR' } }],
+            locked: [{ itemPath: HOME, lockedBy: 'sitecore\\anna' }],
+            unapproved: [{ itemPath: NEWS, state: 'Draft' }],
+          },
+        },
+      }),
+    );
+    expect(t).toContain("Languages QA doesn't have French (fr-FR)");
+    expect(t).toContain(`Locked on QA Item Locked by ${HOME} sitecore\\anna`);
+    expect(t).toContain(`Not approved on Dev Item Workflow state ${NEWS} Draft`);
+  });
+
+  it('says when the language, lock or workflow check failed', () => {
+    const failed: Preflight = { ...done, languagesError: 'No languages', lockedError: 'Bad lock', unapprovedError: 'Bad workflow' };
+    const t = text(report({ preflights: { q: failed } }));
+    expect(t).toContain("Couldn't compare languages: No languages");
+    expect(t).toContain("Couldn't check locks: Bad lock");
+    expect(t).toContain("Couldn't check workflow: Bad workflow");
   });
 
   it('has the run: its result, each step with status and duration, and the full log', () => {

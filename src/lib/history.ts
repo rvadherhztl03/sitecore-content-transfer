@@ -47,9 +47,13 @@ const LIST_QUERY = `query History($path: String!) {
 }`;
 
 // createItem writes to master. Its input goes in as literals, like the lookups in related.ts: `parent` is an ID.
-async function createFolder(client: SdkClient, env: Env, name: string, parent: string, value?: string): Promise<string> {
+async function createFolder(client: SdkClient, env: Env, name: string, parent: string, value?: string, sortorder?: number): Promise<string> {
   const s = JSON.stringify;
-  const fields = value === undefined ? '' : `, fields: [{ name: ${s(FIELD)}, value: ${s(value)} }]`;
+  const list = [
+    ...(value === undefined ? [] : [`{ name: ${s(FIELD)}, value: ${s(value)} }`]),
+    ...(sortorder === undefined ? [] : [`{ name: "__Sortorder", value: ${s(String(sortorder))} }`]),
+  ];
+  const fields = list.length ? `, fields: [${list.join(', ')}]` : '';
   const data = await graphql(
     client,
     env,
@@ -72,13 +76,16 @@ export async function addEntry(client: SdkClient, env: Env, entry: HistoryEntry)
     const app = found.c?.itemId ?? (await createFolder(client, env, 'Content Transfer', found.m.itemId));
     folder = await createFolder(client, env, 'History', app);
   }
-  await createFolder(client, env, historyName(new Date(entry.at), entry.id), folder, JSON.stringify(entry));
+  // Children sort by __Sortorder first: a count down in minutes puts the newest run first, so the 1,000 that
+  // loadHistory reads are the latest.
+  const sortorder = -Math.floor(new Date(entry.at).getTime() / 60_000);
+  await createFolder(client, env, historyName(new Date(entry.at), entry.id), folder, JSON.stringify(entry), sortorder);
 }
 
 /** `env`'s history, newest first. Entries that aren't readable are skipped; no History folder yet is no runs. */
 export async function loadHistory(client: SdkClient, env: Env): Promise<HistoryEntry[]> {
   const data = await graphql(client, env, LIST_QUERY, { path: HISTORY_PATH });
-  // ponytail: first 1,000 children only, in name (date) order, so past 1,000 runs the newest drop off; page with `after` then.
+  // ponytail: the first 1,000 children only, newest first by __Sortorder (see addEntry); page with `after` past that.
   const nodes: { d?: { value?: string } | null }[] = data?.item?.children?.nodes ?? [];
   const entries = nodes.flatMap((n): HistoryEntry[] => {
     try {

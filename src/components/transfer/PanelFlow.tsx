@@ -324,6 +324,7 @@ export function PanelFlow({ client, pageName, pagePath }: Props) {
           preflight={preflight}
           source={source!}
           target={target}
+          client={client ?? undefined}
           onAddParents={
             preflight?.status === 'done'
               ? () => setExtra(addMissingParents(dataTrees, preflight.checks).filter((t) => t.itemPath !== held.path))
