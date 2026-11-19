@@ -431,8 +431,10 @@ export function RunView({
   );
   // An export has no import phase, so the note only applies to transfer and install.
   const note = running && !failed && !onCancel && kind !== 'export' ? CANT_CANCEL : null;
-  // A big transfer imports for a long time: say about how long, once the package says how many items it holds.
-  const items = kind === 'transfer' && running && !failed ? (info?.itemCount ?? 0) : 0;
+  // A big transfer imports for a long time: say about how long, once the package says how many items it holds, until
+  // every import and verify step (transferSteps' "Import into …" and "Verify …") is over.
+  const importing = steps.some((s) => /^(Import|Verify)\b/.test(s.label) && (s.status === 'pending' || s.status === 'running'));
+  const items = kind === 'transfer' && running && !failed && importing ? (info?.itemCount ?? 0) : 0;
   const minutes = importMinutes(items);
 
   return (

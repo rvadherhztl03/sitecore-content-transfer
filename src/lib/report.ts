@@ -52,9 +52,11 @@ function statusOf(p: Extract<Preflight, { status: 'done' }>, itemPath: string, s
 
 const usedBy = (paths: string[]) => paths.map(nameOf).join(', ');
 
-function preflightSection(p: Preflight | undefined, source: Env, target: Env, trees: DataTree[]) {
+// `started`: a run is in the report, so `p` is what was captured at Start, not what the check holds now.
+function preflightSection(p: Preflight | undefined, source: Env, target: Env, trees: DataTree[], started: boolean) {
   const head = html`<h2>Pre-flight check on ${target.name}</h2>`;
-  if (p?.status === 'checking') return html`${head}<p class="muted">Still checking when this report was made.</p>`;
+  const when = started ? 'the transfer started' : 'this report was made';
+  if (p?.status === 'checking') return html`${head}<p class="muted">Still checking when ${when}.</p>`;
   if (p?.status === 'failed') return html`${head}<p class="error">Couldn't check ${target.name}: ${p.error}</p>`;
   // Only what the result is known to hold is read, so a result with more in it still reports.
   if (p?.status !== 'done') return html`${head}<p class="muted">Not checked.</p>`;
@@ -134,7 +136,7 @@ export function buildReport({ mode, source, targets, trees, preflights, run, at 
 <h2>Items (${trees.length})</h2>
 <table><thead><tr><th>Path</th><th>Includes</th><th>If it exists</th></tr></thead><tbody>
 ${trees.map((t) => html`<tr><td class="path">${t.itemPath}</td><td>${labelOf(SCOPES, t.scope, true)}</td><td>${labelOf(mergesFor(t.scope), t.mergeStrategy, true)}</td></tr>\n`)}</tbody></table>
-${preflights ? targets.map((t) => preflightSection(preflights[t.id], source, t, trees)) : ''}
+${preflights ? targets.map((t) => preflightSection(preflights[t.id], source, t, trees, !!run)) : ''}
 ${run ? runSection(run) : ''}
 </body></html>
 `.text;

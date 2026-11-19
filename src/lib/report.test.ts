@@ -101,6 +101,8 @@ describe('buildReport', () => {
       report({ targets: [QA, PROD, DEV], preflights: { q: { status: 'checking' }, p: { status: 'failed', error: 'Access denied' }, d: scanFailed } }),
     );
     expect(t).toContain('Pre-flight check on QA Still checking when this report was made.');
+    // With a run, the results are the ones captured at Start.
+    expect(text(report({ preflights: { q: { status: 'checking' } }, run: RUN }))).toContain('Pre-flight check on QA Still checking when the transfer started.');
     expect(t).toContain("Couldn't check Prod <live>: Access denied");
     expect(t).toContain("Couldn't scan for related content: Timeout");
     expect(t).toContain("Couldn't check templates and renderings: Nope");

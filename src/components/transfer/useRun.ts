@@ -24,12 +24,15 @@ type Exec = (cb: RunCallbacks, signal: AbortSignal) => Promise<boolean>;
  * - `run` is null until `start`, and always starts as running, so RunView never sees running=false with no result.
  * - A second `start` while a run is in progress is ignored; leaving (unmount) aborts it.
  * - `exec` does the work and returns whether it succeeded; a throw counts as a failure and is logged.
+ * - Callbacks from a run that is no longer the current one are ignored (a history write can finish after the next start).
  * - Put `headingRef` on the element that holds RunView: its heading (h1, or h2 in compact) is focused when the result arrives.
  */
 export function useRun() {
   const [run, setRun] = useState<Run | null>(null);
   // Non-null while a run is in progress.
   const abort = useRef<AbortController | null>(null);
+  // Counts starts, so each run's callbacks know whether theirs is still the current run.
+  const latest = useRef(0);
   useEffect(() => () => abort.current?.abort(), []);
 
   // Announce completion or failure: move focus to the run heading.
@@ -47,6 +50,7 @@ export function useRun() {
     if (abort.current) return;
     const ctrl = new AbortController();
     abort.current = ctrl;
+    const id = ++latest.current;
     const began = Date.now();
     const stepStart: number[] = [];
     setRun({
@@ -59,7 +63,9 @@ export function useRun() {
       result: null,
       info,
     });
-    const update = (patch: (r: Run) => Partial<Run>) => setRun((r) => r && { ...r, ...patch(r) });
+    const update = (patch: (r: Run) => Partial<Run>) => {
+      if (id === latest.current) setRun((r) => r && { ...r, ...patch(r) });
+    };
     const cb: RunCallbacks = {
       onLog: (text, type) => update((r) => ({ logs: [...r.logs, { text, type, time: new Date().toLocaleTimeString() }] })),
       onProgress: (progress) => update(() => ({ progress })),

@@ -325,6 +325,7 @@ export function PanelFlow({ client, pageName, pagePath }: Props) {
           source={source!}
           target={target}
           client={client ?? undefined}
+          writeConfirmed={!needsProdConfirm(target) || prodChecked}
           onAddParents={
             preflight?.status === 'done'
               ? () => setExtra(addMissingParents(dataTrees, preflight.checks).filter((t) => t.itemPath !== held.path))

@@ -229,6 +229,7 @@ export function ReviewStep({ mode, source, targets = [], database, trees, prodCh
             // What concerns only the source is said once, with the first finished check.
             sourceNotes={t.id === to.find(checksOf)?.id}
             client={client}
+            writeConfirmed={!needsProdConfirm(t) || prodChecked.includes(t.id)}
             onAddParents={fix(t, addMissingParents)}
             onRemoveNotFound={fix(t, removeNotFound)}
             onAddRelated={related && onTreesChange ? () => onTreesChange(addRelated(trees, related)) : undefined}

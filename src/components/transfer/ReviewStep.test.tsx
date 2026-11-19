@@ -289,4 +289,18 @@ describe('ReviewStep locks, approval and languages', () => {
     await waitFor(() => expect(recheck).toHaveBeenCalledOnce());
     expect(calls.map((c) => [c.key, c.params.query.sitecoreContextId, c.params.body])).toEqual([['xmc.sites.createLanguage', 'cq', FR.body]]);
   });
+
+  it("keeps a production target's button off until that target's box is ticked", () => {
+    const { client } = fakeClient({ 'xmc.sites.createLanguage': () => ({ data: {} }) });
+    const preflights = { [QA.id]: done({ languages: [FR] }), [PROD.id]: done({ languages: [FR] }) };
+    setup({ targets: [QA, PROD], trees: [HOME], preflights, client, prodChecked: [] });
+    expect(screen.getByRole('button', { name: 'Add it to Acme · QA' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Add it to Acme · Production' })).toBeDisabled();
+  });
+
+  it("enables a production target's button once its box is ticked", () => {
+    const { client } = fakeClient({ 'xmc.sites.createLanguage': () => ({ data: {} }) });
+    setup({ targets: [PROD], trees: [HOME], preflights: { [PROD.id]: done({ languages: [FR] }) }, client, prodChecked: [PROD.id] });
+    expect(screen.getByRole('button', { name: 'Add it to Acme · Production' })).toBeEnabled();
+  });
 });

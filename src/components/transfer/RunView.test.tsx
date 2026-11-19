@@ -548,15 +548,33 @@ describe('RunView unfinished steps', () => {
 
 describe('RunView import estimate', () => {
   const NOTE = /takes about/;
+  // A transfer's steps as transferSteps names them, with these statuses.
+  const transfer = (...status: StepStatus[]) =>
+    ['Copy chunks to Acme · QA', 'Import into master', 'Verify', 'Publish to Experience Edge'].map((label, i) => ({ label, status: status[i] ?? 'pending' }));
+  // Copying chunks, so the import is still to come.
+  const copying = (props: Partial<React.ComponentProps<typeof RunView>> = {}) => setup({ steps: transfer('running'), ...props });
 
   it('says about how long a big transfer imports, while it runs', () => {
-    setup({ info: { chunkCount: 40, itemCount: 20000 } });
+    copying({ info: { chunkCount: 40, itemCount: 20000 } });
     expect(screen.getByText('Importing 20,000 items takes about 83 minutes. Keep this tab open.')).toBeInTheDocument();
+  });
+
+  it('stays while the import or verify step runs, and goes once both are done', () => {
+    const info = { chunkCount: 40, itemCount: 20000 };
+    const { rerender } = setup({ info, steps: transfer('done', 'running') });
+    expect(screen.getByText(NOTE)).toBeInTheDocument();
+    const again = (steps: ReturnType<typeof transfer>) =>
+      rerender(<RunView kind="transfer" source={DEV} targets={[QA]} steps={steps} progress={96} logs={LOGS} running result={null} info={info} onAgain={vi.fn()} onHome={vi.fn()} />);
+    again(transfer('done', 'done', 'running'));
+    expect(screen.getByText(NOTE)).toBeInTheDocument();
+    // Publishing is still running, but the import is over.
+    again(transfer('done', 'done', 'done', 'running'));
+    expect(screen.queryByText(NOTE)).not.toBeInTheDocument();
   });
 
   it('says it is per target with several targets', () => {
     const UAT: Env = { id: 'uat', name: 'Acme · UAT', contextId: 'c4' };
-    setup({ targets: [QA, UAT], info: { chunkCount: 40, itemCount: 20000 } });
+    copying({ targets: [QA, UAT], info: { chunkCount: 40, itemCount: 20000 } });
     expect(screen.getByText('Importing 20,000 items takes about 83 minutes on each target. Keep this tab open.')).toBeInTheDocument();
   });
 
@@ -566,7 +584,7 @@ describe('RunView import estimate', () => {
     ['for an export', { kind: 'export' as const, info: { chunkCount: 40, itemCount: 20000 } }],
     ['once the run failed', { running: false, result: 'fail' as const, info: { chunkCount: 40, itemCount: 20000 } }],
   ])('says nothing %s', (_n, props) => {
-    setup(props);
+    copying(props);
     expect(screen.queryByText(NOTE)).not.toBeInTheDocument();
   });
 

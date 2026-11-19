@@ -372,6 +372,49 @@ describe('PreflightNotes languages', () => {
     expect(calls).toHaveLength(1);
   });
 
+  it('says what it added in a status that stays, and takes focus, when checking again takes the note away', async () => {
+    const { client } = create();
+    // Once checked again, the target has the languages: the note goes, and focus would fall to the page.
+    const { rerender } = render(<PreflightNotes preflight={withExtra({ languages: [FR, DE] })} source={DEV} target={QA} client={client} />);
+    const recheck = vi.fn(async () => rerender(<PreflightNotes preflight={withExtra({ languages: [] })} source={DEV} target={QA} client={client} />));
+    rerender(<PreflightNotes preflight={withExtra({ languages: [FR, DE], recheck })} source={DEV} target={QA} client={client} />);
+    fireEvent.click(button('Add them to Acme · QA'));
+    await waitFor(() => expect(recheck).toHaveBeenCalledOnce());
+    expect(screen.queryByRole('note', { name: NOTE })).not.toBeInTheDocument();
+    const added = screen.getByText('Added French (fr-FR) and German (de-DE) to Acme · QA.');
+    expect(added).toHaveAttribute('role', 'status');
+    expect(added).toHaveFocus();
+  });
+
+  it('names only the languages it added when some could not be added', async () => {
+    const { client } = create((body) => (body.languageCode === 'fr' ? { status: 400 } : { data: {} }));
+    render(<PreflightNotes preflight={withExtra({ languages: [FR, DE] })} source={DEV} target={QA} client={client} />);
+    fireEvent.click(button('Add them to Acme · QA'));
+    expect(await screen.findByText('Added German (de-DE) to Acme · QA.')).toHaveAttribute('role', 'status');
+    expect(await screen.findByRole('alert')).toHaveTextContent("Couldn't add French (fr-FR): HTTP 400.");
+  });
+
+  it('shows the error and keeps the button usable when adding fails outright', async () => {
+    const { client } = create();
+    const recheck = vi.fn(async () => {
+      throw new Error('Network down');
+    });
+    render(<PreflightNotes preflight={withExtra({ languages: [FR], recheck })} source={DEV} target={QA} client={client} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Add it to Acme · QA' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent("Couldn't add it: Network down.");
+    expect(screen.getByRole('button', { name: 'Add it to Acme · QA' })).toBeEnabled();
+  });
+
+  it('keeps the button off until the production box is ticked, and says so', () => {
+    const { client } = create();
+    const { rerender } = render(<PreflightNotes preflight={withExtra({ languages: [FR] })} source={DEV} target={QA} client={client} writeConfirmed={false} />);
+    expect(screen.getByRole('button', { name: 'Add it to Acme · QA' })).toBeDisabled();
+    expect(screen.getByRole('note', { name: "Language Acme · QA doesn't have" })).toHaveTextContent('To add it, first tick "I understand this writes to Acme · QA" below.');
+    rerender(<PreflightNotes preflight={withExtra({ languages: [FR] })} source={DEV} target={QA} client={client} writeConfirmed />);
+    expect(screen.getByRole('button', { name: 'Add it to Acme · QA' })).toBeEnabled();
+    expect(screen.queryByText(/first tick/)).not.toBeInTheDocument();
+  });
+
   it('says when the languages could not be compared', () => {
     notes(withExtra({ languagesError: 'Acme · QA listed no languages.' }));
     expect(screen.getByRole('note', { name: "Couldn't compare languages for Acme · QA: Acme · QA listed no languages. You can still start." })).toBeInTheDocument();

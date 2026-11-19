@@ -93,12 +93,14 @@ export function CompareView({ client, source, target, initialPath, onAdd, limit 
   };
 
   const done = state.status === 'done' ? state : null;
-  const count = (s: CompareStatus) => done?.items.filter((i) => i.status === s).length ?? 0;
   const stamp = startOfDay(since);
-  // The statuses that are on, then the date. ponytail: the list stays flat, so a shown child keeps its indent when its parent is hidden.
-  const byStatus = done?.items.filter((i) => shown.has(i.status)) ?? [];
-  const visible = stamp ? byStatus.filter((i) => changedSince(i, stamp)) : byStatus;
-  const differences = ORDER.filter((s) => s !== 'same').reduce((n, s) => n + count(s), 0);
+  // The items the date lets through (all of them without one): the chip counts and Select all go by it too.
+  const dated = (stamp ? done?.items.filter((i) => changedSince(i, stamp)) : done?.items) ?? [];
+  const count = (s: CompareStatus) => dated.filter((i) => i.status === s).length;
+  // Then the statuses that are on. ponytail: the list stays flat, so a shown child keeps its indent when its parent is hidden.
+  const visible = dated.filter((i) => shown.has(i.status));
+  // Over every item, so the controls (and the date) stay even when the date hides them all.
+  const differences = done?.items.filter((i) => i.status !== 'same').length ?? 0;
   const toggle = <T,>(set: Set<T>, value: T) => {
     const next = new Set(set);
     if (!next.delete(value)) next.add(value);
@@ -184,7 +186,7 @@ export function CompareView({ client, source, target, initialPath, onAdd, limit 
                 variant="outline"
                 size="sm"
                 className={BTN}
-                onClick={() => setPicked(new Set(done.items.filter((i) => PICKABLE(i.status)).map((i) => i.path)))}
+                onClick={() => setPicked(new Set(dated.filter((i) => PICKABLE(i.status)).map((i) => i.path)))}
               >
                 Select all new and changed
               </Button>
@@ -219,7 +221,7 @@ export function CompareView({ client, source, target, initialPath, onAdd, limit 
                 </span>
               )}
             </div>
-            {stamp && byStatus.length > 0 && visible.length === 0 && (
+            {stamp && visible.length === 0 && done.items.some((i) => shown.has(i.status)) && (
               <p role="status" className="text-muted-foreground px-1 text-sm">{`No shown items were updated on ${source.name} since ${since}.`}</p>
             )}
             <ul aria-label="Differences" className="flex max-h-[520px] flex-col overflow-y-auto rounded-xl border">

@@ -80,9 +80,11 @@ function setup({
   page = HOME_PAGE,
   find,
   related,
-}: { names?: string[]; overrides?: Record<string, Handler>; page?: Page; find?: Find; related?: Record<string, RelatedFake[]> } = {}) {
+  sdk = {},
+}: { names?: string[]; overrides?: Record<string, Handler>; page?: Page; find?: Find; related?: Record<string, RelatedFake[]>; sdk?: Record<string, Handler> } = {}) {
   const history = historyStore(...names.map((n) => `ctx-${n}`));
-  const { client, calls } = fakeClient(handlers(names, overrides, find, related, history));
+  // `sdk`: other SDK calls to answer, by their full key.
+  const { client, calls } = fakeClient({ ...handlers(names, overrides, find, related, history), ...sdk });
   const view = render(<PanelFlow client={client} {...page} />);
   return { calls, history, ...view, show: (next: Page) => view.rerender(<PanelFlow client={client} {...next} />) };
 }
@@ -289,6 +291,22 @@ describe('PanelFlow', () => {
       pick('To', 'Acme Prod EU');
       fireEvent.click(send());
       expect(screen.getByRole('button', { name: 'Start' })).toBeDisabled();
+    });
+
+    it('adds a missing language to a production target only once its box is ticked', async () => {
+      const created: unknown[] = [];
+      await toReview(DEV, PROD, {
+        sdk: {
+          'xmc.sites.listLanguages': (p) => ({ data: p.query.sitecoreContextId === `ctx-${DEV}` ? [{ name: 'en' }, { name: 'fr-FR', englishName: 'French (France)' }] : [{ name: 'en' }] }),
+          'xmc.sites.createLanguage': (p) => (created.push(p.body), { data: {} }),
+        },
+      });
+      const add = () => screen.getByRole('button', { name: `Add it to ${PROD}` });
+      expect(add()).toBeDisabled();
+      fireEvent.click(screen.getByRole('checkbox', { name: `I understand this writes to ${PROD}` }));
+      fireEvent.click(add());
+      expect(await screen.findByText(`Added French (fr-FR) to ${PROD}.`)).toHaveAttribute('role', 'status');
+      expect(created).toEqual([{ languageCode: 'fr', regionCode: 'FR' }]);
     });
 
     it('a non-production target needs no confirmation', async () => {

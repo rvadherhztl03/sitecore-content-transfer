@@ -139,6 +139,23 @@ describe('CompareView', () => {
       expect(rows()).toEqual(ALL);
     });
 
+    it('Select all new and changed picks only those the date shows, and the chips count what it shows', async () => {
+      const { onAdd } = setup({ source: DATED_SOURCE });
+      await listed();
+      expect(chip(/^New on Acme · Dev 3$/)).toBeInTheDocument();
+      setSince('2026-10-10');
+      // News only: Launch was updated before the date and Promo has no __Updated. Only on has no source side.
+      expect(chip(/^New on Acme · Dev 1$/)).toBeInTheDocument();
+      expect(chip(/^Changed 1$/)).toBeInTheDocument();
+      expect(chip(/^Only on Acme · QA 0$/)).toBeInTheDocument();
+      fireEvent.click(screen.getByRole('button', { name: 'Select all new and changed' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Add 2 to the list' }));
+      expect(onAdd).toHaveBeenCalledWith([
+        { itemPath: `${R}/Data`, scope: 'SingleItem', mergeStrategy: 'OverrideExistingItem' },
+        { itemPath: `${R}/Home/News`, scope: 'SingleItem', mergeStrategy: 'KeepExistingItem' },
+      ]);
+    });
+
     it('works with the Show chips', async () => {
       setup({ source: DATED_SOURCE });
       await listed();
