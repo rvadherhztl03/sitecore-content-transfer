@@ -61,6 +61,24 @@ function entry(s: Node | undefined, t: Node | undefined, depth: number): Compare
   return { path: n.path, name: n.name, depth, status, ...(newer && { newer }), source: a, target: b };
 }
 
+/**
+ * The `__Updated` stamp ("yyyyMMddTHHmmssZ", UTC) of the start of `day` (YYYY-MM-DD) in local time, or undefined when
+ * `day` isn't a date (an empty or cleared date input).
+ */
+export function startOfDay(day: string): string | undefined {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(day);
+  if (!m) return undefined;
+  const d = new Date(+m[1], +m[2] - 1, +m[3]);
+  return Number.isNaN(d.getTime()) ? undefined : d.toISOString().replace(/[-:]|\.\d+/g, '');
+}
+
+/**
+ * Whether the item's source side was updated on or after `since` (a `startOfDay` stamp). An item with no source side,
+ * or none that reports `__Updated`, never is. Only the date and time to the second are compared: Sitecore can add
+ * milliseconds after them ("20261119T143000:123Z"), which would sort wrongly against a stamp that has none.
+ */
+export const changedSince = (item: CompareItem, since: string) => !!item.source?.updated && item.source.updated.slice(0, 15) >= since.slice(0, 15);
+
 // Parents before children, siblings by name.
 function byTree(a: CompareItem, b: CompareItem) {
   const [x, y] = [key(a.path).split('/'), key(b.path).split('/')];

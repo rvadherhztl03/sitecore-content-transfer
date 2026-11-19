@@ -3,7 +3,7 @@ import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
-import { COMPARE_LIMIT, compareTrees, rowsFor, type CompareItem, type CompareStatus } from '@/lib/compare';
+import { COMPARE_LIMIT, changedSince, compareTrees, rowsFor, startOfDay, type CompareItem, type CompareStatus } from '@/lib/compare';
 import type { Env, SdkClient } from '@/lib/sdk';
 import type { DataTree } from '@/lib/transfer';
 import { cn } from '@/lib/utils';
@@ -43,6 +43,8 @@ export function CompareView({ client, source, target, initialPath, onAdd, limit 
   const [root, setRoot] = useState(initialPath ?? '/sitecore/content');
   const [state, setState] = useState<State>({ status: 'idle' });
   const [shown, setShown] = useState<Set<CompareStatus>>(new Set(['new', 'changed', 'other', 'onlyTarget']));
+  // The "Changed since" date (YYYY-MM-DD); empty shows every item.
+  const [since, setSince] = useState('');
   const [picked, setPicked] = useState<Set<string>>(new Set());
   const [added, setAdded] = useState<number | null>(null);
   // The changed items whose field diff is open.
@@ -92,7 +94,10 @@ export function CompareView({ client, source, target, initialPath, onAdd, limit 
 
   const done = state.status === 'done' ? state : null;
   const count = (s: CompareStatus) => done?.items.filter((i) => i.status === s).length ?? 0;
-  const visible = done?.items.filter((i) => shown.has(i.status)) ?? [];
+  const stamp = startOfDay(since);
+  // The statuses that are on, then the date. ponytail: the list stays flat, so a shown child keeps its indent when its parent is hidden.
+  const byStatus = done?.items.filter((i) => shown.has(i.status)) ?? [];
+  const visible = stamp ? byStatus.filter((i) => changedSince(i, stamp)) : byStatus;
   const differences = ORDER.filter((s) => s !== 'same').reduce((n, s) => n + count(s), 0);
   const toggle = <T,>(set: Set<T>, value: T) => {
     const next = new Set(set);
@@ -166,6 +171,10 @@ export function CompareView({ client, source, target, initialPath, onAdd, limit 
                 </button>
               ))}
             </div>
+            <label className="flex flex-wrap items-center gap-2 text-sm">
+              <span className="text-muted-foreground">Changed since</span>
+              <Input type="date" className="w-auto rounded-lg text-sm pointer-coarse:h-11" value={since} onChange={(e) => setSince(e.target.value)} />
+            </label>
             {done.truncated && (
               <p className="text-muted-foreground text-sm">{`Showing the first ${limit.toLocaleString()} items. Compare a smaller section to see the rest.`}</p>
             )}
@@ -178,6 +187,17 @@ export function CompareView({ client, source, target, initialPath, onAdd, limit 
                 onClick={() => setPicked(new Set(done.items.filter((i) => PICKABLE(i.status)).map((i) => i.path)))}
               >
                 Select all new and changed
+              </Button>
+              {/* Adds to what's picked, so picks made under another date or filter stay. */}
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className={BTN}
+                disabled={!visible.some((i) => PICKABLE(i.status))}
+                onClick={() => setPicked((set) => new Set([...set, ...visible.filter((i) => PICKABLE(i.status)).map((i) => i.path)]))}
+              >
+                Pick all shown
               </Button>
               <Button
                 type="button"
@@ -199,6 +219,9 @@ export function CompareView({ client, source, target, initialPath, onAdd, limit 
                 </span>
               )}
             </div>
+            {stamp && byStatus.length > 0 && visible.length === 0 && (
+              <p role="status" className="text-muted-foreground px-1 text-sm">{`No shown items were updated on ${source.name} since ${since}.`}</p>
+            )}
             <ul aria-label="Differences" className="flex max-h-[520px] flex-col overflow-y-auto rounded-xl border">
               {visible.map((i) => (
                 <li
