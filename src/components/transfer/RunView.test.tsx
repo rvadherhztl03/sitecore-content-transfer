@@ -545,3 +545,49 @@ describe('RunView unfinished steps', () => {
     ).toBeInTheDocument();
   });
 });
+
+describe('RunView import estimate', () => {
+  const NOTE = /takes about/;
+
+  it('says about how long a big transfer imports, while it runs', () => {
+    setup({ info: { chunkCount: 40, itemCount: 20000 } });
+    expect(screen.getByText('Importing 20,000 items takes about 83 minutes. Keep this tab open.')).toBeInTheDocument();
+  });
+
+  it('says it is per target with several targets', () => {
+    const UAT: Env = { id: 'uat', name: 'Acme · UAT', contextId: 'c4' };
+    setup({ targets: [QA, UAT], info: { chunkCount: 40, itemCount: 20000 } });
+    expect(screen.getByText('Importing 20,000 items takes about 83 minutes on each target. Keep this tab open.')).toBeInTheDocument();
+  });
+
+  it.each([
+    ['under 5 minutes', { info: { chunkCount: 4, itemCount: 1000 } }],
+    ['without an item count', { info: { chunkCount: 40 } }],
+    ['for an export', { kind: 'export' as const, info: { chunkCount: 40, itemCount: 20000 } }],
+    ['once the run failed', { running: false, result: 'fail' as const, info: { chunkCount: 40, itemCount: 20000 } }],
+  ])('says nothing %s', (_n, props) => {
+    setup(props);
+    expect(screen.queryByText(NOTE)).not.toBeInTheDocument();
+  });
+
+  it('says nothing once the run is done', () => {
+    done('transfer', { info: { chunkCount: 40, itemCount: 20000 } });
+    expect(screen.queryByText(NOTE)).not.toBeInTheDocument();
+  });
+});
+
+describe('RunView skipped items', () => {
+  it.each(['transfer', 'export'] as const)('a %s that skipped items says so on the result', (kind) => {
+    done(kind, { info: { chunkCount: 12, itemCount: 20000, processed: 19950, skipped: 50 } });
+    expect(
+      screen.getByText(
+        `Sitecore skipped 50 of 20,000 items while packaging on Acme · Development (items that failed or were filtered out). Check those items before relying on this ${kind}.`,
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it('says nothing when none were skipped', () => {
+    done('transfer');
+    expect(screen.queryByText(/Sitecore skipped/)).not.toBeInTheDocument();
+  });
+});

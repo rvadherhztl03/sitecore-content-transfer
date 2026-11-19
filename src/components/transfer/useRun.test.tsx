@@ -133,6 +133,20 @@ describe('useRun', () => {
     await job.finish(true);
   });
 
+  it('keeps the skipped item counts a later onInfo brings', async () => {
+    const { result } = renderHook(() => useRun());
+    const job = pending();
+    act(() => {
+      void result.current.start({ labels: ['A'] }, job.exec);
+    });
+    act(() => {
+      job.cb().onInfo?.({ chunkCount: 9, itemCount: 20 });
+      job.cb().onInfo?.({ chunkCount: 9, itemCount: 20, processed: 18, skipped: 2 });
+    });
+    expect(result.current.run!.info).toEqual({ chunkCount: 9, itemCount: 20, processed: 18, skipped: 2 });
+    await job.finish(true);
+  });
+
   it('reset clears the run', async () => {
     const { result } = renderHook(() => useRun());
     await act(() => result.current.start({ labels: ['A'] }, async () => true));

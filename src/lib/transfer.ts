@@ -14,8 +14,11 @@ export interface RunCallbacks {
   onLog(message: string, type: LogType): void;
   onProgress(percent: number): void;
   onStepChange(index: number, status: StepStatus): void;
-  /** Called once, when the source package is ready. */
-  onInfo?(info: { chunkCount: number; itemCount: number }): void;
+  /**
+   * Called when the source package is ready, and again with `processed` and `skipped` once its chunks are read, when
+   * Sitecore skipped some items while packaging.
+   */
+  onInfo?(info: { chunkCount: number; itemCount: number } & Partial<Tally>): void;
   /** Called once per target a transfer backs up first, with its backup package, when it had something to back up. */
   onBackup?(zip: Blob, target: Env): void;
 }
@@ -30,7 +33,22 @@ export const TRANSFER_STEPS = ['Create job', 'Wait for package', 'Copy chunks', 
 export const IMPORT_STEPS = ['Upload package', 'Assemble on target', 'Import into database', 'Verify'];
 // Index of 'Import into database' in each step list; from here on a failure or cancel may leave the target importing.
 export const IMPORT_STEP = { transfer: 4, import: 2 } as const;
-export const TIMING = { pollMs: 3000, statusTimeoutMs: 1_800_000, verifyTimeoutMs: 1_800_000, publishTimeoutMs: 1_800_000 };
+// verifyTimeoutMs is the wait for one package file, plus msPerItem for each item in it. retryMs: the waits before
+// each retry of a brief failure (so 3 attempts). edgeTimeoutMs: how long to look for published items on Experience Edge.
+export const TIMING = {
+  pollMs: 3000,
+  statusTimeoutMs: 1_800_000,
+  verifyTimeoutMs: 1_800_000,
+  msPerItem: 500,
+  publishTimeoutMs: 1_800_000,
+  retryMs: [2000, 5000],
+  edgeTimeoutMs: 120_000,
+};
+// ponytail: import speed is one developer's measurement on XM Cloud (about 4 items a second); it varies with item size
+// and load. Only the estimate shown uses it; the wait allows TIMING.msPerItem. Measure more imports if estimates are off.
+export const ITEMS_PER_SECOND = 4;
+/** About how many minutes importing `items` items takes, at ITEMS_PER_SECOND. */
+export const importMinutes = (items: number) => Math.round(items / ITEMS_PER_SECOND / 60);
 export const BLOB_SUCCESS = ['OK', 'Transferred', 'Consumed'];
 export const BLOB_FAILURE = ['Error', 'Failed', 'Discarded'];
 // The share of the progress bar the backup step takes, when there is one, and where the publish step starts.
@@ -84,6 +102,42 @@ export function parseIsMedia(header: string | null): boolean {
   return header?.match(/IsMedia\s*=\s*(true|false)/i)?.[1].toLowerCase() === 'true';
 }
 
+/** Items Sitecore wrote into a package, and those it skipped (failed or filtered out). */
+export type Tally = { processed: number; skipped: number };
+
+// The chunk download's Content-Disposition also carries ItemsProcessed and ItemsSkipped; 0 when it doesn't say.
+export function parseItemCounts(header: string | null): Tally {
+  const count = (name: string) => Number(header?.match(new RegExp(`${name}\\s*=\\s*"?(\\d+)`, 'i'))?.[1] ?? 0);
+  return { processed: count('ItemsProcessed'), skipped: count('ItemsSkipped') };
+}
+
+const num = (n: number) => n.toLocaleString('en-US');
+
+/** The warning for items Sitecore skipped while packaging on `from`; `noun` is what the package is for. */
+export const skippedWarning = ({ processed, skipped }: Tally, from: string, noun: string) =>
+  `Sitecore skipped ${num(skipped)} of ${num(processed + skipped)} items while packaging on ${from} (items that failed or were filtered out). Check those items before relying on this ${noun}.`;
+
+// Brief failures worth another try: a busy or unreachable service, or the SDK's own request timeout
+// (CoreError TIMEOUT, "[client SDK] Request timed out"), which `call` wraps without a status.
+const TRANSIENT = [429, 502, 503, 504];
+const isTransient = (e: unknown): e is SdkError =>
+  e instanceof SdkError && (e.status === undefined ? /request timed out/i.test(e.message) : TRANSIENT.includes(e.status));
+const busy = (env: Env, e: SdkError) => (e.status ? `${env.name} answered HTTP ${e.status}.` : `${env.name} didn't answer in time.`);
+
+// Runs `fn`, and again after each wait in TIMING.retryMs while it fails briefly. Only for calls that are safe to repeat.
+async function retrying<T>(env: Env, cb: RunCallbacks, signal: AbortSignal | undefined, fn: () => Promise<T>): Promise<T> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await fn();
+    } catch (e) {
+      const wait = TIMING.retryMs[attempt];
+      if (wait === undefined || !isTransient(e)) throw e;
+      cb.onLog(`${busy(env, e)} Trying again in ${wait / 1000} s.`, 'warning');
+      await sleep(wait, signal);
+    }
+  }
+}
+
 export function sleep(ms: number, signal?: AbortSignal): Promise<void> {
   return new Promise((resolve, reject) => {
     if (signal?.aborted) return reject(signal.reason);
@@ -99,12 +153,19 @@ export function sleep(ms: number, signal?: AbortSignal): Promise<void> {
   });
 }
 
-export async function waitForPackage(client: SdkClient, env: Env, transferId: string, signal?: AbortSignal, allowEmpty = false): Promise<ChunkSet[]> {
+export async function waitForPackage(
+  client: SdkClient,
+  env: Env,
+  transferId: string,
+  cb: RunCallbacks,
+  signal?: AbortSignal,
+  allowEmpty = false,
+): Promise<ChunkSet[]> {
   const deadline = Date.now() + TIMING.statusTimeoutMs;
   for (;;) {
     signal?.throwIfAborted();
-    const data = await call<{ State?: string; ChunkSetsMetadata?: ChunkSet[] }>(
-      client, env, 'query', CT + 'getContentTransferStatus', { path: { transferId } },
+    const data = await retrying(env, cb, signal, () =>
+      call<{ State?: string; ChunkSetsMetadata?: ChunkSet[] }>(client, env, 'query', CT + 'getContentTransferStatus', { path: { transferId } }),
     ).then(
       (r) => r.data,
       (e) => {
@@ -150,13 +211,31 @@ const importState = (data: unknown): string => {
   return typeof value === 'string' ? value : '';
 };
 
-export async function verifyFiles(client: SdkClient, env: Env, files: string[], cb: RunCallbacks, signal?: AbortSignal) {
-  for (const fileName of files) {
-    const deadline = Date.now() + TIMING.verifyTimeoutMs;
-    let last: string | undefined;
+// Stands in for the import state while the target fails briefly.
+const BUSY = Symbol('busy');
+
+/** `items[i]`: how many items `files[i]` holds, which lengthens its wait (TIMING.msPerItem each). */
+export async function verifyFiles(client: SdkClient, env: Env, files: string[], cb: RunCallbacks, signal?: AbortSignal, items: number[] = []) {
+  for (const [i, fileName] of files.entries()) {
+    const deadline = Date.now() + TIMING.verifyTimeoutMs + (items[i] ?? 0) * TIMING.msPerItem;
+    let last: string | typeof BUSY | undefined;
     for (;;) {
       signal?.throwIfAborted();
-      const { data } = await call(client, env, 'query', CT + 'getBlobState', { query: { fileName } });
+      // A brief failure here says nothing about the import: count it as still importing and poll on.
+      const data = await call(client, env, 'query', CT + 'getBlobState', { query: { fileName } }).then(
+        (r) => r.data,
+        (e) => {
+          if (!isTransient(e)) throw e;
+          if (last !== BUSY) cb.onLog(`${busy(env, e)} Checking the import again.`, 'warning');
+          return BUSY;
+        },
+      );
+      if (data === BUSY) {
+        last = BUSY;
+        if (Date.now() >= deadline) throw new Error('Timed out waiting for the import to finish.');
+        await sleep(TIMING.pollMs, signal);
+        continue;
+      }
       const status = importState(data);
       // Show what the target reports whenever it changes, so an unexpected state is visible rather than a silent wait.
       if (status !== last) cb.onLog(`${env.name} import state: ${JSON.stringify(data).slice(0, 300)}`, 'info');
@@ -243,19 +322,35 @@ const accepted = (imports: Imports, env: Env) => () => {
   imports.unverified = env;
 };
 
+// Downloads one chunk, adding its item counts to `tally` when given.
 async function fetchChunk(
   client: SdkClient,
   env: Env,
   transferId: string,
   chunksetId: string,
   chunkId: number,
+  cb: RunCallbacks,
+  signal?: AbortSignal,
+  tally?: Tally,
 ): Promise<{ blob: Blob; isMedia: boolean }> {
   // mutate, not query: query() keeps every result in the ClientSDK cache, which would hold every chunk Blob.
-  const { data, response } = await call<Blob>(client, env, 'mutate', CT + 'getChunk', { path: { transferId, chunksetId, chunkId } });
+  const { data, response } = await retrying(env, cb, signal, () =>
+    call<Blob>(client, env, 'mutate', CT + 'getChunk', { path: { transferId, chunksetId, chunkId } }),
+  );
   // Never pass a non-binary body on to a target or a package.
   if (!(data instanceof Blob)) throw new Error(`${env.name} returned no data for chunk ${chunkId + 1} of chunk set ${chunksetId}.`);
-  return { blob: data, isMedia: parseIsMedia(response?.headers.get('content-disposition') ?? null) };
+  const header = response?.headers.get('content-disposition') ?? null;
+  if (tally) {
+    const { processed, skipped } = parseItemCounts(header);
+    tally.processed += processed;
+    tally.skipped += skipped;
+  }
+  return { blob: data, isMedia: parseIsMedia(header) };
 }
+
+// Saving the same chunk index again overwrites it, so a save is safe to retry.
+const saveChunk = (client: SdkClient, env: Env, cb: RunCallbacks, signal: AbortSignal | undefined, params: Parameters<typeof call>[4]) =>
+  retrying(env, cb, signal, () => call(client, env, 'mutate', CT + 'saveChunk', params));
 
 async function completeSets(client: SdkClient, env: Env, transferId: string, chunksetIds: string[], signal?: AbortSignal) {
   const files: string[] = [];
@@ -306,7 +401,7 @@ async function waitForPublish(client: SdkClient, env: Env, id: string, cb: RunCa
   let shown: number | undefined;
   for (;;) {
     signal?.throwIfAborted();
-    const s = (await graphql(client, env, statusQuery(id), {}))?.publishingStatus;
+    const s = (await retrying(env, cb, signal, () => graphql(client, env, statusQuery(id), {})))?.publishingStatus;
     if (s?.isFailed) throw new Error(`${env.name} reported the publish as failed (${s.state ?? 'FAILED'}).`);
     if (typeof s?.processed === 'number' && s.processed !== shown) {
       shown = s.processed;
@@ -318,11 +413,60 @@ async function waitForPublish(client: SdkClient, env: Env, id: string, cb: RunCa
   }
 }
 
+// Experience Edge's delivery API: an item by path and language, null when Edge doesn't have it.
+const edgeQuery = (paths: string[], language: string) =>
+  `query {\n${paths.map((p, i) => `  e${i}: item(path: ${JSON.stringify(p)}, language: ${JSON.stringify(language)}) { id }`).join('\n')}\n}`;
+// Paths per Edge query, to keep each one small.
+const EDGE_BATCH = 50;
+
+/**
+ * Looks for `paths` on Experience Edge (via `env`'s live context) in `language`, every TIMING.pollMs until all are
+ * there or TIMING.edgeTimeoutMs passes, and logs what it found. Edge can lag behind a publish, so it only ever logs:
+ * nothing here fails the step, except a cancel.
+ */
+async function checkEdge(client: SdkClient, env: Env, paths: string[], language: string, cb: RunCallbacks, signal?: AbortSignal) {
+  if (!env.liveContextId) {
+    cb.onLog(`Skipped the Experience Edge check: the app has no live context for ${env.name}.`, 'info');
+    return;
+  }
+  const live = { ...env, contextId: env.liveContextId };
+  const all = [...new Set(paths)];
+  let missing = all;
+  const deadline = Date.now() + TIMING.edgeTimeoutMs;
+  try {
+    for (;;) {
+      const still: string[] = [];
+      for (let i = 0; i < missing.length; i += EDGE_BATCH) {
+        const batch = missing.slice(i, i + EDGE_BATCH);
+        const data = (await graphql(client, live, edgeQuery(batch, language), {}, 'xmc.live.graphql')) ?? {};
+        still.push(...batch.filter((_, j) => !data[`e${j}`]?.id));
+      }
+      missing = still;
+      if (!missing.length || Date.now() >= deadline) break;
+      await sleep(TIMING.pollMs, signal);
+    }
+  } catch (e) {
+    if (signal?.aborted) throw e;
+    const reason = (e instanceof Error ? e.message : String(e)).replace(/\.?$/, '.');
+    cb.onLog(`Skipped the Experience Edge check: ${reason}`, 'info');
+    return;
+  }
+  if (!missing.length) {
+    cb.onLog(all.length === 1 ? 'The item is on Experience Edge.' : `All ${num(all.length)} items are on Experience Edge.`, 'success');
+    return;
+  }
+  const more = missing.length > 5 ? ` and ${num(missing.length - 5)} more` : '';
+  cb.onLog(
+    `Not on Experience Edge yet: ${missing.slice(0, 5).join(', ')}${more}. They may still be processing; check again in a few minutes.`,
+    'warning',
+  );
+}
+
 /**
  * The publish step: publishes `trees` from master to Experience Edge on `env`, in every language it has, and waits.
  * "+ Everything below" rows go with their subitems; the rest (with + Children expanded, on `env` when `expand`) one by one.
  * Related items aren't published. A failure is logged and marks the step failed but doesn't fail the run: the import stands.
- * Progress is `end` once it's over.
+ * Once published, it checks that each row's own item is on Experience Edge (checkEdge). Progress is `end` once it's over.
  */
 async function publishStep(
   client: SdkClient,
@@ -348,8 +492,9 @@ async function publishStep(
       if (!id) throw new Error(`${env.name} didn't start the publish.`);
       await waitForPublish(client, env, id, cb, signal);
     }
-    cb.onStepChange(step, 'done');
     cb.onLog('Published to Experience Edge.', 'success');
+    await checkEdge(client, env, trees.map((t) => t.itemPath), languages[0], cb, signal);
+    cb.onStepChange(step, 'done');
   } catch (e) {
     if (signal?.aborted) throw e;
     cb.onStepChange(step, 'fail');
@@ -359,26 +504,29 @@ async function publishStep(
   cb.onProgress(end);
 }
 
-// Downloads every chunk of a ready package; `onChunk(n, total)` runs before chunk n (1-based) is fetched.
+// Downloads every chunk of a ready package, with the item counts its chunks report; `onChunk(n, total)` runs before
+// chunk n (1-based) is fetched.
 async function downloadChunks(
   client: SdkClient,
   env: Env,
   transferId: string,
   sets: ChunkSet[],
+  cb: RunCallbacks,
   onChunk: (n: number, total: number) => void,
   signal?: AbortSignal,
-): Promise<ChunkData[]> {
+): Promise<{ chunks: ChunkData[]; tally: Tally }> {
   const total = sets.reduce((n, s) => n + s.ChunkCount, 0);
   const chunks: ChunkData[] = [];
+  const tally = { processed: 0, skipped: 0 };
   for (const [chunkSet, set] of sets.entries()) {
     for (let index = 0; index < set.ChunkCount; index++) {
       signal?.throwIfAborted();
       onChunk(chunks.length + 1, total);
-      const { blob, isMedia } = await fetchChunk(client, env, transferId, set.ChunkSetId, index);
+      const { blob, isMedia } = await fetchChunk(client, env, transferId, set.ChunkSetId, index, cb, signal, tally);
       chunks.push({ chunkSet, index, isMedia, data: blob });
     }
   }
-  return chunks;
+  return { chunks, tally };
 }
 
 // The package's item list. The ID is only metadata: a failed lookup leaves it empty rather than failing the package.
@@ -420,12 +568,13 @@ async function backUp(
   const backupId = crypto.randomUUID();
   try {
     await createJob(client, target, backupId, trees, cb, signal);
-    const sets = await waitForPackage(client, target, backupId, signal, true);
+    const sets = await waitForPackage(client, target, backupId, cb, signal, true);
     if (!sets.some((s) => s.ChunkCount > 0)) return null;
-    const chunks = await downloadChunks(client, target, backupId, sets, (n, total) => {
+    const { chunks, tally } = await downloadChunks(client, target, backupId, sets, cb, (n, total) => {
       cb.onLog(`Backup chunk ${n} / ${total}`, 'info');
       cb.onProgress(pct((100 * (n - 1)) / total));
     }, signal);
+    if (tally.skipped > 0) cb.onLog(skippedWarning(tally, target.name, 'backup'), 'warning');
     const zip = await buildPackage(chunks, await packageItems(client, target, trees, signal));
     signal?.throwIfAborted();
     return zip;
@@ -511,10 +660,14 @@ export async function runTransfer(
     done(pkg(33));
 
     begin(o + 1, `Waiting for ${source.name} to build the package.`);
-    const sets = await waitForPackage(client, source, transferId, signal);
-    cb.onInfo?.(infoOf(sets));
+    const sets = await waitForPackage(client, source, transferId, cb, signal);
+    const info = infoOf(sets);
+    cb.onInfo?.(info);
     done(pkg(100));
     const total = sets.reduce((n, s) => n + s.ChunkCount, 0);
+    const minutes = importMinutes(info.itemCount);
+    // The source's item counts, from the first copy: each later target reads the same chunks again.
+    const tally = { processed: 0, skipped: 0 };
 
     // ponytail: each target copies the chunks from the source again, rather than holding the package in memory.
     for (const [k, { env: target }] of targets.entries()) {
@@ -531,25 +684,36 @@ export async function runTransfer(
           signal?.throwIfAborted();
           cb.onLog(`Copying chunk ${copied + 1} / ${total}`, 'info');
           const path = { transferId, chunksetId: set.ChunkSetId, chunkId };
-          const { blob, isMedia } = await fetchChunk(client, source, transferId, set.ChunkSetId, chunkId);
+          const { blob, isMedia } = await fetchChunk(client, source, transferId, set.ChunkSetId, chunkId, cb, signal, k === 0 ? tally : undefined);
           signal?.throwIfAborted();
-          await call(client, target, 'mutate', CT + 'saveChunk', { path, query: { isMedia }, body: blob });
+          await saveChunk(client, target, cb, signal, { path, query: { isMedia }, body: blob });
           copied++;
           cb.onProgress(pct((70 * copied) / total));
         }
       }
       done(pct(70));
+      if (k === 0 && tally.skipped > 0) {
+        cb.onLog(skippedWarning(tally, source.name, 'transfer'), 'warning');
+        cb.onInfo?.({ ...info, ...tally });
+      }
 
       begin(at + 1, `Assembling the package on ${target.name}.`);
       const files = await completeSets(client, target, transferId, sets.map((s) => s.ChunkSetId), signal);
       done(pct(78));
 
       begin(at + 2, `Importing into ${database} on ${target.name}.`);
+      if (minutes >= 2) {
+        cb.onLog(
+          `Importing ${num(info.itemCount)} items into ${target.name}. At the usual speed that takes about ${minutes} minutes; the tab must stay open.`,
+          'info',
+        );
+      }
       await consumeFiles(client, target, database, files, signal, accepted(imports, target));
       done(pct(88));
 
       begin(at + 3, `Verifying the import on ${target.name}.`);
-      await verifyFiles(client, target, files, cb, signal);
+      // completeSets returns the files in the order of `sets`.
+      await verifyFiles(client, target, files, cb, signal, sets.map((s) => s.TotalItemCount ?? 0));
       imports.unverified = undefined;
       done(pct(100));
 
@@ -578,15 +742,20 @@ export async function runExport(
     done(10);
 
     begin(1, `Waiting for ${source.name} to build the package.`);
-    const sets = await waitForPackage(client, source, transferId, signal);
-    cb.onInfo?.(infoOf(sets));
+    const sets = await waitForPackage(client, source, transferId, cb, signal);
+    const info = infoOf(sets);
+    cb.onInfo?.(info);
     done(30);
 
     begin(2, `Downloading the package from ${source.name}.`);
-    const chunks = await downloadChunks(client, source, transferId, sets, (n, total) => {
+    const { chunks, tally } = await downloadChunks(client, source, transferId, sets, cb, (n, total) => {
       cb.onLog(`Downloading chunk ${n} / ${total}`, 'info');
       cb.onProgress(Math.round(30 + (65 * (n - 1)) / total));
     }, signal);
+    if (tally.skipped > 0) {
+      cb.onLog(skippedWarning(tally, source.name, 'export'), 'warning');
+      cb.onInfo?.({ ...info, ...tally });
+    }
     const zip = await buildPackage(chunks, await packageItems(client, source, dataTrees, signal));
     signal?.throwIfAborted();
     done(100);
@@ -616,7 +785,7 @@ export async function runImport(
       for (const [chunkId, { data, isMedia }] of part.chunks.entries()) {
         signal?.throwIfAborted();
         cb.onLog(`Uploading chunk ${sent + 1} / ${total}`, 'info');
-        await call(client, target, 'mutate', CT + 'saveChunk', {
+        await saveChunk(client, target, cb, signal, {
           path: { transferId, chunksetId: chunksetIds[i], chunkId },
           query: { isMedia },
           body: data,

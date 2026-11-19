@@ -1,6 +1,6 @@
 // @vitest-environment node
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { readPackage, type PackagePart } from '@/lib/package';
 import {
   IMPORT_STEP,
@@ -8,6 +8,7 @@ import {
   TIMING,
   TRANSFER_STEPS,
   backupTreesFor,
+  parseItemCounts,
   transferSteps,
   runExport,
   runImport,
@@ -99,7 +100,11 @@ describe('IMPORT_STEP', () => {
 });
 
 beforeEach(() => {
-  Object.assign(TIMING, { pollMs: 0, statusTimeoutMs: 50, verifyTimeoutMs: 50, publishTimeoutMs: 50 });
+  Object.assign(TIMING, { pollMs: 0, statusTimeoutMs: 50, verifyTimeoutMs: 50, msPerItem: 0, publishTimeoutMs: 50, retryMs: [0, 0], edgeTimeoutMs: 50 });
+});
+
+afterEach(() => {
+  vi.useRealTimers();
 });
 
 describe('runTransfer', () => {
@@ -594,6 +599,122 @@ describe('publish to Experience Edge', () => {
     expect(calls.filter((c) => c.key === GQL).every((c: any) => c.params.query.sitecoreContextId === 'ctx-qa')).toBe(true);
     expect(r.steps).toContainEqual([IMPORT_STEPS.length, 'done']);
   });
+
+  it('tries the publishing status again after a brief failure, but never the publish itself', async () => {
+    const inner = gql(RUNNING_THEN_DONE);
+    let failed = false;
+    const flaky = fakeClient({
+      ...handlers(),
+      [GQL]: (p: any) => (!failed && p.body.query.includes('publishingStatus') ? ((failed = true), { status: 502 }) : inner(p)),
+    });
+    const r = recorder();
+    expect(await runTransfer(flaky.client, { ...OPTS, publish: true }, r.cb)).toBe(true);
+    expect(r.logs).toContainEqual(['QA answered HTTP 502. Trying again in 0 s.', 'warning']);
+    expect(r.steps).toContainEqual([TRANSFER_STEPS.length, 'done']);
+
+    const busy = fakeClient({ ...handlers(), [GQL]: (p: any) => (p.body.query.startsWith('mutation') ? { status: 503 } : gql(RUNNING_THEN_DONE)(p)) });
+    const r2 = recorder();
+    expect(await runTransfer(busy.client, { ...OPTS, publish: true }, r2.cb)).toBe(true);
+    expect(mutations(busy.calls)).toHaveLength(1);
+    expect(r2.steps).toContainEqual([TRANSFER_STEPS.length, 'fail']);
+  });
+
+  describe('then checks Experience Edge', () => {
+    const LIVE = 'xmc.live.graphql';
+    const QA_LIVE = { ...QA, liveContextId: 'live-qa' };
+    // Answers the Edge check: `found(path, poll)` says whether Edge has the item at that path on that poll (from 0).
+    const edge = (found: (path: string, poll: number) => boolean) => {
+      let poll = 0;
+      return (p: any): FakeReply => {
+        const data: Record<string, unknown> = {};
+        for (const [, alias, path] of (p.body.query as string).matchAll(/(\w+): item\(path: ("[^"]*")/g)) data[alias] = found(JSON.parse(path), poll) ? { id: 'x' } : null;
+        poll++;
+        return { data: { data } };
+      };
+    };
+    const checks = (calls: any[]) => calls.filter((c) => c.key === LIVE);
+    const pathsOf = (c: any) => [...(c.params.body.query as string).matchAll(/item\(path: "([^"]+)"/g)].map((m) => m[1]);
+    const toQaLive = (dataTrees: DataTree[]) => ({ ...OPTS, targets: [{ env: QA_LIVE }], dataTrees, publish: true });
+
+    it('looks up each published row on Edge with the live context, in the first language', async () => {
+      const { client, calls } = fakeClient({ ...handlers(), [LIVE]: edge(() => true) });
+      const r = recorder();
+      expect(await runTransfer(client, toQaLive(ROWS), r.cb)).toBe(true);
+      const [check] = checks(calls);
+      expect(checks(calls)).toHaveLength(1);
+      expect(check.kind).toBe('mutate');
+      expect(check.params.query.sitecoreContextId).toBe('live-qa');
+      expect(check.params.body.query).toContain('item(path: "/sitecore/content/A", language: "en") { id }');
+      // The rows as sent: + Children's child is a row of its own, but nothing below + Everything below is looked up.
+      expect(pathsOf(check)).toEqual(['/sitecore/content/A', '/sitecore/content/B', C, `${C}/C1`]);
+      expect(r.logs).toContainEqual(['All 4 items are on Experience Edge.', 'success']);
+      expect(r.steps).toContainEqual([TRANSFER_STEPS.length, 'done']);
+      expect(r.logs.at(-1)).toEqual(['Transfer complete.', 'success']);
+    });
+
+    it('says so for one item', async () => {
+      const { client } = fakeClient({ ...handlers(), [LIVE]: edge(() => true) });
+      const r = recorder();
+      expect(await runTransfer(client, toQaLive(TREES), r.cb)).toBe(true);
+      expect(r.logs).toContainEqual(['The item is on Experience Edge.', 'success']);
+    });
+
+    it('waits for Edge to catch up, asking only for what it lacks', async () => {
+      const { client, calls } = fakeClient({ ...handlers(), [LIVE]: edge((path, poll) => poll > 0 || path !== '/sitecore/content/B') });
+      const r = recorder();
+      expect(await runTransfer(client, toQaLive(ROWS.slice(0, 2)), r.cb)).toBe(true);
+      expect(checks(calls).map(pathsOf)).toEqual([['/sitecore/content/A', '/sitecore/content/B'], ['/sitecore/content/B']]);
+      expect(r.logs).toContainEqual(['All 2 items are on Experience Edge.', 'success']);
+    });
+
+    it('names up to five items Edge still lacks, and never fails the step', async () => {
+      TIMING.edgeTimeoutMs = 0;
+      const rows = Array.from({ length: 7 }, (_, i): DataTree => ({ itemPath: `/P${i + 1}`, scope: 'SingleItem', mergeStrategy: 'OverrideExistingItem' }));
+      const { client, calls } = fakeClient({ ...handlers(), [LIVE]: edge(() => false) });
+      const r = recorder();
+      expect(await runTransfer(client, toQaLive(rows), r.cb)).toBe(true);
+      expect(checks(calls)).toHaveLength(1);
+      expect(r.logs).toContainEqual([
+        'Not on Experience Edge yet: /P1, /P2, /P3, /P4, /P5 and 2 more. They may still be processing; check again in a few minutes.',
+        'warning',
+      ]);
+      expect(r.steps).toContainEqual([TRANSFER_STEPS.length, 'done']);
+    });
+
+    it.each([
+      ['an HTTP error', () => ({ status: 500 }), 'Skipped the Experience Edge check: HTTP 500.'],
+      ['a GraphQL error', () => ({ data: { errors: [{ message: 'Unknown argument' }] } }), 'Skipped the Experience Edge check: Unknown argument.'],
+    ])('skips the check on %s', async (_n, reply, log) => {
+      const { client } = fakeClient({ ...handlers(), [LIVE]: reply });
+      const r = recorder();
+      expect(await runTransfer(client, toQaLive(TREES), r.cb)).toBe(true);
+      expect(r.logs).toContainEqual([log, 'info']);
+      expect(r.steps).toContainEqual([TRANSFER_STEPS.length, 'done']);
+    });
+
+    it('skips the check without a live context', async () => {
+      const { client, calls } = fakeClient({ ...handlers(), [LIVE]: edge(() => true) });
+      const r = recorder();
+      expect(await runTransfer(client, { ...OPTS, publish: true }, r.cb)).toBe(true);
+      expect(checks(calls)).toHaveLength(0);
+      expect(r.logs).toContainEqual(['Skipped the Experience Edge check: the app has no live context for QA.', 'info']);
+    });
+
+    it('does not check after a failed publish', async () => {
+      const { client, calls } = fakeClient({ ...handlers(() => ({ state: 'FAILED', isDone: false, isFailed: true })), [LIVE]: edge(() => true) });
+      expect(await runTransfer(client, toQaLive(TREES), recorder().cb)).toBe(true);
+      expect(checks(calls)).toHaveLength(0);
+    });
+
+    it('a restore checks each row it publishes, not the children it expands', async () => {
+      const { client, calls } = fakeClient({ ...handlers(), [LIVE]: edge(() => true) });
+      const parts: PackagePart[] = [{ chunks: [{ data: new Blob(['a0']), isMedia: false }] }];
+      const r = recorder();
+      expect(await runImport(client, { target: QA_LIVE, database: 'master', parts, publish: [ROWS[0], ROWS[2]] }, r.cb)).toBe(true);
+      expect(checks(calls).map(pathsOf)).toEqual([['/sitecore/content/A', C]]);
+      expect(r.logs).toContainEqual(['All 2 items are on Experience Edge.', 'success']);
+    });
+  });
 });
 
 describe('several targets', () => {
@@ -886,5 +1007,230 @@ describe('runImport', () => {
     expect(r.logs.filter(([m]) => /^Uploading chunk \d/.test(m))).toHaveLength(1);
     expect(r.logs).toContainEqual(['Cancelled.', 'warning']);
     expect(ofKey(calls, 'deleteContentTransfer').map(ctxOf)).toEqual(['ctx-qa']);
+  });
+
+  it('uploads a chunk again after a brief failure', async () => {
+    let failed = false;
+    const { client, calls } = fakeClient(happyHandlers({ saveChunk: () => (failed ? {} : ((failed = true), { status: 502 })) }));
+    const r = recorder();
+    expect(await runImport(client, IMPORT, r.cb)).toBe(true);
+    expect(ofKey(calls, 'saveChunk').map((c) => c.params.path.chunkId)).toEqual([0, 0, 1, 0]);
+    expect(r.logs).toContainEqual(['QA answered HTTP 502. Trying again in 0 s.', 'warning']);
+  });
+});
+
+describe('import wait and estimate', () => {
+  const sets = (TotalItemCount: number): Record<string, Handler> => ({
+    getContentTransferStatus: () => ({ data: { State: 'Completed', ChunkSetsMetadata: [{ ChunkSetId: 'cs1', ChunkCount: 2, TotalItemCount }] } }),
+  });
+
+  it('gives each package file more time for each item its chunk set holds', async () => {
+    Object.assign(TIMING, { verifyTimeoutMs: 0, msPerItem: 60_000 });
+    const polls: Record<string, number> = {};
+    const { client } = fakeClient(
+      happyHandlers({
+        ...TWO_SETS,
+        getBlobState: (p) => ({ data: { status: (polls[p.query.fileName] = (polls[p.query.fileName] ?? 0) + 1) > 3 ? 'OK' : 'Uploaded' } }),
+      }),
+    );
+    const r = recorder();
+    // cs1 holds 3 items, so it may take 3 minutes; cs2 reports none, so it has no time beyond verifyTimeoutMs.
+    expect(await runTransfer(client, OPTS, r.cb)).toBe(false);
+    expect(polls).toEqual({ 'f-cs1.raif': 4, 'f-cs2.raif': 1 });
+    expect(r.logs).toContainEqual(['Imported f-cs1.raif (OK).', 'success']);
+    expect(r.logs).toContainEqual(['Timed out waiting for the import to finish.', 'error']);
+  });
+
+  it('says about how long a big import takes when it starts', async () => {
+    const { client } = fakeClient(happyHandlers(sets(20_000)));
+    const r = recorder();
+    expect(await runTransfer(client, OPTS, r.cb)).toBe(true);
+    const at = r.logs.findIndex(([m]) => m === 'Importing into master on QA.');
+    expect(r.logs[at + 1]).toEqual([
+      'Importing 20,000 items into QA. At the usual speed that takes about 83 minutes; the tab must stay open.',
+      'info',
+    ]);
+  });
+
+  it('says nothing for an import under 2 minutes', async () => {
+    const { client } = fakeClient(happyHandlers(sets(300)));
+    const r = recorder();
+    expect(await runTransfer(client, OPTS, r.cb)).toBe(true);
+    expect(r.logs.some(([m]) => m.includes('At the usual speed'))).toBe(false);
+  });
+});
+
+describe('items Sitecore skipped while packaging', () => {
+  const GQL = 'xmc.authoring.graphql';
+  // Each chunk reports 10 items written and `skipped(chunkId)` skipped.
+  const skipping = (skipped: (chunkId: number) => number): Record<string, Handler> => ({
+    getChunk: (p) => ({
+      data: new Blob(['c' + p.path.chunkId]),
+      headers: { 'content-disposition': `attachment; IsMedia=false; ItemsProcessed=10; ItemsSkipped=${skipped(p.path.chunkId)}` },
+    }),
+  });
+  const WARNING = (env: string, noun: string) => [
+    `Sitecore skipped 3 of 23 items while packaging on ${env} (items that failed or were filtered out). Check those items before relying on this ${noun}.`,
+    'warning',
+  ];
+
+  it('reads the counts from the Content-Disposition header', () => {
+    expect(parseItemCounts('attachment; IsMedia=false; ItemsProcessed=120; ItemsSkipped=3')).toEqual({ processed: 120, skipped: 3 });
+    expect(parseItemCounts('attachment; itemsprocessed="7"; ItemsSkipped = 0')).toEqual({ processed: 7, skipped: 0 });
+    expect(parseItemCounts('attachment; IsMedia=true')).toEqual({ processed: 0, skipped: 0 });
+    expect(parseItemCounts(null)).toEqual({ processed: 0, skipped: 0 });
+  });
+
+  it('warns once after the first copy, counting each chunk once however many targets copy it', async () => {
+    const { client } = fakeClient(happyHandlers(skipping((id) => (id === 0 ? 2 : 1))));
+    const r = recorder();
+    expect(await runTransfer(client, { ...OPTS, targets: [{ env: QA }, { env: UAT }] }, r.cb)).toBe(true);
+    expect(r.logs.filter(([m]) => m.startsWith('Sitecore skipped'))).toEqual([WARNING('Dev', 'transfer')]);
+    const at = r.logs.findIndex(([m]) => m.startsWith('Sitecore skipped'));
+    expect(r.logs[at - 1]).toEqual(['Copying chunk 2 / 2', 'info']);
+    expect(r.logs[at + 1]).toEqual(['Assembling the package on QA.', 'info']);
+    expect(r.infos).toEqual([
+      { chunkCount: 2, itemCount: 3 },
+      { chunkCount: 2, itemCount: 3, processed: 20, skipped: 3 },
+    ]);
+  });
+
+  it('says nothing when none were skipped', async () => {
+    const { client } = fakeClient(happyHandlers(skipping(() => 0)));
+    const r = recorder();
+    expect(await runTransfer(client, OPTS, r.cb)).toBe(true);
+    expect(r.logs.some(([m]) => m.startsWith('Sitecore skipped'))).toBe(false);
+    expect(r.infos).toHaveLength(1);
+  });
+
+  it('warns about an export', async () => {
+    const { client } = fakeClient({ ...happyHandlers(skipping((id) => (id === 0 ? 2 : 1))), [GQL]: () => ({ data: { data: { item: null } } }) });
+    const r = recorder();
+    expect(await runExport(client, { source: DEV, dataTrees: TREES }, r.cb)).toBeInstanceOf(Blob);
+    expect(r.logs).toContainEqual(WARNING('Dev', 'export'));
+    expect(r.infos.at(-1)).toEqual({ chunkCount: 2, itemCount: 3, processed: 20, skipped: 3 });
+  });
+
+  it('warns about a backup, without touching the transfer counts', async () => {
+    const { client } = fakeClient(happyHandlers(skipping((id) => (id === 0 ? 2 : 1))));
+    const r = recorder();
+    expect(await runTransfer(client, { ...OPTS, targets: [{ env: QA, backup: TREES }] }, r.cb)).toBe(true);
+    expect(r.logs).toContainEqual(WARNING('QA', 'backup'));
+    expect(r.logs).toContainEqual(WARNING('Dev', 'transfer'));
+    expect(r.infos.at(-1)).toEqual({ chunkCount: 2, itemCount: 3, processed: 20, skipped: 3 });
+  });
+});
+
+describe('brief failures', () => {
+  // Answers `reply` the first `times` calls, then like `then`.
+  const failing = (times: number, reply: () => FakeReply, then: Handler): Handler => {
+    let n = 0;
+    return (p) => (n++ < times ? reply() : then(p));
+  };
+  const happy = (k: string): Handler => happyHandlers()[CT + k];
+  const retries = (logs: [string, LogType][]) => logs.filter(([m]) => m.includes('Trying again'));
+
+  it.each([429, 502, 503, 504])('downloads a chunk again after HTTP %d', async (status) => {
+    const { client, calls } = fakeClient(happyHandlers({ getChunk: failing(1, () => ({ status }), happy('getChunk')) }));
+    const r = recorder();
+    expect(await runTransfer(client, OPTS, r.cb)).toBe(true);
+    expect(ofKey(calls, 'getChunk').map((c) => c.params.path.chunkId)).toEqual([0, 0, 1]);
+    expect(retries(r.logs)).toEqual([[`Dev answered HTTP ${status}. Trying again in 0 s.`, 'warning']]);
+  });
+
+  it('tries again when the SDK request timed out', async () => {
+    const timeout = () => {
+      throw new Error('[client SDK] Request timed out');
+    };
+    const { client } = fakeClient(happyHandlers({ getChunk: failing(1, timeout, happy('getChunk')) }));
+    const r = recorder();
+    expect(await runTransfer(client, OPTS, r.cb)).toBe(true);
+    expect(retries(r.logs)).toEqual([["Dev didn't answer in time. Trying again in 0 s.", 'warning']]);
+  });
+
+  it('waits 2 s, then 5 s, then gives up after the third attempt', async () => {
+    vi.useFakeTimers();
+    TIMING.retryMs = [2000, 5000];
+    const { client, calls } = fakeClient(happyHandlers({ getChunk: () => ({ status: 503 }) }));
+    const r = recorder();
+    const run = runTransfer(client, OPTS, r.cb);
+    await vi.runAllTimersAsync();
+    expect(await run).toBe(false);
+    expect(ofKey(calls, 'getChunk')).toHaveLength(3);
+    expect(retries(r.logs)).toEqual([
+      ['Dev answered HTTP 503. Trying again in 2 s.', 'warning'],
+      ['Dev answered HTTP 503. Trying again in 5 s.', 'warning'],
+    ]);
+    expect(r.logs).toContainEqual(['HTTP 503', 'error']);
+  });
+
+  it('saves a chunk again, which overwrites it', async () => {
+    const { client, calls } = fakeClient(happyHandlers({ saveChunk: failing(1, () => ({ status: 503 }), () => ({})) }));
+    const r = recorder();
+    expect(await runTransfer(client, OPTS, r.cb)).toBe(true);
+    expect(ofKey(calls, 'saveChunk').map((c) => c.params.path.chunkId)).toEqual([0, 0, 1]);
+    expect(retries(r.logs)).toEqual([['QA answered HTTP 503. Trying again in 0 s.', 'warning']]);
+  });
+
+  it('asks for the package status again', async () => {
+    const { client } = fakeClient(happyHandlers({ getContentTransferStatus: failing(1, () => ({ status: 504 }), happy('getContentTransferStatus')) }));
+    const r = recorder();
+    expect(await runTransfer(client, OPTS, r.cb)).toBe(true);
+    expect(retries(r.logs)).toEqual([['Dev answered HTTP 504. Trying again in 0 s.', 'warning']]);
+  });
+
+  it('counts brief failures of the import check as still importing, and says so once', async () => {
+    const { client } = fakeClient(happyHandlers({ getBlobState: failing(3, () => ({ status: 503 }), () => ({ data: { status: 'OK' } })) }));
+    const r = recorder();
+    expect(await runTransfer(client, OPTS, r.cb)).toBe(true);
+    expect(r.logs.filter(([m]) => m.includes('answered'))).toEqual([['QA answered HTTP 503. Checking the import again.', 'warning']]);
+  });
+
+  it('keeps checking the import through brief failures only until the deadline', async () => {
+    TIMING.verifyTimeoutMs = 0;
+    const { client, calls } = fakeClient(happyHandlers({ getBlobState: () => ({ status: 503 }) }));
+    const r = recorder();
+    expect(await runTransfer(client, OPTS, r.cb)).toBe(false);
+    expect(ofKey(calls, 'getBlobState')).toHaveLength(1);
+    expect(r.logs).toContainEqual(['Timed out waiting for the import to finish.', 'error']);
+    expect(r.logs).toContainEqual(STILL_IMPORTING('QA'));
+  });
+
+  it.each(['createContentTransfer', 'completeChunkSetTransfer', 'consumeFile'])('never repeats %s', async (k) => {
+    const { client, calls } = fakeClient(happyHandlers({ [k]: () => ({ status: 503 }) }));
+    const r = recorder();
+    expect(await runTransfer(client, OPTS, r.cb)).toBe(false);
+    expect(ofKey(calls, k)).toHaveLength(1);
+    expect(retries(r.logs)).toEqual([]);
+  });
+
+  it('never repeats a cleanup', async () => {
+    const { client, calls } = fakeClient(happyHandlers({ deleteContentTransfer: () => ({ status: 503 }) }));
+    const r = recorder();
+    expect(await runTransfer(client, OPTS, r.cb)).toBe(true);
+    expect(ofKey(calls, 'deleteContentTransfer')).toHaveLength(1);
+    expect(retries(r.logs)).toEqual([]);
+  });
+
+  it('never repeats an error that is not brief', async () => {
+    const { client, calls } = fakeClient(happyHandlers({ getChunk: () => ({ status: 500 }) }));
+    expect(await runTransfer(client, OPTS, recorder().cb)).toBe(false);
+    expect(ofKey(calls, 'getChunk')).toHaveLength(1);
+  });
+
+  it('a cancel during the wait stops it', async () => {
+    const ctrl = new AbortController();
+    const { client, calls } = fakeClient(
+      happyHandlers({
+        getChunk: () => {
+          ctrl.abort();
+          return { status: 503 };
+        },
+      }),
+    );
+    const r = recorder();
+    expect(await runTransfer(client, OPTS, r.cb, ctrl.signal)).toBe(false);
+    expect(ofKey(calls, 'getChunk')).toHaveLength(1);
+    expect(r.logs).toContainEqual(['Cancelled.', 'warning']);
   });
 });
