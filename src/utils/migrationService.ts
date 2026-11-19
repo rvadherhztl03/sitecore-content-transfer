@@ -31,6 +31,29 @@ export interface MigrationCallbacks {
   onStepChange: (stepIndex: number, status: 'pending' | 'running' | 'done' | 'fail') => void;
 }
 
+// A chunk set as the source's status lists it.
+type ChunkSet = { ChunkSetId: string; ChunkCount: number; TotalItemCount?: number };
+
+// Sitecore answers these when it is briefly busy or unreachable; the routes pass its status through.
+const RETRY_STATUSES = [429, 502, 503, 504];
+// The waits before the second and third attempt.
+const RETRY_WAITS_MS = [2000, 5000];
+const POLL_MS = 3000;
+// The import wait is 30 minutes plus 0.5 s per item; imports run at about 4 items a second.
+const IMPORT_BASE_MS = 1_800_000;
+const IMPORT_MS_PER_ITEM = 500;
+const IMPORT_ITEMS_PER_SECOND = 4;
+const BLOB_SUCCESS = ['OK', 'Transferred', 'Consumed'];
+const BLOB_FAILURE = ['Error', 'Failed', 'Discarded'];
+const MAX_SHOWN_ERRORS = 10;
+
+const delay = (ms: number) => {
+  if (typeof process !== 'undefined' && process.env.NODE_ENV === 'test') {
+    return Promise.resolve();
+  }
+  return new Promise(resolve => setTimeout(resolve, ms));
+};
+
 export class MigrationService {
   private config: MigrationConfig;
   private callbacks: MigrationCallbacks;
@@ -66,6 +89,107 @@ export class MigrationService {
   private step(stepIndex: number, status: 'pending' | 'running' | 'done' | 'fail') {
     this.currentStepIndex = stepIndex;
     this.callbacks.onStepChange(stepIndex, status);
+  }
+
+  // POSTs `body` to one of the app's routes. Up to 3 attempts while Sitecore answers briefly busy; any other answer,
+  // and the last one, goes back to the caller. Only for calls that are safe to repeat: never initiate, complete or consume.
+  private async postRetrying(url: string, body: object, what: string): Promise<Response> {
+    for (let attempt = 1; ; attempt++) {
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      });
+      if (res.ok || !RETRY_STATUSES.includes(res.status) || attempt > RETRY_WAITS_MS.length) return res;
+      const wait = RETRY_WAITS_MS[attempt - 1];
+      this.log(`${what} answered HTTP ${res.status}; trying again in ${wait / 1000} s (attempt ${attempt + 1} of ${RETRY_WAITS_MS.length + 1}).`, 'warning');
+      await delay(wait);
+    }
+  }
+
+  // The import wait, as a number of polls: 30 minutes plus 0.5 s per item.
+  private importPolls(items: number): number {
+    return Math.ceil((IMPORT_BASE_MS + IMPORT_MS_PER_ITEM * items) / POLL_MS);
+  }
+
+  // Polls the target until the package's import has finished. `setLabel` names the chunk set when there can be several.
+  // Throws unless the import succeeded; `location` is what consume answered, used to explain TransferredWithErrors.
+  private async verifyImport(chunksetId: string, location: string | undefined, maxPolls: number, setLabel?: string): Promise<void> {
+    const forSet = setLabel ? ` for chunkset ${setLabel}` : '';
+    let lastState: string | undefined;
+
+    for (let poll = 0; poll < maxPolls; poll++) {
+      const verifyRes = await this.postRetrying('/api/migrate/verify', {
+        targetHost: this.config.targetHost,
+        targetClientId: this.config.targetClientId,
+        targetClientSecret: this.config.targetClientSecret,
+        targetAuthority: this.config.targetAuthority,
+        targetAudience: this.config.targetAudience,
+        transferId: this.config.transferId,
+        chunksetId
+      }, 'Verify check');
+
+      if (!verifyRes.ok) {
+        const errText = await verifyRes.text();
+        throw new Error(`Failed to verify target blob state: ${errText}`);
+      }
+
+      const verifyData = await verifyRes.json();
+      const state: string = verifyData.BlobState;
+      const succeeded = BLOB_SUCCESS.includes(state);
+      const failed = BLOB_FAILURE.includes(state) || state === 'TransferredWithErrors';
+
+      // Shown when it changes, so a long import doesn't fill the log.
+      if (state !== lastState) {
+        this.log(`Verification completed${setLabel ? ` (${setLabel})` : ''}. BlobState: ${state}, Error: ${verifyData.Error}`,
+          succeeded ? 'success' : failed ? 'warning' : 'info');
+      }
+      lastState = state;
+
+      if (succeeded) return;
+      if (failed) {
+        const message = `Blob transfer verification state${forSet} is ${state}. Error: ${verifyData.Error}`;
+        throw new Error(state === 'TransferredWithErrors' ? await this.explainImportErrors(chunksetId, location, message) : message);
+      }
+      // Any other state (Initializing, Queued, Uploaded...): the import is still going.
+      await delay(POLL_MS);
+    }
+
+    throw new Error(`Timed out waiting for the import to finish${forSet} (last state: ${lastState || 'unknown'}).`);
+  }
+
+  // TransferredWithErrors says nothing more, so ask the target for the import's validation errors. Logs up to 10 and
+  // returns the error to throw; when the details can't be read it is `fallback` plus why.
+  private async explainImportErrors(chunksetId: string, location: string | undefined, fallback: string): Promise<string> {
+    let reason: string;
+    try {
+      const res = await fetch('/api/migrate/transfer-details', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          targetHost: this.config.targetHost,
+          targetClientId: this.config.targetClientId,
+          targetClientSecret: this.config.targetClientSecret,
+          targetAuthority: this.config.targetAuthority,
+          targetAudience: this.config.targetAudience,
+          transferId: this.config.transferId,
+          chunksetId,
+          location
+        })
+      });
+      if (!res.ok) throw new Error((await res.text()).slice(0, 300));
+
+      const errors: string[] = (await res.json()).validationErrors ?? [];
+      if (errors.length > 0) {
+        errors.slice(0, MAX_SHOWN_ERRORS).forEach((e, i) => this.log(`Validation error ${i + 1}: ${e.slice(0, 300)}`, 'warning'));
+        if (errors.length > MAX_SHOWN_ERRORS) this.log(`...and ${errors.length - MAX_SHOWN_ERRORS} more.`, 'warning');
+        return `The target imported the package with errors: ${errors.length} validation error${errors.length === 1 ? '' : 's'}. First: ${errors[0].slice(0, 300)}`;
+      }
+      reason = 'the target lists no validation errors';
+    } catch (err) {
+      reason = err instanceof Error ? err.message : String(err);
+    }
+    return `${fallback} Couldn't read why: ${reason}`;
   }
 
   public async runMigration(): Promise<boolean> {
@@ -215,22 +339,16 @@ export class MigrationService {
     while (state === 'Processing' && attempts < maxAttempts) {
       attempts++;
       this.log(`Polling status (attempt ${attempts})...`, 'info');
-      if (!(typeof process !== 'undefined' && process.env.NODE_ENV === 'test')) {
-        await new Promise(resolve => setTimeout(resolve, 4000));
-      }
+      await delay(4000);
 
-      const statusRes = await fetch('/api/migrate/status', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          sourceHost: this.config.sourceHost,
-          sourceClientId: this.config.sourceClientId,
-          sourceClientSecret: this.config.sourceClientSecret,
-          sourceAuthority: this.config.sourceAuthority,
-          sourceAudience: this.config.sourceAudience,
-          transferId: this.config.transferId
-        })
-      });
+      const statusRes = await this.postRetrying('/api/migrate/status', {
+        sourceHost: this.config.sourceHost,
+        sourceClientId: this.config.sourceClientId,
+        sourceClientSecret: this.config.sourceClientSecret,
+        sourceAuthority: this.config.sourceAuthority,
+        sourceAudience: this.config.sourceAudience,
+        transferId: this.config.transferId
+      }, 'Status check');
 
       if (!statusRes.ok) {
         const errText = await statusRes.text();
@@ -254,8 +372,9 @@ export class MigrationService {
     }
 
     // A big package can come in several chunk sets; each is copied, assembled, imported and verified.
-    const chunkSets: { ChunkSetId: string; ChunkCount: number }[] = chunksetsMetadata;
+    const chunkSets: ChunkSet[] = chunksetsMetadata;
     const totalChunks = chunkSets.reduce((n, s) => n + s.ChunkCount, 0);
+    const totalItems = chunkSets.reduce((n, s) => n + (s.TotalItemCount ?? 0), 0);
     const setList = chunkSets.map(s => `${s.ChunkSetId} (${s.ChunkCount} chunks)`).join(', ');
     this.log(`Source transfer job completed. ${chunkSets.length} chunk set(s): ${setList}`, 'success');
     this.step(1, 'done');
@@ -266,28 +385,26 @@ export class MigrationService {
     this.log(`[Step 3/6] Starting chunk-by-chunk proxy transfer (${totalChunks} chunks)...`, 'info');
 
     let copied = 0;
+    let itemsProcessed = 0;
+    let itemsSkipped = 0;
     for (const { ChunkSetId: chunksetId, ChunkCount: chunkCount } of chunkSets) {
       for (let i = 0; i < chunkCount; i++) {
         this.log(`⏳ [Chunk ${copied + 1}/${totalChunks}] Downloading from Source & uploading to Target...`, 'info');
-        const chunkRes = await fetch('/api/migrate/transfer-chunk', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            sourceHost: this.config.sourceHost,
-            sourceClientId: this.config.sourceClientId,
-            sourceClientSecret: this.config.sourceClientSecret,
-            sourceAuthority: this.config.sourceAuthority,
-            sourceAudience: this.config.sourceAudience,
-            targetHost: this.config.targetHost,
-            targetClientId: this.config.targetClientId,
-            targetClientSecret: this.config.targetClientSecret,
-            targetAuthority: this.config.targetAuthority,
-            targetAudience: this.config.targetAudience,
-            transferId: this.config.transferId,
-            chunksetId,
-            chunkIndex: i
-          })
-        });
+        const chunkRes = await this.postRetrying('/api/migrate/transfer-chunk', {
+          sourceHost: this.config.sourceHost,
+          sourceClientId: this.config.sourceClientId,
+          sourceClientSecret: this.config.sourceClientSecret,
+          sourceAuthority: this.config.sourceAuthority,
+          sourceAudience: this.config.sourceAudience,
+          targetHost: this.config.targetHost,
+          targetClientId: this.config.targetClientId,
+          targetClientSecret: this.config.targetClientSecret,
+          targetAuthority: this.config.targetAuthority,
+          targetAudience: this.config.targetAudience,
+          transferId: this.config.transferId,
+          chunksetId,
+          chunkIndex: i
+        }, `Chunk ${copied + 1}`);
 
         if (!chunkRes.ok) {
           const errText = await chunkRes.text();
@@ -296,6 +413,8 @@ export class MigrationService {
 
         const resData = await chunkRes.json();
         copied++;
+        itemsProcessed += resData.itemsProcessed ?? 0;
+        itemsSkipped += resData.itemsSkipped ?? 0;
         this.log(`[Chunk ${copied}/${totalChunks}] Transferred successfully. IsMedia: ${resData.isMedia}`, 'success');
 
         const chunkProgress = 35 + (copied / totalChunks) * 35; // scales 35% -> 70%
@@ -337,6 +456,8 @@ export class MigrationService {
     // Step 5: Consume Target Items
     this.step(4, 'running');
     this.log(`[Step 5/6] Consuming .raif package into target database...`, 'info');
+    // Where each import is, as consume answers it; used to explain an import that ends with errors.
+    const locations = new Map<string, string>();
     for (const { ChunkSetId: chunksetId } of chunkSets) {
       const consumeRes = await fetch('/api/migrate/consume', {
         method: 'POST',
@@ -357,9 +478,19 @@ export class MigrationService {
         const errText = await consumeRes.text();
         throw new Error(`Failed to consume chunkset ${chunksetId} on target: ${errText}`);
       }
+
+      const consumeData = await consumeRes.json().catch(() => ({}));
+      if (typeof consumeData.location === 'string') locations.set(chunksetId, consumeData.location);
     }
 
     this.log(`Items successfully consumed into database: ${this.config.database}`, 'success');
+    const estimateSeconds = totalItems / IMPORT_ITEMS_PER_SECOND;
+    if (estimateSeconds >= 120) {
+      const minutes = estimateSeconds / 60;
+      // ponytail: one rate for every target; the estimate only says "about", the wait uses the item count.
+      const about = minutes >= 20 ? Math.round(minutes / 10) * 10 : Math.round(minutes);
+      this.log(`Importing ${totalItems.toLocaleString('en-US')} items. At the usual speed that takes about ${about} minutes; keep this tab open.`, 'info');
+    }
     this.step(4, 'done');
     this.progress(90);
 
@@ -367,63 +498,18 @@ export class MigrationService {
     this.step(5, 'running');
     this.log('[Step 6/6] Verifying target blob state...', 'info');
 
-    const maxVerifyPolls = 600; // 600 * 3s = 30 minutes
-    const delay = (ms: number) => {
-      if (typeof process !== 'undefined' && process.env.NODE_ENV === 'test') {
-        return Promise.resolve();
-      }
-      return new Promise(resolve => setTimeout(resolve, ms));
-    };
-
+    // ponytail: every chunk set gets the whole package's wait, since the target imports them one after another.
+    const maxVerifyPolls = this.importPolls(totalItems);
     for (const { ChunkSetId: chunksetId } of chunkSets) {
-      let isSuccessState = false;
-      let verifyData: any = null;
-      let verifyPollCount = 0;
-
-      while (!isSuccessState && verifyPollCount < maxVerifyPolls) {
-        verifyPollCount++;
-        const verifyRes = await fetch('/api/migrate/verify', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            targetHost: this.config.targetHost,
-            targetClientId: this.config.targetClientId,
-            targetClientSecret: this.config.targetClientSecret,
-            targetAuthority: this.config.targetAuthority,
-            targetAudience: this.config.targetAudience,
-            transferId: this.config.transferId,
-            chunksetId
-          })
-        });
-
-        if (!verifyRes.ok) {
-          const errText = await verifyRes.text();
-          throw new Error(`Failed to verify target blob state: ${errText}`);
-        }
-
-        verifyData = await verifyRes.json();
-        isSuccessState = verifyData.BlobState === 'Transferred' || verifyData.BlobState === 'Consumed';
-
-        this.log(`Verification completed (${chunksetId}). BlobState: ${verifyData.BlobState}, Error: ${verifyData.Error}`,
-          isSuccessState ? 'success' : verifyData.BlobState === 'Initializing' ? 'info' : 'warning');
-
-        if (!isSuccessState) {
-          if (verifyData.BlobState === 'Initializing') {
-            await delay(3000);
-          } else {
-            break;
-          }
-        }
-      }
-
-      if (!isSuccessState) {
-        throw new Error(`Blob transfer verification state for chunkset ${chunksetId} is ${verifyData?.BlobState || 'unknown'}. Error: ${verifyData?.Error}`);
-      }
+      await this.verifyImport(chunksetId, locations.get(chunksetId), maxVerifyPolls, chunksetId);
     }
 
     this.step(5, 'done');
     this.progress(100);
     this.log('🎉 Live Content Migration completed successfully!', 'success');
+    if (itemsSkipped > 0) {
+      this.log(`Sitecore skipped ${itemsSkipped.toLocaleString('en-US')} of ${(itemsProcessed + itemsSkipped).toLocaleString('en-US')} items while packaging (items that failed or were filtered out). Check those items before relying on this transfer.`, 'warning');
+    }
     return true;
   }
 
@@ -763,6 +849,9 @@ export class MigrationService {
         throw new Error(`Failed to consume items on target: ${errText}`);
       }
 
+      const consumeData = await consumeRes.json().catch(() => ({}));
+      const location = typeof consumeData.location === 'string' ? consumeData.location : undefined;
+
       this.log(`Items successfully consumed into database: ${this.config.database}`, 'success');
       this.step(2, 'done');
       this.progress(75);
@@ -771,51 +860,8 @@ export class MigrationService {
       this.step(3, 'running');
       this.log('[Step 4/4] Verifying target blob state...', 'info');
 
-      let isSuccessState = false;
-      let verifyData: any = null;
-      let verifyPollCount = 0;
-      const maxVerifyPolls = 600; // 600 * 3s = 30 minutes
-      const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
-
-      while (!isSuccessState && verifyPollCount < maxVerifyPolls) {
-        verifyPollCount++;
-        const verifyRes = await fetch('/api/migrate/verify', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            targetHost: this.config.targetHost,
-            targetClientId: this.config.targetClientId,
-            targetClientSecret: this.config.targetClientSecret,
-            targetAuthority: this.config.targetAuthority,
-            targetAudience: this.config.targetAudience,
-            transferId: this.config.transferId,
-            chunksetId
-          })
-        });
-
-        if (!verifyRes.ok) {
-          const errText = await verifyRes.text();
-          throw new Error(`Failed to verify target blob state: ${errText}`);
-        }
-
-        verifyData = await verifyRes.json();
-        isSuccessState = verifyData.BlobState === 'Transferred' || verifyData.BlobState === 'Consumed';
-
-        this.log(`Verification completed. BlobState: ${verifyData.BlobState}, Error: ${verifyData.Error}`, 
-          isSuccessState ? 'success' : verifyData.BlobState === 'Initializing' ? 'info' : 'warning');
-
-        if (!isSuccessState) {
-          if (verifyData.BlobState === 'Initializing') {
-            await delay(3000);
-          } else {
-            break;
-          }
-        }
-      }
-
-      if (!isSuccessState) {
-        throw new Error(`Blob transfer verification state is ${verifyData?.BlobState || 'unknown'}. Error: ${verifyData?.Error}`);
-      }
+      // The install flow has no item count, so it waits the base 30 minutes.
+      await this.verifyImport(chunksetId, location, this.importPolls(0));
 
       this.step(3, 'done');
       this.progress(100);
