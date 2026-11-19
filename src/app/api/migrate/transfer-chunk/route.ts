@@ -54,6 +54,10 @@ export async function POST(request: Request) {
     if (match) {
       isMedia = match[1].toLowerCase() === 'true';
     }
+    // ponytail: the docs name these header parameters but not their format; parsed like IsMedia (Name=value). Absent counts as 0.
+    const count = (name: string) => Number(new RegExp(`${name}\\s*=\\s*"?(\\d+)`, 'i').exec(contentDisposition)?.[1] ?? 0);
+    const itemsProcessed = count('ItemsProcessed');
+    const itemsSkipped = count('ItemsSkipped');
 
     const arrayBuffer = await downloadRes.arrayBuffer();
     const buffer = Buffer.from(arrayBuffer);
@@ -76,7 +80,7 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: `Target chunk upload failed: ${errText}` }, { status: uploadRes.status });
     }
 
-    return NextResponse.json({ success: true, isMedia });
+    return NextResponse.json({ success: true, isMedia, itemsProcessed, itemsSkipped });
   } catch (error) {
     console.error('[API Transfer Chunk Error]', error);
     return NextResponse.json({ error: error instanceof Error ? error.message : String(error) }, { status: 500 });
