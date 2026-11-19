@@ -29,7 +29,7 @@ export function referencesIn(value: string): { ids: string[]; paths: string[] } 
 }
 
 // Lookups go in as literals: the API's ID argument isn't typed as a String, so a String! variable wouldn't fit it.
-const item = (alias: string, by: 'path' | 'itemId', value: string, body: string) =>
+export const item = (alias: string, by: 'path' | 'itemId', value: string, body: string) =>
   `  ${alias}: item(where: { ${by}: ${JSON.stringify(value)}, database: "master" }) { ${body} }`;
 const FIELDS = 'itemId fields(excludeStandardFields: true) { nodes { value } } r: field(name: "__Renderings") { value } f: field(name: "__Final Renderings") { value }';
 

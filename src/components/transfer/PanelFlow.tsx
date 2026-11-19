@@ -14,6 +14,7 @@ import { Card } from '@/components/ui/card';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Skeleton } from '@/components/ui/skeleton';
+import { withHistory, type RunRecord } from '@/lib/history';
 import { Icon } from '@/lib/icon';
 import { readPackage } from '@/lib/package';
 import { addMissingParents } from '@/lib/preflight';
@@ -203,8 +204,13 @@ export function PanelFlow({ client, pageName, pagePath }: Props) {
       download(pkg.blob, pkg.name);
     };
     const labels = [...(backup.length ? ['Back up target'] : []), ...TRANSFER_STEPS, ...(publishOn ? ['Publish to Experience Edge'] : [])];
-    void runner.start({ labels, source, targets: [target] }, (cb, signal) =>
-      runTransfer(client, { source, targets: [{ env: target, backup }], database: DATABASE, dataTrees, publish: publishOn }, { ...cb, onBackup }, signal),
+    // The backup step, when there is one, moves the import along by one.
+    const record: RunRecord = { kind: 'transfer', source, targets: [target], importAt: [IMPORT_STEP.transfer + (backup.length ? 1 : 0)], items: dataTrees };
+    void runner.start(
+      { labels, source, targets: [target] },
+      withHistory(client, record, (cb, signal) =>
+        runTransfer(client, { source, targets: [{ env: target, backup }], database: DATABASE, dataTrees, publish: publishOn }, { ...cb, onBackup }, signal),
+      ),
     );
   };
 
@@ -318,6 +324,8 @@ export function PanelFlow({ client, pageName, pagePath }: Props) {
           preflight={preflight}
           source={source!}
           target={target}
+          client={client ?? undefined}
+          writeConfirmed={!needsProdConfirm(target) || prodChecked}
           onAddParents={
             preflight?.status === 'done'
               ? () => setExtra(addMissingParents(dataTrees, preflight.checks).filter((t) => t.itemPath !== held.path))

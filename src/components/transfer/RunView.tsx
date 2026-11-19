@@ -6,15 +6,18 @@ import { Progress } from '@/components/ui/progress';
 import { Spinner } from '@/components/ui/spinner';
 import { Icon } from '@/lib/icon';
 import type { Env } from '@/lib/sdk';
-import type { LogType, StepStatus } from '@/lib/transfer';
+import { backgroundNote, skippedWarning, type LogType, type StepStatus } from '@/lib/transfer';
 import { cn } from '@/lib/utils';
 import { mdiAlertCircle, mdiCheck, mdiChevronDown } from '@mdi/js';
 import { useEffect, useId, useRef, useState, type ElementType } from 'react';
 
 export type LogLine = { text: string; type: LogType; time: string };
 export type RunKind = 'transfer' | 'export' | 'install' | 'restore';
-/** What the package holds; leave out `itemCount` when it isn't known (a bare .raif has no item list). */
-export type RunInfo = { chunkCount: number; itemCount?: number };
+/**
+ * What the package holds; leave out `itemCount` when it isn't known (a bare .raif has no item list). `processed` and
+ * `skipped`: the items Sitecore packaged and skipped, when it skipped some.
+ */
+export type RunInfo = { chunkCount: number; itemCount?: number; processed?: number; skipped?: number };
 /** A target the run backed up first: offers its backup again and, with `onRestore`, Restore (which asks first). */
 export type RunBackup = { target: Env; onDownload(): void; onRestore?(): void };
 
@@ -356,6 +359,8 @@ export function RunView({
   if (result === 'success') {
     // Steps that failed without failing the run (publishing): say so, since the result card doesn't show the steps.
     const unfinished = steps.filter((s) => s.status === 'fail').map((s) => s.label);
+    // The import ends once the items can be used; a big one still has Sitecore writing them for a while.
+    const background = kind === 'transfer' && info?.itemCount ? backgroundNote(info.itemCount, (targets ?? []).map((t) => t.name)) : null;
     const stats = [
       info?.itemCount !== undefined && (['Items', info.itemCount] as const),
       info && (['Chunks', info.chunkCount] as const),
@@ -374,6 +379,12 @@ export function RunView({
               {`${listOf(unfinished)} didn't finish. See the activity log.`}
             </p>
           )}
+          {!!info?.skipped && (
+            <p className="text-warning-700 max-w-[520px] text-sm leading-normal font-medium break-words">
+              {skippedWarning({ processed: info.processed ?? 0, skipped: info.skipped }, from, w.noun)}
+            </p>
+          )}
+          {background && <p className="text-neutral-fg max-w-[520px] text-sm leading-normal break-words">{background}</p>}
           {backupNote('to undo the transfer')}
           {stats.length > 0 && (
             <dl className="mt-2 flex w-full flex-wrap gap-3 text-left">

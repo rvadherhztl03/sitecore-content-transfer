@@ -1,3 +1,4 @@
+import { inParallel } from '@/lib/parallel';
 import { sameId } from '@/lib/preflight';
 import { graphql, type Env, type SdkClient } from '@/lib/sdk';
 import type { DataTree } from '@/lib/transfer';
@@ -38,16 +39,16 @@ async function rootOf(client: SdkClient, env: Env, path: string): Promise<Node |
   return ((await graphql(client, env, `query CompareRoot {\n${item('root', path, ITEM)}\n}`, {})) ?? {}).root ?? null;
 }
 
-// The children of each parent, in order, `BATCH` parents per query.
-async function childrenOf(client: SdkClient, env: Env, parents: string[]): Promise<Node[][]> {
-  const out: Node[][] = [];
-  for (let i = 0; i < parents.length; i += BATCH) {
-    const batch = parents.slice(i, i + BATCH);
+// The children of each parent, in order, `BATCH` parents per query and PARALLEL queries at a time.
+async function childrenOf(client: SdkClient, env: Env, parents: string[], signal?: AbortSignal): Promise<Node[][]> {
+  const batches = Array.from({ length: Math.ceil(parents.length / BATCH) }, (_, i) => parents.slice(i * BATCH, (i + 1) * BATCH));
+  const out: Node[][][] = [];
+  await inParallel(batches, async (batch, i) => {
     const q = `query CompareLevel {\n${batch.map((p, j) => item(`c${j}`, p, `children(first: 1000) { nodes { ${ITEM} } }`)).join('\n')}\n}`;
     const data = (await graphql(client, env, q, {})) ?? {};
-    batch.forEach((_, j) => out.push(data[`c${j}`]?.children?.nodes ?? []));
-  }
-  return out;
+    out[i] = batch.map((_, j) => data[`c${j}`]?.children?.nodes ?? []);
+  }, signal);
+  return out.flat();
 }
 
 const side = (n?: Node): Side | undefined => n && { id: n.itemId, revision: n.r?.value ?? undefined, updated: n.u?.value ?? undefined };
@@ -60,6 +61,24 @@ function entry(s: Node | undefined, t: Node | undefined, depth: number): Compare
   const newer = status === 'changed' && a!.updated && b!.updated && a!.updated !== b!.updated ? (a!.updated > b!.updated ? 'source' : 'target') : undefined;
   return { path: n.path, name: n.name, depth, status, ...(newer && { newer }), source: a, target: b };
 }
+
+/**
+ * The `__Updated` stamp ("yyyyMMddTHHmmssZ", UTC) of the start of `day` (YYYY-MM-DD) in local time, or undefined when
+ * `day` isn't a date (an empty or cleared date input).
+ */
+export function startOfDay(day: string): string | undefined {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(day);
+  if (!m) return undefined;
+  const d = new Date(+m[1], +m[2] - 1, +m[3]);
+  return Number.isNaN(d.getTime()) ? undefined : d.toISOString().replace(/[-:]|\.\d+/g, '');
+}
+
+/**
+ * Whether the item's source side was updated on or after `since` (a `startOfDay` stamp). An item with no source side,
+ * or none that reports `__Updated`, never is. Only the date and time to the second are compared: Sitecore can add
+ * milliseconds after them ("20261119T143000:123Z"), which would sort wrongly against a stamp that has none.
+ */
+export const changedSince = (item: CompareItem, since: string) => !!item.source?.updated && item.source.updated.slice(0, 15) >= since.slice(0, 15);
 
 // Parents before children, siblings by name.
 function byTree(a: CompareItem, b: CompareItem) {
@@ -101,8 +120,8 @@ export async function compareTrees(
     const withS = level.filter((n) => n.s);
     const withT = level.filter((n) => n.t);
     const [sKids, tKids] = await Promise.all([
-      childrenOf(client, source, withS.map((n) => n.s!.path)),
-      childrenOf(client, target, withT.map((n) => n.t!.path)),
+      childrenOf(client, source, withS.map((n) => n.s!.path), signal),
+      childrenOf(client, target, withT.map((n) => n.t!.path), signal),
     ]);
     signal?.throwIfAborted();
     // Pair each parent's children by path: the source's in order, then those only the target has.

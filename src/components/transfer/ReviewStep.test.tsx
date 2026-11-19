@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { ProdConfirm, ReviewStep, needsProdConfirm } from '@/components/transfer/ReviewStep';
 import type { Preflight } from '@/components/transfer/usePreflight';
@@ -250,5 +250,57 @@ describe('ReviewStep with several targets', () => {
     expect(screen.getAllByRole('button', { name: /^Show changes/ }).map((b) => b.getAttribute('aria-label'))).toEqual([
       `Show changes to ${HERO.itemPath} on Acme · QA`,
     ]);
+  });
+});
+
+describe('ReviewStep locks, approval and languages', () => {
+  const UAT: Env = { id: 'uat', name: 'Acme · UAT', contextId: 'cu', tenantName: 'acme-uat' };
+  const FR = { code: 'fr-FR', label: 'French (fr-FR)', body: { languageCode: 'fr', regionCode: 'FR' } };
+  const done = (extra: Partial<Extract<Preflight, { status: 'done' }>> = {}): Preflight => ({
+    status: 'done',
+    checks: new Map([[HOME.itemPath, { itemPath: HOME.itemPath, onSource: true, onTarget: 'same', missingParents: [], otherParents: [], deleted: [] }]]),
+    ...extra,
+  });
+  const unapproved = [{ itemPath: HOME.itemPath, state: 'Draft' }];
+
+  it('shows what is locked and which languages are missing for each target, and what is not approved once', () => {
+    const qa = done({ locked: [{ itemPath: HOME.itemPath, lockedBy: 'sitecore\\jane' }], unapproved, languages: [FR] });
+    setup({ targets: [QA, UAT], trees: [HOME], preflights: { [QA.id]: qa, [UAT.id]: done({ locked: [{ itemPath: HOME.itemPath }], unapproved, languages: [FR] }) } });
+    expect(screen.getAllByRole('note', { name: 'Not approved on Acme · Development' })).toHaveLength(1);
+    expect(screen.getByRole('note', { name: 'Locked on Acme · QA' })).toHaveTextContent('sitecore\\jane');
+    expect(screen.getByRole('note', { name: 'Locked on Acme · UAT' })).toBeInTheDocument();
+    expect(screen.getByRole('note', { name: "Language Acme · QA doesn't have" })).toBeInTheDocument();
+    expect(screen.getByRole('note', { name: "Language Acme · UAT doesn't have" })).toBeInTheDocument();
+  });
+
+  it('offers to add the languages only with a client, on the target that lacks them, and checks that target again', async () => {
+    const recheck = vi.fn(async () => {});
+    const preflights = { [QA.id]: done({ languages: [FR], recheck }), [UAT.id]: done() };
+    const { client, calls } = fakeClient({ 'xmc.sites.createLanguage': () => ({ data: {} }) });
+
+    const { unmount } = render(
+      <ReviewStep mode="transfer" source={DEV} targets={[QA, UAT]} database="master" trees={[HOME]} prodChecked={[]} onProdChecked={() => {}} onEdit={() => {}} preflights={preflights} />,
+    );
+    expect(screen.queryByRole('button', { name: /^Add it to/ })).not.toBeInTheDocument();
+    unmount();
+
+    setup({ targets: [QA, UAT], trees: [HOME], preflights, client });
+    fireEvent.click(screen.getByRole('button', { name: 'Add it to Acme · QA' }));
+    await waitFor(() => expect(recheck).toHaveBeenCalledOnce());
+    expect(calls.map((c) => [c.key, c.params.query.sitecoreContextId, c.params.body])).toEqual([['xmc.sites.createLanguage', 'cq', FR.body]]);
+  });
+
+  it("keeps a production target's button off until that target's box is ticked", () => {
+    const { client } = fakeClient({ 'xmc.sites.createLanguage': () => ({ data: {} }) });
+    const preflights = { [QA.id]: done({ languages: [FR] }), [PROD.id]: done({ languages: [FR] }) };
+    setup({ targets: [QA, PROD], trees: [HOME], preflights, client, prodChecked: [] });
+    expect(screen.getByRole('button', { name: 'Add it to Acme · QA' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Add it to Acme · Production' })).toBeDisabled();
+  });
+
+  it("enables a production target's button once its box is ticked", () => {
+    const { client } = fakeClient({ 'xmc.sites.createLanguage': () => ({ data: {} }) });
+    setup({ targets: [PROD], trees: [HOME], preflights: { [PROD.id]: done({ languages: [FR] }) }, client, prodChecked: [PROD.id] });
+    expect(screen.getByRole('button', { name: 'Add it to Acme · Production' })).toBeEnabled();
   });
 });

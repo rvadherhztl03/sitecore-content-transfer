@@ -1,9 +1,11 @@
 import JSZip from 'jszip';
 
 export type PackageItem = { path: string; id: string; scope: string; mergeStrategy: string };
-export type ChunkData = { chunkSet: number; index: number; isMedia: boolean; data: Blob };
-export type PackagePart = { chunks: { data: Blob; isMedia: boolean }[] };
-type ChunkEntry = { chunkSet: number; index: number; isMedia: boolean; offset: number; length: number };
+// `itemCount`: the items Sitecore wrote into the chunk (its ItemsProcessed), when it said.
+export type ChunkData = { chunkSet: number; index: number; isMedia: boolean; data: Blob; itemCount?: number };
+// `itemCount`: the items in the part, when every chunk of it has a count (older packages and bare .raif have none).
+export type PackagePart = { chunks: { data: Blob; isMedia: boolean }[]; itemCount?: number };
+type ChunkEntry = { chunkSet: number; index: number; isMedia: boolean; offset: number; length: number; itemCount?: number };
 type LegacyItem = { ItemPath: string; ItemId: string; Scope: string; MergeStrategy: string };
 
 // Packages without a chunk map (old zips, bare .raif) are uploaded in slices of this size.
@@ -12,8 +14,8 @@ export const LEGACY_SLICE = 1024 * 1024;
 export async function buildPackage(chunks: ChunkData[], items: PackageItem[]): Promise<Blob> {
   const sorted = [...chunks].sort((a, b) => a.chunkSet - b.chunkSet || a.index - b.index);
   let offset = 0;
-  const map: ChunkEntry[] = sorted.map(({ chunkSet, index, isMedia, data }) => {
-    const entry = { chunkSet, index, isMedia, offset, length: data.size };
+  const map: ChunkEntry[] = sorted.map(({ chunkSet, index, isMedia, data, itemCount }) => {
+    const entry = { chunkSet, index, isMedia, offset, length: data.size, itemCount };
     offset += data.size;
     return entry;
   });
@@ -60,8 +62,10 @@ async function unpack(file: Blob & { name: string }): Promise<{ items: PackageIt
   if (!mapEntry) return { items, parts: [{ chunks: slices(raif) }] };
   const parts = new Map<number, PackagePart>();
   for (const e of JSON.parse(await mapEntry.async('text')) as ChunkEntry[]) {
-    if (!parts.has(e.chunkSet)) parts.set(e.chunkSet, { chunks: [] });
-    parts.get(e.chunkSet)!.chunks.push({ data: raif.slice(e.offset, e.offset + e.length), isMedia: e.isMedia });
+    if (!parts.has(e.chunkSet)) parts.set(e.chunkSet, { chunks: [], itemCount: 0 });
+    const part = parts.get(e.chunkSet)!;
+    part.chunks.push({ data: raif.slice(e.offset, e.offset + e.length), isMedia: e.isMedia });
+    part.itemCount = part.itemCount !== undefined && typeof e.itemCount === 'number' ? part.itemCount + e.itemCount : undefined;
   }
   return { items, parts: [...parts.values()] };
 }

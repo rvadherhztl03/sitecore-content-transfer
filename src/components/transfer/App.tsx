@@ -1,4 +1,5 @@
 import { Flow } from '@/components/transfer/Flow';
+import { HistoryView } from '@/components/transfer/HistoryView';
 import { Home, type Screen } from '@/components/transfer/Home';
 import { InstallFlow } from '@/components/transfer/InstallFlow';
 import { AppHeader } from '@/components/transfer/Layout';
@@ -17,11 +18,9 @@ export function App({ client }: { client: SdkClient | null }) {
   if (screen !== 'home' && !ready) setScreen('home');
 
   if (client && ready && screen !== 'home') {
-    return screen === 'install' ? (
-      <InstallFlow client={client} envs={envs} onHome={home} />
-    ) : (
-      <Flow client={client} mode={screen} envs={envs} onHome={home} />
-    );
+    if (screen === 'install') return <InstallFlow client={client} envs={envs} onHome={home} />;
+    if (screen === 'history') return <HistoryView client={client} envs={envs} onHome={home} />;
+    return <Flow client={client} mode={screen} envs={envs} onHome={home} />;
   }
 
   return (

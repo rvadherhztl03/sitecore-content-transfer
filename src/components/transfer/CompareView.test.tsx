@@ -96,6 +96,140 @@ describe('CompareView', () => {
     expect(onAdd).toHaveBeenCalledWith([{ itemPath: `${R}/Home/News/Launch`, scope: 'SingleItem', mergeStrategy: 'KeepExistingItem' }]);
   });
 
+  describe('Changed since', () => {
+    // Dates are days from the one picked below, so the local time zone can't move any across it.
+    const DATED_SOURCE: Record<string, CompareFake> = {
+      ...SOURCE,
+      [`${R}/Data`]: { id: 'data', rev: 'r2', updated: '20261015T120000Z' },
+      [`${R}/Footer`]: { id: 'footer', rev: 'r1', updated: '20261018T120000Z' },
+      [`${R}/Home/News`]: { id: 'news', rev: 'r1', updated: '20261020T120000Z' },
+      [`${R}/Home/News/Launch`]: { id: 'launch', rev: 'r1', updated: '20260901T120000Z' },
+      [`${R}/Home/Promo`]: { id: 'promo', rev: 'r1' },
+    };
+    const ALL = [
+      `Data${R}/DataShow changesChanged · newer on Acme · Dev`,
+      `Footer${R}/FooterDifferent item`,
+      `News${R}/Home/NewsNew on Acme · Dev`,
+      `Launch${R}/Home/News/LaunchNew on Acme · Dev`,
+      `Promo${R}/Home/PromoNew on Acme · Dev`,
+      `Old${R}/OldOnly on Acme · QA`,
+    ];
+    const since = () => screen.getByLabelText('Changed since');
+    const setSince = (value: string) => fireEvent.change(since(), { target: { value } });
+    const listed = async () => {
+      compare();
+      await screen.findByRole('list', { name: 'Differences' });
+    };
+
+    it('is a native date input, empty at first, so every item shows', async () => {
+      setup({ source: DATED_SOURCE });
+      await listed();
+      expect(since()).toHaveAttribute('type', 'date');
+      expect(since()).toHaveValue('');
+      expect(rows()).toEqual(ALL);
+    });
+
+    it('shows only items the source updated since that day, and clearing the date brings the rest back', async () => {
+      setup({ source: DATED_SOURCE });
+      await listed();
+      setSince('2026-10-10');
+      // Launch was updated before, Promo has no __Updated, and Old has no source side.
+      expect(rows()).toEqual([ALL[0], ALL[1], ALL[2]]);
+      setSince('');
+      expect(rows()).toEqual(ALL);
+    });
+
+    it('Select all new and changed picks only those the date shows, and the chips count what it shows', async () => {
+      const { onAdd } = setup({ source: DATED_SOURCE });
+      await listed();
+      expect(chip(/^New on Acme · Dev 3$/)).toBeInTheDocument();
+      setSince('2026-10-10');
+      // News only: Launch was updated before the date and Promo has no __Updated. Only on has no source side.
+      expect(chip(/^New on Acme · Dev 1$/)).toBeInTheDocument();
+      expect(chip(/^Changed 1$/)).toBeInTheDocument();
+      expect(chip(/^Only on Acme · QA 0$/)).toBeInTheDocument();
+      fireEvent.click(screen.getByRole('button', { name: 'Select all new and changed' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Add 2 to the list' }));
+      expect(onAdd).toHaveBeenCalledWith([
+        { itemPath: `${R}/Data`, scope: 'SingleItem', mergeStrategy: 'OverrideExistingItem' },
+        { itemPath: `${R}/Home/News`, scope: 'SingleItem', mergeStrategy: 'KeepExistingItem' },
+      ]);
+    });
+
+    it('works with the Show chips', async () => {
+      setup({ source: DATED_SOURCE });
+      await listed();
+      setSince('2026-10-10');
+      fireEvent.click(chip(/^Changed 1$/));
+      expect(rows()).toEqual([ALL[1], ALL[2]]);
+      fireEvent.click(chip(/^Changed 1$/));
+      expect(rows()).toEqual([ALL[0], ALL[1], ALL[2]]);
+    });
+
+    it('says when nothing shown was updated since that day', async () => {
+      setup({ source: DATED_SOURCE });
+      await listed();
+      setSince('2027-01-01');
+      expect(screen.queryByRole('listitem')).not.toBeInTheDocument();
+      expect(screen.getByText('No shown items were updated on Acme · Dev since 2027-01-01.')).toBeInTheDocument();
+      setSince('');
+      expect(screen.queryByText(/No shown items/)).not.toBeInTheDocument();
+      expect(rows()).toEqual(ALL);
+    });
+
+    it('still says when the comparison stopped at the limit', async () => {
+      setup({ source: DATED_SOURCE, limit: 3 });
+      await listed();
+      setSince('2026-10-10');
+      expect(screen.getByText('Showing the first 3 items. Compare a smaller section to see the rest.')).toBeInTheDocument();
+    });
+
+    it('Pick all shown picks only the new and changed items on show, and adds to what is picked', async () => {
+      const { onAdd } = setup({ source: DATED_SOURCE });
+      await listed();
+      setSince('2026-10-10');
+      fireEvent.click(screen.getByRole('button', { name: 'Pick all shown' }));
+      // Data and News; Launch and Promo are out of view, and Footer is a different item.
+      expect(screen.getByRole('checkbox', { name: `Pick ${R}/Data` })).toBeChecked();
+      expect(screen.getByRole('checkbox', { name: `Pick ${R}/Home/News` })).toBeChecked();
+      expect(screen.getByRole('button', { name: 'Add 2 to the list' })).toBeEnabled();
+
+      setSince('');
+      expect(screen.getByRole('checkbox', { name: `Pick ${R}/Home/News/Launch` })).not.toBeChecked();
+      fireEvent.click(screen.getByRole('button', { name: 'Pick all shown' }));
+      expect(screen.getByRole('button', { name: 'Add 4 to the list' })).toBeEnabled();
+      fireEvent.click(screen.getByRole('button', { name: 'Add 4 to the list' }));
+      expect(onAdd).toHaveBeenCalledWith([
+        { itemPath: `${R}/Data`, scope: 'SingleItem', mergeStrategy: 'OverrideExistingItem' },
+        { itemPath: `${R}/Home/News`, scope: 'ItemAndDescendants', mergeStrategy: 'KeepExistingItem' },
+        { itemPath: `${R}/Home/Promo`, scope: 'SingleItem', mergeStrategy: 'KeepExistingItem' },
+      ]);
+    });
+
+    it('a new item picked without the items under it that are out of view goes in alone', async () => {
+      const { onAdd } = setup({ source: DATED_SOURCE });
+      await listed();
+      setSince('2026-10-10');
+      fireEvent.click(screen.getByRole('button', { name: 'Pick all shown' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Add 2 to the list' }));
+      expect(onAdd).toHaveBeenCalledWith([
+        { itemPath: `${R}/Data`, scope: 'SingleItem', mergeStrategy: 'OverrideExistingItem' },
+        { itemPath: `${R}/Home/News`, scope: 'SingleItem', mergeStrategy: 'KeepExistingItem' },
+      ]);
+    });
+
+    it('Pick all shown follows the Show chips, and is off when nothing pickable is shown', async () => {
+      setup({ source: DATED_SOURCE });
+      await listed();
+      fireEvent.click(chip(/^Changed 1$/));
+      fireEvent.click(screen.getByRole('button', { name: 'Pick all shown' }));
+      expect(screen.getByRole('button', { name: 'Add 3 to the list' })).toBeEnabled();
+      expect(screen.getByRole('checkbox', { name: `Pick ${R}/Home/News` })).toBeChecked();
+      fireEvent.click(chip(/^New on Acme · Dev 3$/));
+      expect(screen.getByRole('button', { name: 'Pick all shown' })).toBeDisabled();
+    });
+  });
+
   it('shows progress, and Stop ends the comparison', async () => {
     let release!: () => void;
     const reply = compareReply({ 'ctx-dev': SOURCE, 'ctx-qa': TARGET });

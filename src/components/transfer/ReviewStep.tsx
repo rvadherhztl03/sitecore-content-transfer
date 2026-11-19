@@ -150,7 +150,7 @@ type Props = {
   backup?: BackupChoiceProps;
   /** The "Publish to Experience Edge when done" choice (transfer only). */
   publish?: Omit<PublishChoiceProps, 'targets'>;
-  /** Reads field values for "Show changes" on items the transfer overwrites (transfer only). */
+  /** Reads field values for "Show changes" on items the transfer overwrites, and adds the languages a target lacks (transfer only). */
   client?: SdkClient;
 };
 
@@ -228,6 +228,8 @@ export function ReviewStep({ mode, source, targets = [], database, trees, prodCh
             target={t}
             // What concerns only the source is said once, with the first finished check.
             sourceNotes={t.id === to.find(checksOf)?.id}
+            client={client}
+            writeConfirmed={!needsProdConfirm(t) || prodChecked.includes(t.id)}
             onAddParents={fix(t, addMissingParents)}
             onRemoveNotFound={fix(t, removeNotFound)}
             onAddRelated={related && onTreesChange ? () => onTreesChange(addRelated(trees, related)) : undefined}

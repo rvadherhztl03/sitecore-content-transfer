@@ -1,7 +1,7 @@
 // @vitest-environment node
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { describe, expect, it } from 'vitest';
-import { compareTrees, rowsFor, type CompareItem } from '@/lib/compare';
+import { changedSince, compareTrees, rowsFor, startOfDay, type CompareItem, type Side } from '@/lib/compare';
 import { compareReply, fakeClient, type CompareFake } from '@/test/fakeClient';
 
 const DEV = { id: 'd', name: 'Dev', contextId: 'ctx-dev' };
@@ -70,6 +70,33 @@ describe('compareTrees', () => {
     }
   });
 
+  it('gives the same items when a level has many parents, asked in batches that finish in any order', async () => {
+    const source: Record<string, CompareFake> = { [R]: { id: 'root', rev: 'r1' } };
+    const target: Record<string, CompareFake> = { [R]: { id: 'root', rev: 'r1' } };
+    const expected: unknown[][] = [['/', 'same', '', 0]];
+    for (let i = 0; i < 250; i++) {
+      const p = `/P${String(i).padStart(3, '0')}`;
+      source[R + p] = target[R + p] = { id: `p${i}`, rev: 'r1' };
+      source[`${R}${p}/C`] = { id: `c${i}`, rev: 'r1' };
+      // Every fifth child is only on the source; of the rest, every third has changed on the target.
+      if (i % 5) target[`${R}${p}/C`] = { id: `c${i}`, rev: i % 3 ? 'r1' : 'r2' };
+      expected.push([p, 'same', '', 1], [`${p}/C`, i % 5 === 0 ? 'new' : i % 3 ? 'same' : 'changed', '', 2]);
+    }
+    const reply = compareReply({ 'ctx-dev': source, 'ctx-qa': target });
+    let n = 0;
+    // Each of the source's queries answers sooner than the one before, so a level's later batches finish first there, while
+    // the target answers in order.
+    const slow = (p: any) => (p.query.sitecoreContextId === 'ctx-dev' ? Math.max(0, 40 - n++) : 0);
+    const { client, calls } = fakeClient({ [GQL]: async (p) => (await new Promise((r) => setTimeout(r, slow(p))), reply(p)) });
+
+    const { items, truncated } = await compareTrees(client, DEV, QA, R);
+    expect(truncated).toBe(false);
+    expect(brief(items)).toEqual(expected);
+    // At most 100 parents a query: the 250 parents, then their 250 children, go in batches of 100, 100 and 50.
+    const sizes = (calls as any[]).filter((c) => c.params.query.sitecoreContextId === 'ctx-dev').map((c) => (c.params.body.query as string).split('item(where').length - 1);
+    expect(sizes).toEqual([1, 1, 100, 100, 50, 100, 100, 50]);
+  });
+
   it('stops at the limit and says so', async () => {
     const { client } = setup();
     const progress: number[] = [];
@@ -88,6 +115,57 @@ describe('compareTrees', () => {
   it('says when neither environment has the starting point', async () => {
     const { client } = setup();
     await expect(compareTrees(client, DEV, QA, '/sitecore/content/Nope')).rejects.toThrow("/sitecore/content/Nope isn't on Dev or QA.");
+  });
+});
+
+describe('startOfDay', () => {
+  const inZone = (tz: string, run: () => void) => {
+    const was = process.env.TZ;
+    process.env.TZ = tz;
+    try {
+      run();
+    } finally {
+      if (was === undefined) delete process.env.TZ;
+      else process.env.TZ = was;
+    }
+  };
+
+  it('gives the start of the local day as a UTC __Updated stamp', () => {
+    inZone('UTC', () => expect(startOfDay('2026-11-19')).toBe('20261119T000000Z'));
+    // Midnight in New York is 05:00 UTC in November (EST) and 04:00 UTC in July (EDT); in Tokyo it is the day before.
+    inZone('America/New_York', () => {
+      expect(startOfDay('2026-11-19')).toBe('20261119T050000Z');
+      expect(startOfDay('2026-07-04')).toBe('20260704T040000Z');
+    });
+    inZone('Asia/Tokyo', () => expect(startOfDay('2026-11-19')).toBe('20261118T150000Z'));
+  });
+
+  it('gives nothing for anything that is not a date', () => {
+    for (const day of ['', '2026-11', '19/11/2026', 'soon']) expect(startOfDay(day)).toBeUndefined();
+  });
+});
+
+describe('changedSince', () => {
+  const item = (source?: Side): CompareItem => ({ path: `${R}/x`, name: 'x', depth: 1, status: 'changed', source });
+  const SINCE = '20261119T050000Z';
+
+  it('keeps items whose source was updated on or after the start of the day', () => {
+    expect(changedSince(item({ id: 'a', updated: '20261119T050000Z' }), SINCE)).toBe(true);
+    expect(changedSince(item({ id: 'a', updated: '20261119T143000Z' }), SINCE)).toBe(true);
+    expect(changedSince(item({ id: 'a', updated: '20271001T000000Z' }), SINCE)).toBe(true);
+    expect(changedSince(item({ id: 'a', updated: '20261119T045959Z' }), SINCE)).toBe(false);
+    expect(changedSince(item({ id: 'a', updated: '20260101T000000Z' }), SINCE)).toBe(false);
+  });
+
+  it('ignores milliseconds, which would otherwise sort before the stamp', () => {
+    expect(changedSince(item({ id: 'a', updated: '20261119T050000:123Z' }), SINCE)).toBe(true);
+    expect(changedSince(item({ id: 'a', updated: '20261119T045959:999Z' }), SINCE)).toBe(false);
+  });
+
+  it('drops items with no source side or no __Updated, whatever the target has', () => {
+    expect(changedSince(item(undefined), SINCE)).toBe(false);
+    expect(changedSince(item({ id: 'a' }), SINCE)).toBe(false);
+    expect(changedSince({ ...item(undefined), status: 'onlyTarget', target: { id: 'a', updated: '20271001T000000Z' } }, SINCE)).toBe(false);
   });
 });
 

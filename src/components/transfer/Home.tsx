@@ -7,11 +7,11 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { Icon } from '@/lib/icon';
 import type { Env } from '@/lib/sdk';
 import { cn } from '@/lib/utils';
-import { mdiDatabaseArrowRight, mdiDownload, mdiUpload } from '@mdi/js';
+import { mdiDatabaseArrowRight, mdiDownload, mdiHistory, mdiUpload } from '@mdi/js';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 
-export type Screen = 'transfer' | 'export' | 'install';
+export type Screen = 'transfer' | 'export' | 'install' | 'history';
 type Props = { envs: Env[]; loading: boolean; error: string | null; onRetry(): void; onOpen(screen: Screen): void };
 
 const MISSING_ENV = 'Missing an environment? Grant this app access to it in Cloud Portal, then reopen the app.';
@@ -45,6 +45,13 @@ const CARDS = [
     body: 'Upload a .zip or .raif package and install it into one of your environments.',
     action: 'Install a package',
   },
+  {
+    screen: 'history',
+    icon: mdiHistory,
+    title: 'Transfer history',
+    body: 'See what was moved into each environment, who moved it and when.',
+    action: 'View history',
+  },
 ] as const;
 
 /** The start screen: what to do, and which environments the app can reach. */
@@ -52,7 +59,7 @@ export function Home({ envs, loading, error, onRetry, onOpen }: Props) {
   // The v1 page's "Back to version 2" returns to this extension page.
   const pathname = usePathname();
   const ready = !loading && !error;
-  // Export and install need one environment; a transfer needs two.
+  // Export, install and history need one environment; a transfer needs two.
   const canOpen = (screen: Screen) => ready && envs.length >= (screen === 'transfer' ? 2 : 1);
 
   return (
@@ -73,7 +80,7 @@ export function Home({ envs, loading, error, onRetry, onOpen }: Props) {
             <article
               key={screen}
               className={cn(
-                'flex min-w-0 flex-[1_1_300px] flex-col gap-4 rounded-[14px] border bg-white p-6',
+                'flex min-w-0 flex-[1_1_240px] flex-col gap-4 rounded-[14px] border bg-white p-6',
                 primary && 'border-primary shadow-[0_1px_2px_rgba(20,20,40,0.04),0_8px_24px_rgba(110,63,255,0.08)]',
               )}
             >

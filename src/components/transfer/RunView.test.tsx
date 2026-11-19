@@ -545,3 +545,61 @@ describe('RunView unfinished steps', () => {
     ).toBeInTheDocument();
   });
 });
+
+describe('RunView background write note', () => {
+  const NOTE = /in the background/;
+  const BIG = { info: { chunkCount: 40, itemCount: 20000 } };
+
+  it('a finished transfer with enough items says they can be used and how long Sitecore writes them', () => {
+    done('transfer', BIG);
+    expect(
+      screen.getByText(
+        "The 20,000 items are in Acme · QA and can be used now. Sitecore keeps writing them to the database in the background for about 67 minutes; until then Acme · QA may answer slowly, and another transfer into it waits its turn. This tab doesn't need to stay open for it.",
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it('names every target, and says it is on each', () => {
+    const UAT: Env = { id: 'uat', name: 'Acme · UAT', contextId: 'c4' };
+    done('transfer', { ...BIG, targets: [QA, UAT] });
+    expect(screen.getByText(/^The 20,000 items are in Acme · QA and Acme · UAT and can be used now\..* for about 67 minutes on each; until then Acme · QA and Acme · UAT may answer slowly, and another transfer into them waits its turn\./)).toBeInTheDocument();
+  });
+
+  it('says nothing while the transfer runs, even during the import', () => {
+    const transfer = ['Copy chunks to Acme · QA', 'Import into master', 'Verify'].map((label, i) => ({ label, status: (['done', 'running', 'pending'] as const)[i] }));
+    setup({ ...BIG, steps: transfer });
+    expect(screen.queryByText(NOTE)).not.toBeInTheDocument();
+    expect(screen.queryByText(/takes about/)).not.toBeInTheDocument();
+  });
+
+  it.each([
+    ['under 2 minutes of writing', 'transfer' as const, { info: { chunkCount: 4, itemCount: 224 } }],
+    ['without an item count', 'transfer' as const, { info: { chunkCount: 40 } }],
+    ['for an export', 'export' as const, BIG],
+    ['for an install', 'install' as const, BIG],
+  ])('says nothing %s', (_n, kind, props) => {
+    done(kind, props);
+    expect(screen.queryByText(NOTE)).not.toBeInTheDocument();
+  });
+
+  it('says nothing once the run failed', () => {
+    setup({ ...BIG, running: false, result: 'fail' });
+    expect(screen.queryByText(NOTE)).not.toBeInTheDocument();
+  });
+});
+
+describe('RunView skipped items', () => {
+  it.each(['transfer', 'export'] as const)('a %s that skipped items says so on the result', (kind) => {
+    done(kind, { info: { chunkCount: 12, itemCount: 20000, processed: 19950, skipped: 50 } });
+    expect(
+      screen.getByText(
+        `Sitecore skipped 50 of 20,000 items while packaging on Acme · Development (items that failed or were filtered out). Check those items before relying on this ${kind}.`,
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it('says nothing when none were skipped', () => {
+    done('transfer');
+    expect(screen.queryByText(/Sitecore skipped/)).not.toBeInTheDocument();
+  });
+});

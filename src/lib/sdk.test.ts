@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { describe, expect, it } from 'vitest';
-import { SdkError, call, envKind, envLabel, fetchChildren, fetchItemId, toEnvs } from '@/lib/sdk';
+import { SdkError, call, envKind, envLabel, fetchChildren, fetchItemId, graphql, toEnvs } from '@/lib/sdk';
 import { fakeClient } from '@/test/fakeClient';
 
 const DEV = { id: 'r1', name: 'Dev', contextId: 'p1' };
@@ -9,8 +9,8 @@ const ENTRIES = [
   { resourceId: 'r2', tenantName: 'acme-qa', context: { preview: 'p2', live: 'l2' } },
 ];
 const ENVS = [
-  { id: 'p1', name: 'Dev', contextId: 'p1' },
-  { id: 'p2', name: 'acme-qa', contextId: 'p2', tenantName: 'acme-qa' },
+  { id: 'p1', name: 'Dev', contextId: 'p1', liveContextId: 'l1' },
+  { id: 'p2', name: 'acme-qa', contextId: 'p2', tenantName: 'acme-qa', liveContextId: 'l2' },
 ];
 
 describe('toEnvs', () => {
@@ -39,6 +39,10 @@ describe('toEnvs', () => {
   it('falls back to the context id without a tenantId', () => {
     const ctx = { resourceAccess: [{ resourceId: 'xmcloud', context: { preview: 'p1' } }] };
     expect(toEnvs(ctx as any)[0].id).toBe('p1');
+  });
+  it('leaves out the live context id when there is none', () => {
+    const ctx = { resourceAccess: [{ resourceId: 'xmcloud', context: { preview: 'p1' } }] };
+    expect(toEnvs(ctx as any)[0]).not.toHaveProperty('liveContextId');
   });
   it('tells apart environments with the same display name', () => {
     const ctx = {
@@ -222,6 +226,15 @@ describe('fetchChildren', () => {
   it('throws the first GraphQL error', async () => {
     const { client } = fakeClient({ [GQL]: () => ({ data: { errors: [{ message: 'bad' }] } }) });
     await expect(fetchChildren(client, DEV, '/x')).rejects.toThrow('bad');
+  });
+});
+
+describe('graphql', () => {
+  it('queries Experience Edge with xmc.live.graphql', async () => {
+    const LIVE = 'xmc.live.graphql';
+    const { client, calls } = fakeClient({ [LIVE]: () => ({ data: { data: { item: { id: 'x' } } } }) });
+    expect(await graphql(client, { ...DEV, contextId: 'l1' }, 'query { item { id } }', {}, LIVE)).toEqual({ item: { id: 'x' } });
+    expect(calls[0]).toMatchObject({ kind: 'mutate', key: LIVE, params: { query: { sitecoreContextId: 'l1' } } });
   });
 });
 

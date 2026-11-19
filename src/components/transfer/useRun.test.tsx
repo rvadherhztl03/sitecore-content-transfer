@@ -133,6 +133,43 @@ describe('useRun', () => {
     await job.finish(true);
   });
 
+  it('keeps the skipped item counts a later onInfo brings', async () => {
+    const { result } = renderHook(() => useRun());
+    const job = pending();
+    act(() => {
+      void result.current.start({ labels: ['A'] }, job.exec);
+    });
+    act(() => {
+      job.cb().onInfo?.({ chunkCount: 9, itemCount: 20 });
+      job.cb().onInfo?.({ chunkCount: 9, itemCount: 20, processed: 18, skipped: 2 });
+    });
+    expect(result.current.run!.info).toEqual({ chunkCount: 9, itemCount: 20, processed: 18, skipped: 2 });
+    await job.finish(true);
+  });
+
+  it('ignores a finished run\'s late callbacks once the next run has started', async () => {
+    const { result } = renderHook(() => useRun());
+    const first = pending();
+    act(() => {
+      void result.current.start({ labels: ['Transfer'] }, first.exec);
+    });
+    await first.finish(false);
+    const second = pending();
+    act(() => {
+      void result.current.start({ labels: ['Restore'] }, second.exec);
+    });
+    // The transfer's history write fails while the restore runs.
+    act(() => {
+      first.cb().onLog("Couldn't record this run in QA's history: HTTP 500", 'warning');
+      first.cb().onStepChange(0, 'fail');
+      first.cb().onProgress(100);
+    });
+    expect(result.current.run).toMatchObject({ steps: [{ label: 'Restore', status: 'pending' }], progress: 0, logs: [] });
+    act(() => second.cb().onLog('Restoring', 'info'));
+    expect(result.current.run!.logs).toMatchObject([{ text: 'Restoring' }]);
+    await second.finish(true);
+  });
+
   it('reset clears the run', async () => {
     const { result } = renderHook(() => useRun());
     await act(() => result.current.start({ labels: ['A'] }, async () => true));
