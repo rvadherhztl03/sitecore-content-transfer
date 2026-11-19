@@ -39,10 +39,13 @@ const RETRY_STATUSES = [429, 502, 503, 504];
 // The waits before the second and third attempt.
 const RETRY_WAITS_MS = [2000, 5000];
 const POLL_MS = 3000;
-// The import wait is 30 minutes plus 0.5 s per item; imports run at about 4 items a second.
+// The import wait is 30 minutes plus 0.5 s per item: a ceiling, since the import ends once the target reports the file
+// Consumed, when its items can be used. The target then writes them to its database in the background, about 45 s
+// queued, then about 0.2 s an item (tern's measurement on SitecoreAI, github.com/markgibbons25/tern docs/content.md).
 const IMPORT_BASE_MS = 1_800_000;
 const IMPORT_MS_PER_ITEM = 500;
-const IMPORT_ITEMS_PER_SECOND = 4;
+const WRITE_QUEUE_S = 45;
+const WRITE_S_PER_ITEM = 0.2;
 const BLOB_SUCCESS = ['OK', 'Transferred', 'Consumed'];
 const BLOB_FAILURE = ['Error', 'Failed', 'Discarded'];
 const MAX_SHOWN_ERRORS = 10;
@@ -485,13 +488,6 @@ export class MigrationService {
     }
 
     this.log(`Items successfully consumed into database: ${this.config.database}`, 'success');
-    const estimateSeconds = totalItems / IMPORT_ITEMS_PER_SECOND;
-    if (estimateSeconds >= 120) {
-      const minutes = estimateSeconds / 60;
-      // ponytail: one rate for every target; the estimate only says "about", the wait uses the item count.
-      const about = minutes >= 20 ? Math.round(minutes / 10) * 10 : Math.round(minutes);
-      this.log(`Importing ${totalItems.toLocaleString('en-US')} items. At the usual speed that takes about ${about} minutes; keep this tab open.`, 'info');
-    }
     this.step(4, 'done');
     this.progress(90);
 
@@ -508,6 +504,10 @@ export class MigrationService {
     this.step(5, 'done');
     this.progress(100);
     this.log('🎉 Live Content Migration completed successfully!', 'success');
+    const writeMinutes = Math.round((WRITE_QUEUE_S + totalItems * WRITE_S_PER_ITEM) / 60);
+    if (totalItems && writeMinutes >= 2) {
+      this.log(`The ${totalItems.toLocaleString('en-US')} items are in the target and can be used now. Sitecore keeps writing them to the database in the background for about ${writeMinutes} minutes; until then the target may answer slowly, and another transfer into it waits its turn. This tab doesn't need to stay open for it.`, 'info');
+    }
     if (itemsSkipped > 0) {
       this.log(`Sitecore skipped ${itemsSkipped.toLocaleString('en-US')} of ${(itemsProcessed + itemsSkipped).toLocaleString('en-US')} items while packaging (items that failed or were filtered out). Check those items before relying on this transfer.`, 'warning');
     }

@@ -70,6 +70,33 @@ describe('compareTrees', () => {
     }
   });
 
+  it('gives the same items when a level has many parents, asked in batches that finish in any order', async () => {
+    const source: Record<string, CompareFake> = { [R]: { id: 'root', rev: 'r1' } };
+    const target: Record<string, CompareFake> = { [R]: { id: 'root', rev: 'r1' } };
+    const expected: unknown[][] = [['/', 'same', '', 0]];
+    for (let i = 0; i < 250; i++) {
+      const p = `/P${String(i).padStart(3, '0')}`;
+      source[R + p] = target[R + p] = { id: `p${i}`, rev: 'r1' };
+      source[`${R}${p}/C`] = { id: `c${i}`, rev: 'r1' };
+      // Every fifth child is only on the source; of the rest, every third has changed on the target.
+      if (i % 5) target[`${R}${p}/C`] = { id: `c${i}`, rev: i % 3 ? 'r1' : 'r2' };
+      expected.push([p, 'same', '', 1], [`${p}/C`, i % 5 === 0 ? 'new' : i % 3 ? 'same' : 'changed', '', 2]);
+    }
+    const reply = compareReply({ 'ctx-dev': source, 'ctx-qa': target });
+    let n = 0;
+    // Each of the source's queries answers sooner than the one before, so a level's later batches finish first there, while
+    // the target answers in order.
+    const slow = (p: any) => (p.query.sitecoreContextId === 'ctx-dev' ? Math.max(0, 40 - n++) : 0);
+    const { client, calls } = fakeClient({ [GQL]: async (p) => (await new Promise((r) => setTimeout(r, slow(p))), reply(p)) });
+
+    const { items, truncated } = await compareTrees(client, DEV, QA, R);
+    expect(truncated).toBe(false);
+    expect(brief(items)).toEqual(expected);
+    // At most 100 parents a query: the 250 parents, then their 250 children, go in batches of 100, 100 and 50.
+    const sizes = (calls as any[]).filter((c) => c.params.query.sitecoreContextId === 'ctx-dev').map((c) => (c.params.body.query as string).split('item(where').length - 1);
+    expect(sizes).toEqual([1, 1, 100, 100, 50, 100, 100, 50]);
+  });
+
   it('stops at the limit and says so', async () => {
     const { client } = setup();
     const progress: number[] = [];

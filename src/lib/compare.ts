@@ -1,3 +1,4 @@
+import { inParallel } from '@/lib/parallel';
 import { sameId } from '@/lib/preflight';
 import { graphql, type Env, type SdkClient } from '@/lib/sdk';
 import type { DataTree } from '@/lib/transfer';
@@ -38,16 +39,16 @@ async function rootOf(client: SdkClient, env: Env, path: string): Promise<Node |
   return ((await graphql(client, env, `query CompareRoot {\n${item('root', path, ITEM)}\n}`, {})) ?? {}).root ?? null;
 }
 
-// The children of each parent, in order, `BATCH` parents per query.
-async function childrenOf(client: SdkClient, env: Env, parents: string[]): Promise<Node[][]> {
-  const out: Node[][] = [];
-  for (let i = 0; i < parents.length; i += BATCH) {
-    const batch = parents.slice(i, i + BATCH);
+// The children of each parent, in order, `BATCH` parents per query and PARALLEL queries at a time.
+async function childrenOf(client: SdkClient, env: Env, parents: string[], signal?: AbortSignal): Promise<Node[][]> {
+  const batches = Array.from({ length: Math.ceil(parents.length / BATCH) }, (_, i) => parents.slice(i * BATCH, (i + 1) * BATCH));
+  const out: Node[][][] = [];
+  await inParallel(batches, async (batch, i) => {
     const q = `query CompareLevel {\n${batch.map((p, j) => item(`c${j}`, p, `children(first: 1000) { nodes { ${ITEM} } }`)).join('\n')}\n}`;
     const data = (await graphql(client, env, q, {})) ?? {};
-    batch.forEach((_, j) => out.push(data[`c${j}`]?.children?.nodes ?? []));
-  }
-  return out;
+    out[i] = batch.map((_, j) => data[`c${j}`]?.children?.nodes ?? []);
+  }, signal);
+  return out.flat();
 }
 
 const side = (n?: Node): Side | undefined => n && { id: n.itemId, revision: n.r?.value ?? undefined, updated: n.u?.value ?? undefined };
@@ -119,8 +120,8 @@ export async function compareTrees(
     const withS = level.filter((n) => n.s);
     const withT = level.filter((n) => n.t);
     const [sKids, tKids] = await Promise.all([
-      childrenOf(client, source, withS.map((n) => n.s!.path)),
-      childrenOf(client, target, withT.map((n) => n.t!.path)),
+      childrenOf(client, source, withS.map((n) => n.s!.path), signal),
+      childrenOf(client, target, withT.map((n) => n.t!.path), signal),
     ]);
     signal?.throwIfAborted();
     // Pair each parent's children by path: the source's in order, then those only the target has.

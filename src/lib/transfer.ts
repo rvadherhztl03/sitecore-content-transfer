@@ -1,4 +1,5 @@
 import { buildPackage, type ChunkData, type PackageItem, type PackagePart } from '@/lib/package';
+import { inParallel } from '@/lib/parallel';
 import type { ItemCheck } from '@/lib/preflight';
 import { SdkError, call, fetchChildren, fetchItemId, graphql, type Env, type SdkClient } from '@/lib/sdk';
 
@@ -35,20 +36,34 @@ export const IMPORT_STEPS = ['Upload package', 'Assemble on target', 'Import int
 export const IMPORT_STEP = { transfer: 4, import: 2 } as const;
 // verifyTimeoutMs is the wait for one package file, plus msPerItem for each item in it. retryMs: the waits before
 // each retry of a brief failure (so 3 attempts). edgeTimeoutMs: how long to look for published items on Experience Edge.
+// uploadedWaitMs: how long to wait for an assembled file to show as Uploaded before importing it anyway.
 export const TIMING = {
-  pollMs: 3000,
+  pollMs: 1000,
   statusTimeoutMs: 1_800_000,
   verifyTimeoutMs: 1_800_000,
   msPerItem: 500,
   publishTimeoutMs: 1_800_000,
   retryMs: [2000, 5000],
   edgeTimeoutMs: 120_000,
+  uploadedWaitMs: 60_000,
 };
-// ponytail: import speed is one developer's measurement on XM Cloud (about 4 items a second); it varies with item size
-// and load. Only the estimate shown uses it; the wait allows TIMING.msPerItem. Measure more imports if estimates are off.
-export const ITEMS_PER_SECOND = 4;
-/** About how many minutes importing `items` items takes, at ITEMS_PER_SECOND. */
-export const importMinutes = (items: number) => Math.round(items / ITEMS_PER_SECOND / 60);
+// Once a file is Consumed its items can be read and edited on the target, which is where the import step ends. The target
+// then writes them to its database in the background: a queue of about 45 s, then about 0.2 s an item.
+// ponytail: tern's measurement on SitecoreAI (github.com/markgibbons25/tern, docs/content.md); it varies with item size
+// and load, and only the estimate shown uses it.
+const WRITE_QUEUE_S = 45;
+const WRITE_S_PER_ITEM = 0.2;
+/** About how many minutes the target takes to write `items` items to its database after the import. */
+export const writeMinutes = (items: number) => (items ? Math.round((WRITE_QUEUE_S + items * WRITE_S_PER_ITEM) / 60) : 0);
+/** What the log and the result say once `items` items are in the `targets` named, when writing them takes a while; else null. */
+export const backgroundNote = (items: number, targets: string[]) => {
+  const minutes = writeMinutes(items);
+  if (minutes < 2 || !targets.length) return null;
+  const where = targets.length > 1 ? `${targets.slice(0, -1).join(', ')} and ${targets.at(-1)}` : targets[0];
+  const each = targets.length > 1 ? ' on each' : '';
+  const it = targets.length > 1 ? 'them' : 'it';
+  return `The ${num(items)} items are in ${where} and can be used now. Sitecore keeps writing them to the database in the background for about ${minutes} minutes${each}; until then ${where} may answer slowly, and another transfer into ${it} waits its turn. This tab doesn't need to stay open for it.`;
+};
 export const BLOB_SUCCESS = ['OK', 'Transferred', 'Consumed'];
 export const BLOB_FAILURE = ['Error', 'Failed', 'Discarded'];
 // The share of the progress bar the backup step takes, when there is one, and where the publish step starts.
@@ -198,9 +213,40 @@ export async function consumeFiles(
   onAccepted?: () => void,
 ) {
   for (const fileName of files) {
+    await whenStored(client, env, fileName, signal);
     signal?.throwIfAborted();
     await call(client, env, 'query', CT + 'consumeFile', { query: { databaseName: database, fileName: packageLocation(fileName) } });
     onAccepted?.();
+  }
+}
+
+// States in which an assembled file is stored and can be imported (or already has been).
+const STORED = ['Uploaded', ...BLOB_SUCCESS, 'TransferredWithErrors'];
+
+/**
+ * Waits until the target reports `fileName` stored (Uploaded) before it's imported, as tern does, and fails if the
+ * target couldn't store it. Brief failures and states it doesn't know count as "not yet". After
+ * TIMING.uploadedWaitMs it goes ahead anyway, as the app did before it waited.
+ */
+async function whenStored(client: SdkClient, env: Env, fileName: string, signal?: AbortSignal) {
+  const deadline = Date.now() + TIMING.uploadedWaitMs;
+  for (;;) {
+    signal?.throwIfAborted();
+    const data = await call(client, env, 'query', CT + 'getBlobState', { query: { fileName } }).then(
+      (r) => r.data,
+      (e) => {
+        if (!isTransient(e) && !(e instanceof SdkError && e.status === 404)) throw e;
+        return undefined;
+      },
+    );
+    const status = importState(data);
+    if (STORED.includes(status)) return;
+    if (BLOB_FAILURE.includes(status)) {
+      const detail = (data as { Error?: unknown } | undefined)?.Error;
+      throw new Error(`${env.name} couldn't store ${fileName}: ${status}${typeof detail === 'string' && detail ? ` (${detail.slice(0, 300)})` : ''}`);
+    }
+    if (Date.now() >= deadline) return;
+    await sleep(TIMING.pollMs, signal);
   }
 }
 
@@ -509,8 +555,12 @@ async function publishStep(
   cb.onProgress(end);
 }
 
-// Downloads every chunk of a ready package, with the item counts its chunks report; `onChunk(n, total)` runs before
-// chunk n (1-based) is fetched.
+// Every chunk of a package, in order: its chunk set's index and the set, and its own index in the set.
+const chunkList = (sets: ChunkSet[]) =>
+  sets.flatMap((set, chunkSet) => Array.from({ length: set.ChunkCount }, (_, index) => ({ chunkSet, set, index })));
+
+// Downloads every chunk of a ready package, PARALLEL at a time, with the item counts its chunks report; `onChunk(n, total)`
+// runs as the nth chunk (1-based) starts.
 async function downloadChunks(
   client: SdkClient,
   env: Env,
@@ -520,17 +570,15 @@ async function downloadChunks(
   onChunk: (n: number, total: number) => void,
   signal?: AbortSignal,
 ): Promise<{ chunks: ChunkData[]; tally: Tally }> {
-  const total = sets.reduce((n, s) => n + s.ChunkCount, 0);
+  const all = chunkList(sets);
   const chunks: ChunkData[] = [];
   const tally = { processed: 0, skipped: 0 };
-  for (const [chunkSet, set] of sets.entries()) {
-    for (let index = 0; index < set.ChunkCount; index++) {
-      signal?.throwIfAborted();
-      onChunk(chunks.length + 1, total);
-      const { blob, isMedia, itemCount } = await fetchChunk(client, env, transferId, set.ChunkSetId, index, cb, signal, tally);
-      chunks.push({ chunkSet, index, isMedia, data: blob, itemCount });
-    }
-  }
+  let started = 0;
+  await inParallel(all, async ({ chunkSet, set, index }, i) => {
+    onChunk(++started, all.length);
+    const { blob, isMedia, itemCount } = await fetchChunk(client, env, transferId, set.ChunkSetId, index, cb, signal, tally);
+    chunks[i] = { chunkSet, index, isMedia, data: blob, itemCount };
+  }, signal);
   return { chunks, tally };
 }
 
@@ -669,8 +717,8 @@ export async function runTransfer(
     const info = infoOf(sets);
     cb.onInfo?.(info);
     done(pkg(100));
-    const total = sets.reduce((n, s) => n + s.ChunkCount, 0);
-    const minutes = importMinutes(info.itemCount);
+    const all = chunkList(sets);
+    const total = all.length;
     // The source's item counts, from the first copy: each later target reads the same chunks again.
     const tally = { processed: 0, skipped: 0 };
 
@@ -683,19 +731,17 @@ export async function runTransfer(
 
       begin(at, `Copying chunks from ${source.name} to ${target.name}.`);
       envs.push(target);
+      let started = 0;
       let copied = 0;
-      for (const set of sets) {
-        for (let chunkId = 0; chunkId < set.ChunkCount; chunkId++) {
-          signal?.throwIfAborted();
-          cb.onLog(`Copying chunk ${copied + 1} / ${total}`, 'info');
-          const path = { transferId, chunksetId: set.ChunkSetId, chunkId };
-          const { blob, isMedia } = await fetchChunk(client, source, transferId, set.ChunkSetId, chunkId, cb, signal, k === 0 ? tally : undefined);
-          signal?.throwIfAborted();
-          await saveChunk(client, target, cb, signal, { path, query: { isMedia }, body: blob });
-          copied++;
-          cb.onProgress(pct((70 * copied) / total));
-        }
-      }
+      // PARALLEL chunks at a time, each read from the source and saved on the target; chunk sets are completed after.
+      await inParallel(all, async ({ set, index: chunkId }) => {
+        cb.onLog(`Copying chunk ${++started} / ${total}`, 'info');
+        const path = { transferId, chunksetId: set.ChunkSetId, chunkId };
+        const { blob, isMedia } = await fetchChunk(client, source, transferId, set.ChunkSetId, chunkId, cb, signal, k === 0 ? tally : undefined);
+        signal?.throwIfAborted();
+        await saveChunk(client, target, cb, signal, { path, query: { isMedia }, body: blob });
+        cb.onProgress(pct((70 * ++copied) / total));
+      }, signal);
       done(pct(70));
       if (k === 0 && tally.skipped > 0) {
         cb.onLog(skippedWarning(tally, source.name, 'transfer'), 'warning');
@@ -707,12 +753,6 @@ export async function runTransfer(
       done(pct(78));
 
       begin(at + 2, `Importing into ${database} on ${target.name}.`);
-      if (minutes >= 2) {
-        cb.onLog(
-          `Importing ${num(info.itemCount)} items into ${target.name}. At the usual speed that takes about ${minutes} minutes; the tab must stay open.`,
-          'info',
-        );
-      }
       await consumeFiles(client, target, database, files, signal, accepted(imports, target));
       done(pct(88));
 
@@ -720,6 +760,8 @@ export async function runTransfer(
       // completeSets returns the files in the order of `sets`.
       await verifyFiles(client, target, files, cb, signal, sets.map((s) => s.TotalItemCount ?? 0));
       imports.unverified = undefined;
+      const background = backgroundNote(info.itemCount, [target.name]);
+      if (background) cb.onLog(background, 'info');
       done(pct(100));
 
       if (publish) {
@@ -784,21 +826,15 @@ export async function runImport(
   const chunksetIds = parts.map(() => crypto.randomUUID());
   return runSteps(client, [target], transferId, cb, signal, false, async ({ begin, done }) => {
     begin(0, `Uploading the package to ${target.name}.`);
-    const total = parts.reduce((n, p) => n + p.chunks.length, 0);
+    const all = parts.flatMap((part, i) => part.chunks.map((chunk, chunkId) => ({ ...chunk, chunksetId: chunksetIds[i], chunkId })));
+    const total = all.length;
+    let started = 0;
     let sent = 0;
-    for (const [i, part] of parts.entries()) {
-      for (const [chunkId, { data, isMedia }] of part.chunks.entries()) {
-        signal?.throwIfAborted();
-        cb.onLog(`Uploading chunk ${sent + 1} / ${total}`, 'info');
-        await saveChunk(client, target, cb, signal, {
-          path: { transferId, chunksetId: chunksetIds[i], chunkId },
-          query: { isMedia },
-          body: data,
-        });
-        sent++;
-        cb.onProgress(pct(Math.round((50 * sent) / total)));
-      }
-    }
+    await inParallel(all, async ({ data, isMedia, chunksetId, chunkId }) => {
+      cb.onLog(`Uploading chunk ${++started} / ${total}`, 'info');
+      await saveChunk(client, target, cb, signal, { path: { transferId, chunksetId, chunkId }, query: { isMedia }, body: data });
+      cb.onProgress(pct(Math.round((50 * ++sent) / total)));
+    }, signal);
     done(pct(50));
 
     begin(1, `Assembling the package on ${target.name}.`);

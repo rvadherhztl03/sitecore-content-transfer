@@ -7,8 +7,10 @@ import {
   IMPORT_STEPS,
   TIMING,
   TRANSFER_STEPS,
+  backgroundNote,
   backupTreesFor,
   parseItemCounts,
+  writeMinutes,
   transferSteps,
   runExport,
   runImport,
@@ -56,7 +58,16 @@ function happyHandlers(overrides: Record<string, Handler> = {}) {
     completeChunkSetTransfer: (p) => ({ data: { ContentTransferFileName: 'f-' + p.path.chunksetId + '.raif' } }),
     getBlobState: () => ({ data: { status: blobCalls++ === 0 ? 'NotFound' : 'OK' } }),
   };
-  const all = { ...base, ...overrides };
+  const all: Record<string, Handler> = { ...base, ...overrides };
+  // Before each import the run waits for the file to be stored: getBlobState says Uploaded until consumeFile was called
+  // for that file on that target, so the getBlobState above (or an override) only answers the checks of the import.
+  const consumed = new Set<string>();
+  const { consumeFile = () => ({}), getBlobState } = all;
+  all.consumeFile = (p) => {
+    consumed.add(`${p.query.sitecoreContextId} ${p.query.fileName.replace(/^blob:\/\//, '')}`);
+    return consumeFile(p);
+  };
+  all.getBlobState = (p) => (consumed.has(`${p.query.sitecoreContextId} ${p.query.fileName}`) ? getBlobState(p) : { data: { BlobState: 'Uploaded' } });
   return Object.fromEntries(Object.keys(KIND).map((k) => [CT + k, all[k] ?? (() => ({}))]));
 }
 
@@ -78,6 +89,20 @@ const short = (key: string) => key.replace(CT, '');
 const STILL_IMPORTING = (env: string) => [`${env} may still finish importing; check it before running again.`, 'warning'];
 const ofKey = (calls: { key: string }[], k: string) => calls.filter((c) => c.key === CT + k) as any[];
 const ctxOf = (c: any) => c.params.query.sitecoreContextId;
+// Chunks are copied several at a time, so their calls come in no set order. How many times each chunk
+// ("<chunk set>/<index>") was read or saved:
+const perChunk = (calls: any[]) => {
+  const n: Record<string, number> = {};
+  for (const { params: { path } } of calls) n[`${path.chunksetId}/${path.chunkId}`] = (n[`${path.chunksetId}/${path.chunkId}`] ?? 0) + 1;
+  return n;
+};
+// and each chunk saved, by chunk set and index.
+const saved = async (calls: any[]) =>
+  (
+    await Promise.all(
+      ofKey(calls, 'saveChunk').map(async (c) => ({ ...c.params.path, isMedia: c.params.query.isMedia, body: await c.params.body.text() })),
+    )
+  ).sort((a, b) => a.chunksetId.localeCompare(b.chunksetId) || a.chunkId - b.chunkId);
 
 // Two chunk sets; the second one has no TotalItemCount (counts as 0).
 const TWO_SETS: Record<string, Handler> = {
@@ -92,6 +117,13 @@ const TWO_SETS: Record<string, Handler> = {
   }),
 };
 
+// A package of chunk sets cs1, cs2, … holding `counts` chunks (and as many items) each.
+const chunks = (...counts: number[]): Record<string, Handler> => ({
+  getContentTransferStatus: () => ({
+    data: { State: 'Completed', ChunkSetsMetadata: counts.map((ChunkCount, i) => ({ ChunkSetId: `cs${i + 1}`, ChunkCount, TotalItemCount: ChunkCount })) },
+  }),
+});
+
 describe('IMPORT_STEP', () => {
   it('points at the Import into database step', () => {
     expect(TRANSFER_STEPS[IMPORT_STEP.transfer]).toBe('Import into database');
@@ -100,7 +132,7 @@ describe('IMPORT_STEP', () => {
 });
 
 beforeEach(() => {
-  Object.assign(TIMING, { pollMs: 0, statusTimeoutMs: 50, verifyTimeoutMs: 50, msPerItem: 0, publishTimeoutMs: 50, retryMs: [0, 0], edgeTimeoutMs: 50 });
+  Object.assign(TIMING, { pollMs: 0, statusTimeoutMs: 50, verifyTimeoutMs: 50, msPerItem: 0, publishTimeoutMs: 50, retryMs: [0, 0], edgeTimeoutMs: 50, uploadedWaitMs: 50 });
 });
 
 afterEach(() => {
@@ -113,21 +145,23 @@ describe('runTransfer', () => {
     const r = recorder();
     expect(await runTransfer(client, OPTS, r.cb)).toBe(true);
 
+    // The copy reads and saves chunks several at a time, so its calls interleave: they count as one step here.
     const seq = calls
-      .map((c) => [short(c.key), ctxOf(c)])
-      .filter(([k, ctx], i, a) => i === 0 || k !== a[i - 1][0] || ctx !== a[i - 1][1]);
+      .map((c) => (['getChunk', 'saveChunk'].includes(short(c.key)) ? ['copy'] : [short(c.key), ctxOf(c)]))
+      .filter((s, i, a) => i === 0 || s.join() !== a[i - 1].join());
     expect(seq).toEqual([
       ['createContentTransfer', 'ctx-dev'],
       ['getContentTransferStatus', 'ctx-dev'],
-      ['getChunk', 'ctx-dev'],
-      ['saveChunk', 'ctx-qa'],
-      ['getChunk', 'ctx-dev'],
-      ['saveChunk', 'ctx-qa'],
+      ['copy'],
       ['completeChunkSetTransfer', 'ctx-qa'],
+      // Stored yet? Then the import, then its check.
+      ['getBlobState', 'ctx-qa'],
       ['consumeFile', 'ctx-qa'],
       ['getBlobState', 'ctx-qa'],
       ['deleteContentTransfer', 'ctx-dev'],
     ]);
+    expect(ofKey(calls, 'getChunk').map(ctxOf)).toEqual(['ctx-dev', 'ctx-dev']);
+    expect(ofKey(calls, 'saveChunk').map(ctxOf)).toEqual(['ctx-qa', 'ctx-qa']);
     for (const c of calls) expect(c.kind).toBe(KIND[short(c.key)]);
 
     const body = calls[0].params.body;
@@ -135,14 +169,12 @@ describe('runTransfer', () => {
     const { transferId } = body;
     for (const c of calls.slice(1)) expect(c.params.path?.transferId ?? transferId).toBe(transferId);
 
-    const saves = ofKey(calls, 'saveChunk');
-    expect(saves.map((c) => c.params.path)).toEqual([
-      { transferId, chunksetId: 'cs1', chunkId: 0 },
-      { transferId, chunksetId: 'cs1', chunkId: 1 },
+    expect(perChunk(ofKey(calls, 'getChunk'))).toEqual({ 'cs1/0': 1, 'cs1/1': 1 });
+    expect(ofKey(calls, 'saveChunk')[0].params.body).toBeInstanceOf(Blob);
+    expect(await saved(calls)).toEqual([
+      { transferId, chunksetId: 'cs1', chunkId: 0, isMedia: false, body: 'c0' },
+      { transferId, chunksetId: 'cs1', chunkId: 1, isMedia: true, body: 'c1' },
     ]);
-    expect(saves.map((c) => c.params.query.isMedia)).toEqual([false, true]);
-    expect(saves[0].params.body).toBeInstanceOf(Blob);
-    expect(await Promise.all(saves.map((c) => c.params.body.text()))).toEqual(['c0', 'c1']);
 
     expect(ofKey(calls, 'consumeFile')[0].params.query).toEqual({
       databaseName: 'master',
@@ -297,7 +329,8 @@ describe('runTransfer', () => {
     expect(r.steps).toContainEqual([4, 'fail']);
     expect(r.logs.map(([m]) => m).join('\n')).toContain('Allowed schema is not specified');
     expect(r.logs).not.toContainEqual(STILL_IMPORTING('QA'));
-    expect(ofKey(calls, 'getBlobState')).toHaveLength(0);
+    // Only the check that the file was stored, before the import: the import itself is never checked.
+    expect(ofKey(calls, 'getBlobState')).toHaveLength(1);
   });
 
   it('fails when the blob state is Error and warns the target may still import', async () => {
@@ -345,6 +378,7 @@ describe('runTransfer', () => {
     const ctrl = new AbortController();
     const { client, calls } = fakeClient(
       happyHandlers({
+        ...chunks(10),
         saveChunk: () => {
           ctrl.abort();
           return {};
@@ -353,9 +387,13 @@ describe('runTransfer', () => {
     );
     const r = recorder();
     expect(await runTransfer(client, OPTS, r.cb, ctrl.signal)).toBe(false);
-    expect(ofKey(calls, 'getChunk')).toHaveLength(1);
+    // The first 8 chunks are read at once. The first save cancels: no other is saved, and chunks 9 and 10 never start.
+    expect(ofKey(calls, 'getChunk')).toHaveLength(8);
     expect(ofKey(calls, 'saveChunk')).toHaveLength(1);
-    expect(r.logs.filter(([m]) => /^Copying chunk \d/.test(m))).toHaveLength(1);
+    expect(r.logs.filter(([m]) => /^Copying chunk \d/.test(m)).map(([m]) => m)).toEqual(
+      Array.from({ length: 8 }, (_, i) => `Copying chunk ${i + 1} / 10`),
+    );
+    expect(ofKey(calls, 'completeChunkSetTransfer')).toHaveLength(0);
     expect(r.logs).toContainEqual(['Cancelled.', 'warning']);
   });
 
@@ -978,7 +1016,8 @@ describe('runImport', () => {
 
     for (const c of calls) expect(ctxOf(c)).toBe('ctx-qa');
     const seq = calls.map((c) => short(c.key)).filter((k, i, a) => i === 0 || k !== a[i - 1]);
-    expect(seq).toEqual(['saveChunk', 'completeChunkSetTransfer', 'consumeFile', 'getBlobState']);
+    // Each file is checked stored before it's imported; then both imports are checked.
+    expect(seq).toEqual(['saveChunk', 'completeChunkSetTransfer', 'getBlobState', 'consumeFile', 'getBlobState', 'consumeFile', 'getBlobState']);
 
     const saves = ofKey(calls, 'saveChunk');
     const { transferId } = saves[0].params.path;
@@ -1057,12 +1096,16 @@ describe('runImport', () => {
     const { client, calls } = fakeClient(happyHandlers({ saveChunk: () => (failed ? {} : ((failed = true), { status: 502 })) }));
     const r = recorder();
     expect(await runImport(client, IMPORT, r.cb)).toBe(true);
-    expect(ofKey(calls, 'saveChunk').map((c) => c.params.path.chunkId)).toEqual([0, 0, 1, 0]);
+    // The first chunk went twice; the others, uploading alongside it, once.
+    const saves = ofKey(calls, 'saveChunk');
+    const setA = saves[0].params.path.chunksetId;
+    const setB = saves.find((c) => c.params.path.chunksetId !== setA).params.path.chunksetId;
+    expect(perChunk(saves)).toEqual({ [`${setA}/0`]: 2, [`${setA}/1`]: 1, [`${setB}/0`]: 1 });
     expect(r.logs).toContainEqual(['QA answered HTTP 502. Trying again in 0 s.', 'warning']);
   });
 });
 
-describe('import wait and estimate', () => {
+describe('import wait, and the background write note', () => {
   const sets = (TotalItemCount: number): Record<string, Handler> => ({
     getContentTransferStatus: () => ({ data: { State: 'Completed', ChunkSetsMetadata: [{ ChunkSetId: 'cs1', ChunkCount: 2, TotalItemCount }] } }),
   });
@@ -1099,22 +1142,159 @@ describe('import wait and estimate', () => {
     expect(r.logs).toContainEqual(['Timed out waiting for the import to finish.', 'error']);
   });
 
-  it('says about how long a big import takes when it starts', async () => {
+  it('once the import is verified, says the target writes a big one to its database in the background', async () => {
     const { client } = fakeClient(happyHandlers(sets(20_000)));
     const r = recorder();
     expect(await runTransfer(client, OPTS, r.cb)).toBe(true);
-    const at = r.logs.findIndex(([m]) => m === 'Importing into master on QA.');
-    expect(r.logs[at + 1]).toEqual([
-      'Importing 20,000 items into QA. At the usual speed that takes about 83 minutes; the tab must stay open.',
-      'info',
-    ]);
+    const at = r.logs.findIndex(([m]) => m === 'Imported f-cs1.raif (OK).');
+    expect(r.logs[at + 1]).toEqual([backgroundNote(20_000, ['QA']), 'info']);
+    // Nothing about how long the import itself takes.
+    expect(r.logs.some(([m]) => /takes about|tab must stay open/.test(m))).toBe(false);
   });
 
-  it('says nothing for an import under 2 minutes', async () => {
-    const { client } = fakeClient(happyHandlers(sets(300)));
+  it('says nothing when the background write takes under 2 minutes', async () => {
+    const { client } = fakeClient(happyHandlers(sets(224)));
     const r = recorder();
     expect(await runTransfer(client, OPTS, r.cb)).toBe(true);
-    expect(r.logs.some(([m]) => m.includes('At the usual speed'))).toBe(false);
+    expect(r.logs.some(([m]) => m.includes('in the background'))).toBe(false);
+  });
+});
+
+describe('background write note', () => {
+  it('writeMinutes is about 45 s queued plus 0.2 s an item, in whole minutes', () => {
+    expect(writeMinutes(0)).toBe(0);
+    expect(writeMinutes(224)).toBe(1);
+    expect(writeMinutes(225)).toBe(2);
+    expect(writeMinutes(20_000)).toBe(67);
+  });
+
+  it('says the items can be used now and how long the target writes them', () => {
+    expect(backgroundNote(20_000, ['QA'])).toBe(
+      "The 20,000 items are in QA and can be used now. Sitecore keeps writing them to the database in the background for about 67 minutes; until then QA may answer slowly, and another transfer into it waits its turn. This tab doesn't need to stay open for it.",
+    );
+  });
+
+  it('names several targets and says it is on each', () => {
+    expect(backgroundNote(20_000, ['QA', 'UAT'])).toBe(
+      "The 20,000 items are in QA and UAT and can be used now. Sitecore keeps writing them to the database in the background for about 67 minutes on each; until then QA and UAT may answer slowly, and another transfer into them waits its turn. This tab doesn't need to stay open for it.",
+    );
+    expect(backgroundNote(225, ['QA', 'UAT', 'Prod'])).toBe(
+      "The 225 items are in QA, UAT and Prod and can be used now. Sitecore keeps writing them to the database in the background for about 2 minutes on each; until then QA, UAT and Prod may answer slowly, and another transfer into them waits its turn. This tab doesn't need to stay open for it.",
+    );
+  });
+
+  it('says nothing under 2 minutes, or without a target', () => {
+    expect(backgroundNote(224, ['QA'])).toBeNull();
+    expect(backgroundNote(0, ['QA'])).toBeNull();
+    expect(backgroundNote(20_000, [])).toBeNull();
+  });
+});
+
+describe('before each import, waits for the target to store the file', () => {
+  // getBlobState answers `states` in turn (a state, or an HTTP status; the last one repeats) until the import starts,
+  // then OK.
+  function storing(...states: (string | number)[]) {
+    let consumed = false;
+    let n = 0;
+    return fakeClient({
+      ...happyHandlers(),
+      [CT + 'consumeFile']: () => ((consumed = true), {}),
+      [CT + 'getBlobState']: () => {
+        if (consumed) return { data: { BlobState: 'OK' } };
+        const s = states[Math.min(n++, states.length - 1)];
+        return typeof s === 'number' ? { status: s } : { data: { BlobState: s, Error: s === 'Error' ? 'disk full' : null } };
+      },
+    });
+  }
+  // The checks and the import, in order.
+  const order = (calls: { key: string }[]) => calls.map((c) => short(c.key)).filter((k) => k === 'getBlobState' || k === 'consumeFile');
+
+  it('waits through states that are not stored yet until Uploaded, then imports', async () => {
+    const { client, calls } = storing('NotFound', 'Queued', 'Uploaded');
+    expect(await runTransfer(client, OPTS, recorder().cb)).toBe(true);
+    expect(order(calls)).toEqual(['getBlobState', 'getBlobState', 'getBlobState', 'consumeFile', 'getBlobState']);
+  });
+
+  it('fails without importing when the target could not store the file', async () => {
+    const { client, calls } = storing('NotFound', 'Error');
+    const r = recorder();
+    expect(await runTransfer(client, OPTS, r.cb)).toBe(false);
+    expect(r.logs).toContainEqual(["QA couldn't store f-cs1.raif: Error (disk full)", 'error']);
+    expect(r.steps).toContainEqual([IMPORT_STEP.transfer, 'fail']);
+    expect(ofKey(calls, 'consumeFile')).toHaveLength(0);
+    // QA never took the import, so it isn't importing, and its copy of the transfer is cleaned up.
+    expect(r.logs).not.toContainEqual(STILL_IMPORTING('QA'));
+    expect(ofKey(calls, 'deleteContentTransfer').map(ctxOf)).toEqual(['ctx-dev', 'ctx-qa']);
+  });
+
+  it('counts a 404 or a brief failure as not stored yet', async () => {
+    const { client, calls } = storing(404, 503, 'Uploaded');
+    const r = recorder();
+    expect(await runTransfer(client, OPTS, r.cb)).toBe(true);
+    expect(order(calls)).toEqual(['getBlobState', 'getBlobState', 'getBlobState', 'consumeFile', 'getBlobState']);
+  });
+
+  it('imports anyway once TIMING.uploadedWaitMs has passed', async () => {
+    Object.assign(TIMING, { uploadedWaitMs: 30, pollMs: 5 });
+    const { client, calls } = storing('NotFound');
+    const started = Date.now();
+    expect(await runTransfer(client, OPTS, recorder().cb)).toBe(true);
+    expect(Date.now() - started).toBeGreaterThanOrEqual(30);
+    expect(order(calls).indexOf('consumeFile')).toBeGreaterThan(1);
+    expect(ofKey(calls, 'consumeFile')).toHaveLength(1);
+  });
+
+  it('a cancel while it waits stops the run before the import', async () => {
+    const ctrl = new AbortController();
+    const { client, calls } = fakeClient({ ...happyHandlers(), [CT + 'getBlobState']: () => (ctrl.abort(), { data: { BlobState: 'NotFound' } }) });
+    const r = recorder();
+    expect(await runTransfer(client, OPTS, r.cb, ctrl.signal)).toBe(false);
+    expect(ofKey(calls, 'getBlobState')).toHaveLength(1);
+    expect(ofKey(calls, 'consumeFile')).toHaveLength(0);
+    expect(r.logs).toContainEqual(['Cancelled.', 'warning']);
+  });
+});
+
+describe('copies chunks several at a time', () => {
+  it('never has more than 8 in flight, copies each once into its chunk set, and completes the sets after', async () => {
+    const tick = () => new Promise((r) => setTimeout(r));
+    let inFlight = 0;
+    let most = 0;
+    const { client, calls } = fakeClient(
+      happyHandlers({
+        ...chunks(12, 9),
+        // A chunk is in flight from its read until its save is done.
+        getChunk: async (p) => {
+          most = Math.max(most, ++inFlight);
+          await tick();
+          return { data: new Blob([`${p.path.chunksetId}/${p.path.chunkId}`]), headers: { 'content-disposition': `attachment; IsMedia=${p.path.chunkId % 2 === 1}` } };
+        },
+        saveChunk: async () => {
+          await tick();
+          inFlight--;
+          return {};
+        },
+      }),
+    );
+    const r = recorder();
+    expect(await runTransfer(client, OPTS, r.cb)).toBe(true);
+    expect(most).toBe(8);
+
+    const all = (
+      [
+        ['cs1', 12],
+        ['cs2', 9],
+      ] as const
+    ).flatMap(([set, n]) => Array.from({ length: n }, (_, chunkId) => ({ set, chunkId })));
+    expect(perChunk(ofKey(calls, 'getChunk'))).toEqual(Object.fromEntries(all.map(({ set, chunkId }) => [`${set}/${chunkId}`, 1])));
+    expect((await saved(calls)).map(({ chunksetId, chunkId, isMedia, body }) => ({ chunksetId, chunkId, isMedia, body }))).toEqual(
+      all.map(({ set, chunkId }) => ({ chunksetId: set, chunkId, isMedia: chunkId % 2 === 1, body: `${set}/${chunkId}` })),
+    );
+    const lastSave = calls.findLastIndex((c) => c.key === CT + 'saveChunk');
+    expect(calls.findIndex((c) => c.key === CT + 'completeChunkSetTransfer')).toBeGreaterThan(lastSave);
+    expect(ofKey(calls, 'completeChunkSetTransfer').map((c) => c.params.path.chunksetId)).toEqual(['cs1', 'cs2']);
+    // Each chunk is logged as it starts.
+    expect(r.logs.filter(([m]) => m.startsWith('Copying chunk ')).map(([m]) => m)).toEqual(Array.from({ length: 21 }, (_, i) => `Copying chunk ${i + 1} / 21`));
   });
 });
 
@@ -1192,7 +1372,7 @@ describe('brief failures', () => {
     const { client, calls } = fakeClient(happyHandlers({ getChunk: failing(1, () => ({ status }), happy('getChunk')) }));
     const r = recorder();
     expect(await runTransfer(client, OPTS, r.cb)).toBe(true);
-    expect(ofKey(calls, 'getChunk').map((c) => c.params.path.chunkId)).toEqual([0, 0, 1]);
+    expect(perChunk(ofKey(calls, 'getChunk'))).toEqual({ 'cs1/0': 2, 'cs1/1': 1 });
     expect(retries(r.logs)).toEqual([[`Dev answered HTTP ${status}. Trying again in 0 s.`, 'warning']]);
   });
 
@@ -1209,7 +1389,7 @@ describe('brief failures', () => {
   it('waits 2 s, then 5 s, then gives up after the third attempt', async () => {
     vi.useFakeTimers();
     TIMING.retryMs = [2000, 5000];
-    const { client, calls } = fakeClient(happyHandlers({ getChunk: () => ({ status: 503 }) }));
+    const { client, calls } = fakeClient(happyHandlers({ ...chunks(1), getChunk: () => ({ status: 503 }) }));
     const r = recorder();
     const run = runTransfer(client, OPTS, r.cb);
     await vi.runAllTimersAsync();
@@ -1226,7 +1406,7 @@ describe('brief failures', () => {
     const { client, calls } = fakeClient(happyHandlers({ saveChunk: failing(1, () => ({ status: 503 }), () => ({})) }));
     const r = recorder();
     expect(await runTransfer(client, OPTS, r.cb)).toBe(true);
-    expect(ofKey(calls, 'saveChunk').map((c) => c.params.path.chunkId)).toEqual([0, 0, 1]);
+    expect(perChunk(ofKey(calls, 'saveChunk'))).toEqual({ 'cs1/0': 2, 'cs1/1': 1 });
     expect(retries(r.logs)).toEqual([['QA answered HTTP 503. Trying again in 0 s.', 'warning']]);
   });
 
@@ -1249,7 +1429,8 @@ describe('brief failures', () => {
     const { client, calls } = fakeClient(happyHandlers({ getBlobState: () => ({ status: 503 }) }));
     const r = recorder();
     expect(await runTransfer(client, OPTS, r.cb)).toBe(false);
-    expect(ofKey(calls, 'getBlobState')).toHaveLength(1);
+    // The check that the file was stored, then a single check of the import.
+    expect(ofKey(calls, 'getBlobState')).toHaveLength(2);
     expect(r.logs).toContainEqual(['Timed out waiting for the import to finish.', 'error']);
     expect(r.logs).toContainEqual(STILL_IMPORTING('QA'));
   });
@@ -1273,7 +1454,7 @@ describe('brief failures', () => {
   it('never repeats an error that is not brief', async () => {
     const { client, calls } = fakeClient(happyHandlers({ getChunk: () => ({ status: 500 }) }));
     expect(await runTransfer(client, OPTS, recorder().cb)).toBe(false);
-    expect(ofKey(calls, 'getChunk')).toHaveLength(1);
+    expect(perChunk(ofKey(calls, 'getChunk'))).toEqual({ 'cs1/0': 1, 'cs1/1': 1 });
   });
 
   it('a cancel during the wait stops it', async () => {

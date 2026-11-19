@@ -610,7 +610,7 @@ describe('Next.js API Route Handlers', () => {
       const res = await call({ location: `${API}/transfers/..` });
 
       expect(res.status).toBe(404);
-      expect(urls().slice(1)).toEqual([`${API}/transfers?page=1&pageSize=100`]);
+      expect(urls().slice(1)).toEqual([`${API}/transfers?page=1&pageSize=50`]);
     });
 
     it('finds the transfer by its blob name when Location does not end in a known id', async () => {
@@ -631,7 +631,7 @@ describe('Next.js API Route Handlers', () => {
       expect(await res.json()).toEqual({ validationErrors: ['Bad field'] });
       expect(urls().slice(1)).toEqual([
         `${API}/transfers/contentTransfer-transfer-guid-chunkset-guid.raif`,
-        `${API}/transfers?page=1&pageSize=100`,
+        `${API}/transfers?page=1&pageSize=50`,
         `${API}/transfers/consumed.2026.guid`
       ]);
     });
@@ -657,8 +657,8 @@ describe('Next.js API Route Handlers', () => {
       await call({ location: '' });
 
       expect(urls().slice(1)).toEqual([
-        `${API}/transfers?page=1&pageSize=100`,
-        `${API}/transfers?page=2&pageSize=100`,
+        `${API}/transfers?page=1&pageSize=50`,
+        `${API}/transfers?page=2&pageSize=50`,
         `${API}/transfers/found-id`
       ]);
     });

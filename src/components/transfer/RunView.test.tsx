@@ -546,50 +546,44 @@ describe('RunView unfinished steps', () => {
   });
 });
 
-describe('RunView import estimate', () => {
-  const NOTE = /takes about/;
-  // A transfer's steps as transferSteps names them, with these statuses.
-  const transfer = (...status: StepStatus[]) =>
-    ['Copy chunks to Acme · QA', 'Import into master', 'Verify', 'Publish to Experience Edge'].map((label, i) => ({ label, status: status[i] ?? 'pending' }));
-  // Copying chunks, so the import is still to come.
-  const copying = (props: Partial<React.ComponentProps<typeof RunView>> = {}) => setup({ steps: transfer('running'), ...props });
+describe('RunView background write note', () => {
+  const NOTE = /in the background/;
+  const BIG = { info: { chunkCount: 40, itemCount: 20000 } };
 
-  it('says about how long a big transfer imports, while it runs', () => {
-    copying({ info: { chunkCount: 40, itemCount: 20000 } });
-    expect(screen.getByText('Importing 20,000 items takes about 83 minutes. Keep this tab open.')).toBeInTheDocument();
+  it('a finished transfer with enough items says they can be used and how long Sitecore writes them', () => {
+    done('transfer', BIG);
+    expect(
+      screen.getByText(
+        "The 20,000 items are in Acme · QA and can be used now. Sitecore keeps writing them to the database in the background for about 67 minutes; until then Acme · QA may answer slowly, and another transfer into it waits its turn. This tab doesn't need to stay open for it.",
+      ),
+    ).toBeInTheDocument();
   });
 
-  it('stays while the import or verify step runs, and goes once both are done', () => {
-    const info = { chunkCount: 40, itemCount: 20000 };
-    const { rerender } = setup({ info, steps: transfer('done', 'running') });
-    expect(screen.getByText(NOTE)).toBeInTheDocument();
-    const again = (steps: ReturnType<typeof transfer>) =>
-      rerender(<RunView kind="transfer" source={DEV} targets={[QA]} steps={steps} progress={96} logs={LOGS} running result={null} info={info} onAgain={vi.fn()} onHome={vi.fn()} />);
-    again(transfer('done', 'done', 'running'));
-    expect(screen.getByText(NOTE)).toBeInTheDocument();
-    // Publishing is still running, but the import is over.
-    again(transfer('done', 'done', 'done', 'running'));
-    expect(screen.queryByText(NOTE)).not.toBeInTheDocument();
-  });
-
-  it('says it is per target with several targets', () => {
+  it('names every target, and says it is on each', () => {
     const UAT: Env = { id: 'uat', name: 'Acme · UAT', contextId: 'c4' };
-    copying({ targets: [QA, UAT], info: { chunkCount: 40, itemCount: 20000 } });
-    expect(screen.getByText('Importing 20,000 items takes about 83 minutes on each target. Keep this tab open.')).toBeInTheDocument();
+    done('transfer', { ...BIG, targets: [QA, UAT] });
+    expect(screen.getByText(/^The 20,000 items are in Acme · QA and Acme · UAT and can be used now\..* for about 67 minutes on each; until then Acme · QA and Acme · UAT may answer slowly, and another transfer into them waits its turn\./)).toBeInTheDocument();
+  });
+
+  it('says nothing while the transfer runs, even during the import', () => {
+    const transfer = ['Copy chunks to Acme · QA', 'Import into master', 'Verify'].map((label, i) => ({ label, status: (['done', 'running', 'pending'] as const)[i] }));
+    setup({ ...BIG, steps: transfer });
+    expect(screen.queryByText(NOTE)).not.toBeInTheDocument();
+    expect(screen.queryByText(/takes about/)).not.toBeInTheDocument();
   });
 
   it.each([
-    ['under 5 minutes', { info: { chunkCount: 4, itemCount: 1000 } }],
-    ['without an item count', { info: { chunkCount: 40 } }],
-    ['for an export', { kind: 'export' as const, info: { chunkCount: 40, itemCount: 20000 } }],
-    ['once the run failed', { running: false, result: 'fail' as const, info: { chunkCount: 40, itemCount: 20000 } }],
-  ])('says nothing %s', (_n, props) => {
-    copying(props);
+    ['under 2 minutes of writing', 'transfer' as const, { info: { chunkCount: 4, itemCount: 224 } }],
+    ['without an item count', 'transfer' as const, { info: { chunkCount: 40 } }],
+    ['for an export', 'export' as const, BIG],
+    ['for an install', 'install' as const, BIG],
+  ])('says nothing %s', (_n, kind, props) => {
+    done(kind, props);
     expect(screen.queryByText(NOTE)).not.toBeInTheDocument();
   });
 
-  it('says nothing once the run is done', () => {
-    done('transfer', { info: { chunkCount: 40, itemCount: 20000 } });
+  it('says nothing once the run failed', () => {
+    setup({ ...BIG, running: false, result: 'fail' });
     expect(screen.queryByText(NOTE)).not.toBeInTheDocument();
   });
 });

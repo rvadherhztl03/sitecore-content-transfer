@@ -463,28 +463,35 @@ describe('MigrationService live transfer: waits, skipped items, retries and impo
       expect(logged('error').join()).toContain('Timed out waiting for the import to finish (last state: Queued)');
     });
 
-    it('logs an estimate at 4 items a second when the import takes 2 minutes or more', async () => {
+    it('after a successful transfer, says the items can be used and how long Sitecore writes them in the background', async () => {
       mockRoutes({ status: sets({ ChunkSetId: 'set-a', ChunkCount: 1, TotalItemCount: 20000 }) });
 
       expect(await run()).toBe(true);
 
-      expect(onLog).toHaveBeenCalledWith('Importing 20,000 items. At the usual speed that takes about 80 minutes; keep this tab open.', 'info');
+      // 45 s queued plus 0.2 s an item: 4,045 s, about 67 minutes.
+      const note = "The 20,000 items are in the target and can be used now. Sitecore keeps writing them to the database in the background for about 67 minutes; until then the target may answer slowly, and another transfer into it waits its turn. This tab doesn't need to stay open for it.";
+      const messages = onLog.mock.calls.map(([m]) => m);
+      expect(messages.indexOf(note)).toBeGreaterThan(messages.indexOf('🎉 Live Content Migration completed successfully!'));
+      expect(onLog).toHaveBeenCalledWith(note, 'info');
+      expect(messages.some((m) => String(m).includes('keep this tab open'))).toBe(false);
     });
 
-    it('gives the estimate in whole minutes for a short import, from 480 items up', async () => {
-      mockRoutes({ status: sets({ ChunkSetId: 'set-a', ChunkCount: 1, TotalItemCount: 480 }) });
+    it('gives the background write in whole minutes, from 2 minutes (225 items) up', async () => {
+      mockRoutes({ status: sets({ ChunkSetId: 'set-a', ChunkCount: 1, TotalItemCount: 225 }) });
 
       expect(await run()).toBe(true);
 
-      expect(onLog).toHaveBeenCalledWith('Importing 480 items. At the usual speed that takes about 2 minutes; keep this tab open.', 'info');
+      expect(onLog.mock.calls.filter(([m]) => String(m).includes('in the background for about 2 minutes;'))).toHaveLength(1);
     });
 
-    it('logs no estimate for an import under 2 minutes', async () => {
-      mockRoutes({ status: sets({ ChunkSetId: 'set-a', ChunkCount: 1, TotalItemCount: 479 }) });
-
+    it('says nothing about the background write under 2 minutes, or when the transfer fails', async () => {
+      mockRoutes({ status: sets({ ChunkSetId: 'set-a', ChunkCount: 1, TotalItemCount: 224 }) });
       expect(await run()).toBe(true);
 
-      expect(onLog.mock.calls.filter(([m]) => String(m).startsWith('Importing '))).toEqual([]);
+      mockRoutes({ status: sets({ ChunkSetId: 'set-a', ChunkCount: 1, TotalItemCount: 20000 }), verify: ok({ BlobState: 'Error', Error: 'disk full' }) });
+      expect(await run()).toBe(false);
+
+      expect(onLog.mock.calls.filter(([m]) => String(m).includes('in the background'))).toEqual([]);
     });
   });
 

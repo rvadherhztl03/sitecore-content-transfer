@@ -6,7 +6,7 @@ import { Progress } from '@/components/ui/progress';
 import { Spinner } from '@/components/ui/spinner';
 import { Icon } from '@/lib/icon';
 import type { Env } from '@/lib/sdk';
-import { importMinutes, skippedWarning, type LogType, type StepStatus } from '@/lib/transfer';
+import { backgroundNote, skippedWarning, type LogType, type StepStatus } from '@/lib/transfer';
 import { cn } from '@/lib/utils';
 import { mdiAlertCircle, mdiCheck, mdiChevronDown } from '@mdi/js';
 import { useEffect, useId, useRef, useState, type ElementType } from 'react';
@@ -359,6 +359,8 @@ export function RunView({
   if (result === 'success') {
     // Steps that failed without failing the run (publishing): say so, since the result card doesn't show the steps.
     const unfinished = steps.filter((s) => s.status === 'fail').map((s) => s.label);
+    // The import ends once the items can be used; a big one still has Sitecore writing them for a while.
+    const background = kind === 'transfer' && info?.itemCount ? backgroundNote(info.itemCount, (targets ?? []).map((t) => t.name)) : null;
     const stats = [
       info?.itemCount !== undefined && (['Items', info.itemCount] as const),
       info && (['Chunks', info.chunkCount] as const),
@@ -382,6 +384,7 @@ export function RunView({
               {skippedWarning({ processed: info.processed ?? 0, skipped: info.skipped }, from, w.noun)}
             </p>
           )}
+          {background && <p className="text-neutral-fg max-w-[520px] text-sm leading-normal break-words">{background}</p>}
           {backupNote('to undo the transfer')}
           {stats.length > 0 && (
             <dl className="mt-2 flex w-full flex-wrap gap-3 text-left">
@@ -431,11 +434,6 @@ export function RunView({
   );
   // An export has no import phase, so the note only applies to transfer and install.
   const note = running && !failed && !onCancel && kind !== 'export' ? CANT_CANCEL : null;
-  // A big transfer imports for a long time: say about how long, once the package says how many items it holds, until
-  // every import and verify step (transferSteps' "Import into …" and "Verify …") is over.
-  const importing = steps.some((s) => /^(Import|Verify)\b/.test(s.label) && (s.status === 'pending' || s.status === 'running'));
-  const items = kind === 'transfer' && running && !failed && importing ? (info?.itemCount ?? 0) : 0;
-  const minutes = importMinutes(items);
 
   return (
     <div className={cn('flex flex-col', compact ? 'gap-4' : 'flex-1')}>
@@ -483,11 +481,6 @@ export function RunView({
                   </>
                 )}
               </p>
-              {minutes >= 5 && (
-                <p className="text-neutral-fg text-sm break-words">
-                  {`Importing ${items.toLocaleString('en-US')} items takes about ${minutes} minutes${(targets?.length ?? 0) > 1 ? ' on each target' : ''}. Keep this tab open.`}
-                </p>
-              )}
             </>
           )}
           {failed && (

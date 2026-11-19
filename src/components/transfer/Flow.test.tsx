@@ -819,15 +819,16 @@ describe('Flow', () => {
     });
 
     it('unmount aborts the run', async () => {
-      let release!: () => void;
+      // Chunks are read several at a time: hold every read, then let them all finish after the unmount.
+      const releases: (() => void)[] = [];
       const { calls, unmount } = setup({
-        overrides: { getChunk: () => new Promise<FakeReply>((r) => (release = () => r({ data: new Blob(['c']) }))) },
+        overrides: { getChunk: () => new Promise<FakeReply>((r) => void releases.push(() => r({ data: new Blob(['c']) }))) },
       });
       await toReview();
       click('Start transfer');
-      await waitFor(() => expect(release).toBeTypeOf('function'));
+      await waitFor(() => expect(releases).toHaveLength(2));
       unmount();
-      release();
+      for (const release of releases) release();
       await waitFor(() => expect(ofKey(calls, 'deleteContentTransfer')).toHaveLength(2));
       expect(ofKey(calls, 'saveChunk')).toHaveLength(0);
     });

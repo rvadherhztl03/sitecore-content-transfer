@@ -3,9 +3,10 @@ import { NextResponse } from 'next/server';
 import { getOAuthToken } from '@/utils/auth';
 
 // How many transfers the by-name lookup asks the Item Transfer API for at a time.
-const PAGE_SIZE = 100;
-// ponytail: the by-name lookup reads at most 5 pages (500 transfers); a target with more may not find its transfer.
-const MAX_PAGES = 5;
+// The Item Transfer API lists at most 50 per page (tern, docs/content.md).
+const PAGE_SIZE = 50;
+// ponytail: the by-name lookup reads at most 10 pages (500 transfers); a target with more may not find its transfer.
+const MAX_PAGES = 10;
 
 // The last path segment of the Location header consume returned. Only that segment is used: the header's host is never
 // called, the URL is always built from the configured target host.
