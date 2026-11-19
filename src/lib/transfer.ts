@@ -322,7 +322,7 @@ const accepted = (imports: Imports, env: Env) => () => {
   imports.unverified = env;
 };
 
-// Downloads one chunk, adding its item counts to `tally` when given.
+// Downloads one chunk, adding its item counts to `tally` when given. `itemCount` is its ItemsProcessed, when it says.
 async function fetchChunk(
   client: SdkClient,
   env: Env,
@@ -332,7 +332,7 @@ async function fetchChunk(
   cb: RunCallbacks,
   signal?: AbortSignal,
   tally?: Tally,
-): Promise<{ blob: Blob; isMedia: boolean }> {
+): Promise<{ blob: Blob; isMedia: boolean; itemCount?: number }> {
   // mutate, not query: query() keeps every result in the ClientSDK cache, which would hold every chunk Blob.
   const { data, response } = await retrying(env, cb, signal, () =>
     call<Blob>(client, env, 'mutate', CT + 'getChunk', { path: { transferId, chunksetId, chunkId } }),
@@ -340,12 +340,12 @@ async function fetchChunk(
   // Never pass a non-binary body on to a target or a package.
   if (!(data instanceof Blob)) throw new Error(`${env.name} returned no data for chunk ${chunkId + 1} of chunk set ${chunksetId}.`);
   const header = response?.headers.get('content-disposition') ?? null;
+  const { processed, skipped } = parseItemCounts(header);
   if (tally) {
-    const { processed, skipped } = parseItemCounts(header);
     tally.processed += processed;
     tally.skipped += skipped;
   }
-  return { blob: data, isMedia: parseIsMedia(header) };
+  return { blob: data, isMedia: parseIsMedia(header), itemCount: /ItemsProcessed/i.test(header ?? '') ? processed : undefined };
 }
 
 // Saving the same chunk index again overwrites it, so a save is safe to retry.
@@ -413,18 +413,22 @@ async function waitForPublish(client: SdkClient, env: Env, id: string, cb: RunCa
   }
 }
 
-// Experience Edge's delivery API: an item by path and language, null when Edge doesn't have it.
-const edgeQuery = (paths: string[], language: string) =>
-  `query {\n${paths.map((p, i) => `  e${i}: item(path: ${JSON.stringify(p)}, language: ${JSON.stringify(language)}) { id }`).join('\n')}\n}`;
-// Paths per Edge query, to keep each one small.
+// Experience Edge's delivery API: each item by path in each language (aliased e<path index>_<language index>), null
+// where Edge doesn't have it.
+const edgeQuery = (paths: string[], languages: string[]) =>
+  `query {\n${paths
+    .flatMap((p, i) => languages.map((l, j) => `  e${i}_${j}: item(path: ${JSON.stringify(p)}, language: ${JSON.stringify(l)}) { id }`))
+    .join('\n')}\n}`;
+// Lookups per Edge query, to keep each one small: fewer paths as languages grow, at least one.
 const EDGE_BATCH = 50;
 
 /**
- * Looks for `paths` on Experience Edge (via `env`'s live context) in `language`, every TIMING.pollMs until all are
- * there or TIMING.edgeTimeoutMs passes, and logs what it found. Edge can lag behind a publish, so it only ever logs:
- * nothing here fails the step, except a cancel.
+ * Looks for `paths` on Experience Edge (via `env`'s live context) in each of `languages`, every TIMING.pollMs until all
+ * are there or TIMING.edgeTimeoutMs passes, and logs what it found. An item counts as there in any language: it need not
+ * have a version in all of them. Edge can lag behind a publish, so it only ever logs: nothing here fails the step,
+ * except a cancel.
  */
-async function checkEdge(client: SdkClient, env: Env, paths: string[], language: string, cb: RunCallbacks, signal?: AbortSignal) {
+async function checkEdge(client: SdkClient, env: Env, paths: string[], languages: string[], cb: RunCallbacks, signal?: AbortSignal) {
   if (!env.liveContextId) {
     cb.onLog(`Skipped the Experience Edge check: the app has no live context for ${env.name}.`, 'info');
     return;
@@ -433,13 +437,14 @@ async function checkEdge(client: SdkClient, env: Env, paths: string[], language:
   const all = [...new Set(paths)];
   let missing = all;
   const deadline = Date.now() + TIMING.edgeTimeoutMs;
+  const perQuery = Math.max(1, Math.floor(EDGE_BATCH / languages.length));
   try {
     for (;;) {
       const still: string[] = [];
-      for (let i = 0; i < missing.length; i += EDGE_BATCH) {
-        const batch = missing.slice(i, i + EDGE_BATCH);
-        const data = (await graphql(client, live, edgeQuery(batch, language), {}, 'xmc.live.graphql')) ?? {};
-        still.push(...batch.filter((_, j) => !data[`e${j}`]?.id));
+      for (let i = 0; i < missing.length; i += perQuery) {
+        const batch = missing.slice(i, i + perQuery);
+        const data = (await graphql(client, live, edgeQuery(batch, languages), {}, 'xmc.live.graphql')) ?? {};
+        still.push(...batch.filter((_, k) => !languages.some((_, j) => data[`e${k}_${j}`]?.id)));
       }
       missing = still;
       if (!missing.length || Date.now() >= deadline) break;
@@ -457,7 +462,7 @@ async function checkEdge(client: SdkClient, env: Env, paths: string[], language:
   }
   const more = missing.length > 5 ? ` and ${num(missing.length - 5)} more` : '';
   cb.onLog(
-    `Not on Experience Edge yet: ${missing.slice(0, 5).join(', ')}${more}. They may still be processing; check again in a few minutes.`,
+    `Not on Experience Edge yet: ${missing.slice(0, 5).join(', ')}${more}. They may still be processing, or may not be publishable (for example, not approved in workflow).`,
     'warning',
   );
 }
@@ -493,7 +498,7 @@ async function publishStep(
       await waitForPublish(client, env, id, cb, signal);
     }
     cb.onLog('Published to Experience Edge.', 'success');
-    await checkEdge(client, env, trees.map((t) => t.itemPath), languages[0], cb, signal);
+    await checkEdge(client, env, trees.map((t) => t.itemPath), languages, cb, signal);
     cb.onStepChange(step, 'done');
   } catch (e) {
     if (signal?.aborted) throw e;
@@ -522,8 +527,8 @@ async function downloadChunks(
     for (let index = 0; index < set.ChunkCount; index++) {
       signal?.throwIfAborted();
       onChunk(chunks.length + 1, total);
-      const { blob, isMedia } = await fetchChunk(client, env, transferId, set.ChunkSetId, index, cb, signal, tally);
-      chunks.push({ chunkSet, index, isMedia, data: blob });
+      const { blob, isMedia, itemCount } = await fetchChunk(client, env, transferId, set.ChunkSetId, index, cb, signal, tally);
+      chunks.push({ chunkSet, index, isMedia, data: blob, itemCount });
     }
   }
   return { chunks, tally };
@@ -805,7 +810,8 @@ export async function runImport(
     done(pct(80));
 
     begin(3, `Verifying the import on ${target.name}.`);
-    await verifyFiles(client, target, files, cb, signal);
+    // completeSets returns the files in the order of `parts`; a part without an item count waits the base time.
+    await verifyFiles(client, target, files, cb, signal, parts.map((p) => p.itemCount ?? 0));
     imports.unverified = undefined;
     done(pct(100));
 

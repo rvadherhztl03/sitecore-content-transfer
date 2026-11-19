@@ -35,6 +35,23 @@ describe('package', () => {
     expect(parts).toHaveLength(1);
     expect(await texts(parts[0].chunks)).toEqual(['aa', 'bbb']);
     expect(parts[0].chunks.map((c) => c.isMedia)).toEqual([false, true]);
+    expect(parts[0].itemCount).toBeUndefined();
+  });
+
+  it('records each chunk\'s item count, and readPackage totals a part only when every chunk of it has one', async () => {
+    const chunks: ChunkData[] = [
+      { ...CHUNKS[0], itemCount: 4 },
+      { ...CHUNKS[1], itemCount: 6 },
+      { chunkSet: 1, index: 0, isMedia: false, data: new Blob(['c']), itemCount: 0 },
+      { chunkSet: 2, index: 0, isMedia: false, data: new Blob(['d']), itemCount: 5 },
+      { chunkSet: 2, index: 1, isMedia: false, data: new Blob(['e']) },
+    ];
+    const pkg = await buildPackage(chunks, ITEMS);
+    const zip = await JSZip.loadAsync(await pkg.arrayBuffer());
+    const map: { itemCount?: number }[] = JSON.parse(await zip.file('package-chunks.json')!.async('text'));
+    expect(map.map((e) => e.itemCount)).toEqual([4, 6, 0, 5, undefined]);
+    const { parts } = await readPackage(new File([pkg], 'p.zip'));
+    expect(parts.map((p) => p.itemCount)).toEqual([10, 0, undefined]);
   });
 
   it('readPackage splits chunk sets into parts', async () => {
@@ -55,6 +72,7 @@ describe('package', () => {
     expect(parts).toHaveLength(1);
     expect(parts[0].chunks.map((c) => c.data.size)).toEqual([1048576, 1048576, 524288]);
     expect(parts[0].chunks.every((c) => c.isMedia === false)).toBe(true);
+    expect(parts[0].itemCount).toBeUndefined();
   });
 
   it('readPackage slices a .raif without reading it', async () => {
@@ -71,6 +89,7 @@ describe('package', () => {
     expect(items).toEqual([]);
     expect(parts).toHaveLength(1);
     expect(parts[0].chunks.map((c) => c.data.size)).toEqual([1048576, 524288]);
+    expect(parts[0].itemCount).toBeUndefined();
   });
 
   it('readPackage rejects a zip without package.raif', async () => {

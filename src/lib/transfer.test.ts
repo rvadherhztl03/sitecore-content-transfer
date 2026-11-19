@@ -622,21 +622,26 @@ describe('publish to Experience Edge', () => {
   describe('then checks Experience Edge', () => {
     const LIVE = 'xmc.live.graphql';
     const QA_LIVE = { ...QA, liveContextId: 'live-qa' };
-    // Answers the Edge check: `found(path, poll)` says whether Edge has the item at that path on that poll (from 0).
-    const edge = (found: (path: string, poll: number) => boolean) => {
+    // Answers the Edge check: `found(path, poll, language)` says whether Edge has the item at that path in that language
+    // on that poll (from 0).
+    const edge = (found: (path: string, poll: number, language: string) => boolean) => {
       let poll = 0;
       return (p: any): FakeReply => {
         const data: Record<string, unknown> = {};
-        for (const [, alias, path] of (p.body.query as string).matchAll(/(\w+): item\(path: ("[^"]*")/g)) data[alias] = found(JSON.parse(path), poll) ? { id: 'x' } : null;
+        for (const [, alias, path, language] of (p.body.query as string).matchAll(/(\w+): item\(path: ("[^"]*"), language: ("[^"]*")/g)) {
+          data[alias] = found(JSON.parse(path), poll, JSON.parse(language)) ? { id: 'x' } : null;
+        }
         poll++;
         return { data: { data } };
       };
     };
     const checks = (calls: any[]) => calls.filter((c) => c.key === LIVE);
-    const pathsOf = (c: any) => [...(c.params.body.query as string).matchAll(/item\(path: "([^"]+)"/g)].map((m) => m[1]);
+    // The paths a check looks up, once each (it asks for each in every language).
+    const pathsOf = (c: any) => [...new Set([...(c.params.body.query as string).matchAll(/item\(path: "([^"]+)"/g)].map((m) => m[1]))];
+    const rows = (n: number) => Array.from({ length: n }, (_, i): DataTree => ({ itemPath: `/P${i + 1}`, scope: 'SingleItem', mergeStrategy: 'OverrideExistingItem' }));
     const toQaLive = (dataTrees: DataTree[]) => ({ ...OPTS, targets: [{ env: QA_LIVE }], dataTrees, publish: true });
 
-    it('looks up each published row on Edge with the live context, in the first language', async () => {
+    it('looks up each published row on Edge with the live context, in every target language', async () => {
       const { client, calls } = fakeClient({ ...handlers(), [LIVE]: edge(() => true) });
       const r = recorder();
       expect(await runTransfer(client, toQaLive(ROWS), r.cb)).toBe(true);
@@ -644,12 +649,36 @@ describe('publish to Experience Edge', () => {
       expect(checks(calls)).toHaveLength(1);
       expect(check.kind).toBe('mutate');
       expect(check.params.query.sitecoreContextId).toBe('live-qa');
-      expect(check.params.body.query).toContain('item(path: "/sitecore/content/A", language: "en") { id }');
+      expect(check.params.body.query).toContain('e0_0: item(path: "/sitecore/content/A", language: "en") { id }');
+      expect(check.params.body.query).toContain('e0_1: item(path: "/sitecore/content/A", language: "da-DK") { id }');
       // The rows as sent: + Children's child is a row of its own, but nothing below + Everything below is looked up.
       expect(pathsOf(check)).toEqual(['/sitecore/content/A', '/sitecore/content/B', C, `${C}/C1`]);
       expect(r.logs).toContainEqual(['All 4 items are on Experience Edge.', 'success']);
       expect(r.steps).toContainEqual([TRANSFER_STEPS.length, 'done']);
       expect(r.logs.at(-1)).toEqual(['Transfer complete.', 'success']);
+    });
+
+    it('counts an item as there when any language has it, whatever order the target lists them in', async () => {
+      const { client, calls } = fakeClient({
+        ...handlers(),
+        [LANGS]: () => ({ data: [{ name: 'da' }, { name: 'en' }] }),
+        [LIVE]: edge((_path, _poll, language) => language === 'en'),
+      });
+      const r = recorder();
+      expect(await runTransfer(client, toQaLive(ROWS.slice(0, 2)), r.cb)).toBe(true);
+      expect(checks(calls)).toHaveLength(1);
+      expect(r.logs).toContainEqual(['All 2 items are on Experience Edge.', 'success']);
+    });
+
+    it('asks for fewer paths per query as languages grow, and at least one', async () => {
+      const langs = (n: number) => () => ({ data: Array.from({ length: n }, (_, i) => ({ name: `l${i}` })) });
+      // 50 lookups a query: 3 languages fit 16 paths.
+      const three = fakeClient({ ...handlers(), [LANGS]: langs(3), [LIVE]: edge(() => true) });
+      expect(await runTransfer(three.client, toQaLive(rows(20)), recorder().cb)).toBe(true);
+      expect(checks(three.calls).map((c) => pathsOf(c).length)).toEqual([16, 4]);
+      const many = fakeClient({ ...handlers(), [LANGS]: langs(60), [LIVE]: edge(() => true) });
+      expect(await runTransfer(many.client, toQaLive(rows(2)), recorder().cb)).toBe(true);
+      expect(checks(many.calls).map((c) => pathsOf(c).length)).toEqual([1, 1]);
     });
 
     it('says so for one item', async () => {
@@ -669,13 +698,12 @@ describe('publish to Experience Edge', () => {
 
     it('names up to five items Edge still lacks, and never fails the step', async () => {
       TIMING.edgeTimeoutMs = 0;
-      const rows = Array.from({ length: 7 }, (_, i): DataTree => ({ itemPath: `/P${i + 1}`, scope: 'SingleItem', mergeStrategy: 'OverrideExistingItem' }));
       const { client, calls } = fakeClient({ ...handlers(), [LIVE]: edge(() => false) });
       const r = recorder();
-      expect(await runTransfer(client, toQaLive(rows), r.cb)).toBe(true);
+      expect(await runTransfer(client, toQaLive(rows(7)), r.cb)).toBe(true);
       expect(checks(calls)).toHaveLength(1);
       expect(r.logs).toContainEqual([
-        'Not on Experience Edge yet: /P1, /P2, /P3, /P4, /P5 and 2 more. They may still be processing; check again in a few minutes.',
+        'Not on Experience Edge yet: /P1, /P2, /P3, /P4, /P5 and 2 more. They may still be processing, or may not be publishable (for example, not approved in workflow).',
         'warning',
       ]);
       expect(r.steps).toContainEqual([TRANSFER_STEPS.length, 'done']);
@@ -892,6 +920,21 @@ describe('runExport', () => {
     for (let i = 0; i < 3; i++) expect(r.steps).toContainEqual([i, 'done']);
   });
 
+  it('records each chunk\'s ItemsProcessed in the package, for the import wait', async () => {
+    const getChunk: Handler = (p) => ({
+      data: new Blob(['c' + p.path.chunkId]),
+      headers: { 'content-disposition': `attachment; IsMedia=false; ItemsProcessed=${p.path.chunkId === 0 ? 7 : 5}; ItemsSkipped=0` },
+    });
+    const { client } = fakeClient(withGraphql({ getChunk }));
+    const zip = await runExport(client, { source: DEV, dataTrees: TREES }, recorder().cb);
+    expect((await readPackage(new File([zip!], 'e.zip'))).parts.map((p) => p.itemCount)).toEqual([12]);
+
+    // A chunk that doesn't say leaves the part without a count, rather than a count of 0.
+    const plain = fakeClient(withGraphql());
+    const unsaid = await runExport(plain.client, { source: DEV, dataTrees: TREES }, recorder().cb);
+    expect((await readPackage(new File([unsaid!], 'e.zip'))).parts.map((p) => p.itemCount)).toEqual([undefined]);
+  });
+
   it('reports the chunk and item counts once the package is ready', async () => {
     const { client } = fakeClient(withGraphql(TWO_SETS));
     const r = recorder();
@@ -1022,6 +1065,21 @@ describe('runImport', () => {
 describe('import wait and estimate', () => {
   const sets = (TotalItemCount: number): Record<string, Handler> => ({
     getContentTransferStatus: () => ({ data: { State: 'Completed', ChunkSetsMetadata: [{ ChunkSetId: 'cs1', ChunkCount: 2, TotalItemCount }] } }),
+  });
+
+  it('an install or restore gives each part more time for each item its package records', async () => {
+    Object.assign(TIMING, { verifyTimeoutMs: 0, msPerItem: 60_000 });
+    let polls = 0;
+    const { client } = fakeClient(happyHandlers({ getBlobState: () => ({ data: { status: ++polls > 3 ? 'OK' : 'Uploaded' } }) }));
+    const chunk = { data: new Blob(['a0']), isMedia: false };
+    // 3 items may take 3 minutes; a package without counts (an older zip, a bare .raif) has no time beyond verifyTimeoutMs.
+    expect(await runImport(client, { target: QA, database: 'master', parts: [{ chunks: [chunk], itemCount: 3 }] }, recorder().cb)).toBe(true);
+    expect(polls).toBe(4);
+    polls = 0;
+    const r = recorder();
+    expect(await runImport(client, { target: QA, database: 'master', parts: [{ chunks: [chunk] }] }, r.cb)).toBe(false);
+    expect(polls).toBe(1);
+    expect(r.logs).toContainEqual(['Timed out waiting for the import to finish.', 'error']);
   });
 
   it('gives each package file more time for each item its chunk set holds', async () => {
