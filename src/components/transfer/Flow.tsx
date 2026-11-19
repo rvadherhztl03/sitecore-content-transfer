@@ -9,13 +9,15 @@ import { RunView } from '@/components/transfer/RunView';
 import { Segmented } from '@/components/transfer/Segmented';
 import { SelectionQueue } from '@/components/transfer/SelectionQueue';
 import { Stepper } from '@/components/transfer/Stepper';
-import { usePreflights } from '@/components/transfer/usePreflight';
+import { usePreflights, type Preflight } from '@/components/transfer/usePreflight';
 import { useRun } from '@/components/transfer/useRun';
 import { Button } from '@/components/ui/button';
+import { withHistory, type RunRecord } from '@/lib/history';
 import { Icon } from '@/lib/icon';
 import { mergeTrees, newTree } from '@/lib/queue';
 import type { Env, SdkClient } from '@/lib/sdk';
 import { readPackage } from '@/lib/package';
+import { buildReport } from '@/lib/report';
 import {
   DATABASE,
   IMPORT_STEP,
@@ -71,6 +73,8 @@ export function Flow({ client, mode, envs, onHome }: Props) {
   // publishes too, so the live site goes back as well.
   const [publishOn, setPublishOn] = useState(false);
   const [withPublish, setWithPublish] = useState(false);
+  // The pre-flight results the current run started with, for its report: the check only runs on Review.
+  const [ranChecks, setRanChecks] = useState<Record<string, Preflight>>();
 
   // An id that is no longer in `envs` (e.g. after a Retry) counts as unselected, and so does a target that is the source.
   const source = envs.find((e) => e.id === sourceId);
@@ -134,6 +138,7 @@ export function Flow({ client, mode, envs, onHome }: Props) {
     setBackupZips([]);
     setRestoringId(undefined);
     setRestorable([]);
+    setRanChecks(preflights);
     if (!transfer) {
       void runner.start({ labels: exportSteps(src), source: src }, async (cb, signal) => {
         const blob = await runExport(client, { source: src, dataTrees: trees }, cb, signal);
@@ -155,10 +160,35 @@ export function Flow({ client, mode, envs, onHome }: Props) {
       setBackupZips((zips) => [...zips, pkg]);
       download(pkg.blob, pkg.name);
     };
-    void runner.start({ labels: steps.labels, source: src, targets }, (cb, signal) =>
-      runTransfer(client, { source: src, targets: plan, database: DATABASE, dataTrees: trees, publish }, { ...cb, onBackup }, signal),
+    // Each target imports two steps after its Copy step (see transferSteps).
+    const record: RunRecord = { kind: 'transfer', source: src, targets, importAt: steps.targetAt.map((at) => at + 2), items: trees };
+    void runner.start(
+      { labels: steps.labels, source: src, targets },
+      withHistory(client, record, (cb, signal) =>
+        runTransfer(client, { source: src, targets: plan, database: DATABASE, dataTrees: trees, publish }, { ...cb, onBackup }, signal),
+      ),
     );
   };
+
+  // The route, the list, the checks and, once started, the run, as one HTML file. A run reports the route it started with.
+  const downloadReport = () => {
+    const at = new Date();
+    const html = buildReport({
+      mode,
+      source: run?.source ?? source!,
+      targets: run ? (run.targets ?? []) : targets,
+      trees,
+      preflights: run ? ranChecks : preflights,
+      run,
+      at,
+    });
+    download(new Blob([html], { type: 'text/html' }), `transfer-report-${localDate(at)}-${at.toTimeString().slice(0, 5).replace(':', '')}.html`);
+  };
+  const reportButton = (
+    <Button type="button" variant="outline" className={BTN} onClick={downloadReport}>
+      Download report
+    </Button>
+  );
 
   const count = `${trees.length} ${trees.length === 1 ? 'item' : 'items'}`;
   const pair = transfer ? `${source?.name} → ${names}` : (source?.name ?? '');
@@ -203,6 +233,8 @@ export function Flow({ client, mode, envs, onHome }: Props) {
     };
     body = (
       <div ref={runner.headingRef} className="flex flex-1 flex-col [&_h1]:outline-none">
+        {/* A restore isn't the transfer the report describes. */}
+        {!restoring && <div className="mx-auto flex w-full max-w-[1120px] justify-end px-4 pt-5 sm:px-8">{reportButton}</div>}
         <RunView
           kind={restoring ? 'restore' : mode}
           source={run.source}
@@ -399,6 +431,7 @@ export function Flow({ client, mode, envs, onHome }: Props) {
       );
       footer = (
         <ActionBar summary={summary}>
+          {reportButton}
           <Button type="button" variant="outline" className={BTN} onClick={() => go(1)}>
             Back
           </Button>

@@ -16,6 +16,7 @@ import {
   type FakeReply,
   type RelatedFake,
 } from '@/test/fakeClient';
+import { entriesIn, historyReply, historyStore, isHistory, type HistoryStore } from '@/test/fakeHistory';
 
 const DEV: Env = { id: 'dev', name: 'Acme · Development', contextId: 'ctx-dev', tenantName: 'acme-dev' };
 const QA: Env = { id: 'qa', name: 'Acme · QA', contextId: 'ctx-qa', tenantName: 'acme-qa' };
@@ -32,18 +33,22 @@ const EVERYWHERE: Find = (_, path) => ({ id: path });
 // to overwrite there is no backup step.
 const NEW_ON_QA: Find = (ctx, path) => (ctx === 'ctx-qa' && path === HOME ? undefined : { id: path });
 
-// Modelled on happyHandlers in src/lib/transfer.test.ts, plus the tree query and the pre-flight check.
+// Modelled on happyHandlers in src/lib/transfer.test.ts, plus the tree query, the pre-flight check and the run history.
 function handlers(
   overrides: Record<string, Handler> = {},
   find: Find | Handler = NEW_ON_QA,
   related: Record<string, RelatedFake[]> = {},
   compare: Record<string, Record<string, CompareFake>> = {},
+  history: HistoryStore = historyStore(),
 ): Record<string, Handler> {
   let statusCalls = 0;
   const check: Handler = find.length === 2 ? preflightReply(find as Find) : (find as Handler);
   return {
+    'host.user': () => ({ data: { id: 'u1', name: 'Jane Doe', email: 'jane@acme.com' } }),
     'xmc.authoring.graphql': (p) =>
-      isPreflight(p)
+      isHistory(p)
+        ? historyReply(history)(p)
+        : isPreflight(p)
         ? check(p)
         : isRelated(p)
           ? relatedReply(related)(p)
@@ -85,10 +90,12 @@ function setup({
   related?: Record<string, RelatedFake[]>;
   compare?: Record<string, Record<string, CompareFake>>;
 } = {}) {
-  const { client, calls } = fakeClient(handlers(overrides, find, related, compare));
+  // Every environment has /sitecore/system/Modules, where the run history goes.
+  const history = historyStore('ctx-dev', 'ctx-qa', 'ctx-prod');
+  const { client, calls } = fakeClient(handlers(overrides, find, related, compare, history));
   const onHome = vi.fn();
   const view = render(<Flow client={client} mode={mode} envs={envs} onHome={onHome} />);
-  return { client, calls, onHome, ...view };
+  return { client, calls, onHome, history, ...view };
 }
 
 const click = (name: string | RegExp) => fireEvent.click(screen.getByRole('button', { name }));
@@ -630,7 +637,7 @@ describe('Flow', () => {
 
   describe('Publish', () => {
     const publishes = (calls: { key: string; params: any }[]) =>
-      calls.filter((c) => c.key === 'xmc.authoring.graphql' && c.params.body.query.startsWith('mutation'));
+      calls.filter((c) => c.key === 'xmc.authoring.graphql' && c.params.body.query.startsWith('mutation') && !isHistory(c.params));
     const box = () => screen.getByRole('checkbox', { name: 'Publish to Experience Edge when done' });
 
     it('is offered, unticked: publishing makes the content live', async () => {
@@ -848,6 +855,134 @@ describe('Flow', () => {
     expect(within(screen.getByRole('list', { name: 'Steps' })).getAllByText('0 s')).toHaveLength(2);
     click('Try again');
     expect(screen.getByRole('heading', { level: 1, name: 'Ready to transfer' })).toHaveFocus();
+  });
+
+  describe('History', () => {
+    it('records the transfer on the target once it ends, with who ran it, without holding up the result', async () => {
+      const { history } = setup();
+      await toReview();
+      click('Start transfer');
+      expect(await screen.findByText('Transfer complete')).toBeInTheDocument();
+      await waitFor(() => expect(entriesIn(history, 'ctx-qa')).toHaveLength(1));
+      const [entry] = entriesIn(history, 'ctx-qa');
+      expect(entry).toEqual({
+        ...entry,
+        kind: 'transfer',
+        by: 'Jane Doe',
+        source: DEV.name,
+        target: QA.name,
+        items: [newTree(HOME)],
+        result: 'success',
+        itemCount: 3,
+      });
+      expect(new Date(entry.at).getTime()).toBeLessThanOrEqual(Date.now());
+      expect(entriesIn(history, 'ctx-dev')).toEqual([]);
+    });
+
+    it('records a run that stopped on a later target on each target that got as far as the import', async () => {
+      downloads();
+      const { history } = setup({ find: EVERYWHERE, overrides: { consumeFile: (p) => (p.query.sitecoreContextId === 'ctx-prod' ? { status: 500 } : {}) } });
+      fireEvent.click(radio('To', PROD));
+      await toReview();
+      fireEvent.click(screen.getByRole('checkbox', { name: 'I understand this writes to Acme Production' }));
+      click('Start transfer');
+      expect(await screen.findByRole('heading', { level: 1, name: 'Transfer failed' })).toBeInTheDocument();
+      await waitFor(() => expect(entriesIn(history, 'ctx-prod')).toHaveLength(1));
+      expect(entriesIn(history, 'ctx-qa').map((e) => e.result)).toEqual(['success']);
+      expect(entriesIn(history, 'ctx-prod').map((e) => e.result)).toEqual(['fail']);
+    });
+
+    it('does not record a restore', async () => {
+      downloads();
+      const { history, calls } = setup({ find: EVERYWHERE });
+      await toReview();
+      click('Start transfer');
+      expect(await screen.findByText('Transfer complete')).toBeInTheDocument();
+      await waitFor(() => expect(entriesIn(history, 'ctx-qa')).toHaveLength(1));
+      click('Restore Acme · QA');
+      click('Restore now');
+      expect(await screen.findByRole('heading', { level: 1, name: 'Restore complete' })).toBeInTheDocument();
+      expect(calls.filter((c) => c.key === 'host.user')).toHaveLength(1);
+      expect(entriesIn(history, 'ctx-qa')).toHaveLength(1);
+    });
+
+    it('records nothing for a transfer that failed before the import', async () => {
+      downloads();
+      const { history, calls } = setup({ find: EVERYWHERE, overrides: { getContentTransferStatus: () => ({ data: { State: 'Failed' } }) } });
+      await toReview();
+      click('Start transfer');
+      expect(await screen.findByRole('heading', { level: 1, name: 'Transfer failed' })).toBeInTheDocument();
+      expect(calls.filter((c) => c.key === 'host.user')).toEqual([]);
+      expect(entriesIn(history, 'ctx-qa')).toEqual([]);
+    });
+
+    it('logs a warning when the run cannot be recorded, and the transfer still completes', async () => {
+      const { history } = setup();
+      // QA has no /sitecore/system/Modules.
+      history['ctx-qa'] = {};
+      await toReview();
+      click('Start transfer');
+      expect(await screen.findByText('Transfer complete')).toBeInTheDocument();
+      expect(await screen.findByText("Couldn't record this run in Acme · QA's history: /sitecore/system/Modules wasn't found.")).toBeInTheDocument();
+    });
+  });
+
+  describe('Report', () => {
+    // The downloaded files' contents, in order.
+    const saved = () => Promise.all(vi.mocked(URL.createObjectURL).mock.calls.map(([b]) => (b as Blob).text()));
+
+    it('Download report on Review saves the route, the list and the pre-flight check as HTML', async () => {
+      const names = downloads();
+      setup();
+      await toReview();
+      click('Download report');
+      expect(names).toHaveLength(1);
+      expect(names[0]).toMatch(/^transfer-report-\d{4}-\d{2}-\d{2}-\d{4}\.html$/);
+      const [html] = await saved();
+      expect(html).toContain('<h1>Transfer report</h1>');
+      expect(html).toContain(`${DEV.name} → ${QA.name}`);
+      expect(html).toContain(HOME);
+      expect(html).toContain('Pre-flight check on Acme · QA');
+      expect(html).not.toContain('Activity log');
+    });
+
+    it('Download report on the run screen adds the run, and keeps the check Review had', async () => {
+      downloads();
+      setup();
+      await toReview();
+      click('Start transfer');
+      expect(await screen.findByText('Transfer complete')).toBeInTheDocument();
+      click('Download report');
+      const [html] = await saved();
+      expect(html).toContain('Pre-flight check on Acme · QA');
+      expect(html).toContain('>New<');
+      expect(html).toContain('Activity log');
+      expect(html).toContain('Transfer complete.');
+      expect(html).toContain('Verify');
+    });
+
+    it('is offered on an export too', async () => {
+      downloads();
+      setup({ mode: 'export' });
+      await toReview('Review export');
+      click('Download report');
+      const [html] = await saved();
+      expect(html).toContain('<h1>Export report</h1>');
+      expect(html).not.toContain('Pre-flight');
+    });
+
+    it('is not offered while restoring', async () => {
+      downloads();
+      setup({ find: EVERYWHERE });
+      await toReview();
+      click('Start transfer');
+      expect(await screen.findByText('Transfer complete')).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Download report' })).toBeInTheDocument();
+      click('Restore Acme · QA');
+      click('Restore now');
+      expect(await screen.findByRole('heading', { level: 1, name: 'Restore complete' })).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Download report' })).not.toBeInTheDocument();
+    });
   });
 
   it('export success downloads once and Download package downloads again', async () => {
