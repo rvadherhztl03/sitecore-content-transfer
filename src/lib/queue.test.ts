@@ -195,19 +195,20 @@ describe('queue', () => {
       expect(trees).toEqual([{ itemPath: '/a', scope: 'SingleItem', mergeStrategy: 'KeepExistingItem' }]);
     });
 
-    it('adds DescendantsOnly as everything below, keeping what is there, and says so', () => {
+    it('adds DescendantsOnly as everything below with its push operations, and says it brings the item too', () => {
       const { trees, note } = load(
         { name: 'a', path: '/a', scope: 'DescendantsOnly' },
         { name: 'b', path: '/b', scope: 'DescendantsOnly', allowedPushOperations: 'CreateAndUpdate' },
         { name: 'c', path: '/c' },
       );
+      // Updates to existing descendants are what the module asks for, so they aren't turned into Keep what's there.
       expect(trees.map((t) => [t.scope, t.mergeStrategy])).toEqual([
-        ['ItemAndDescendants', 'KeepExistingItem'],
-        ['ItemAndDescendants', 'KeepExistingItem'],
+        ['ItemAndDescendants', 'OverrideExistingTree'],
+        ['ItemAndDescendants', 'OverrideExistingItem'],
         ['ItemAndDescendants', 'OverrideExistingTree'],
       ]);
       expect(note).toBe(
-        "Loaded 3 items from Project.module.json. 2 were descendants only, so they were added as + Everything below with Keep what's there (the item itself is only created if missing).",
+        "Loaded 3 items from Project.module.json. 2 were descendants only, so they were added as + Everything below, which also brings the item itself.",
       );
     });
 
@@ -240,7 +241,7 @@ describe('queue', () => {
         { name: 'c', path: '/c', scope: 'Ignored' },
       );
       expect(note).toBe(
-        "Loaded 2 items from Project.module.json. Skipped 1 (ignored, not in master or not valid). 1 had rules, so its whole tree was added. 1 was descendants only, so it was added as + Everything below with Keep what's there (the item itself is only created if missing).",
+        "Loaded 2 items from Project.module.json. Skipped 1 (ignored, not in master or not valid). 1 had rules, so its whole tree was added. 1 was descendants only, so it was added as + Everything below, which also brings the item itself.",
       );
     });
 

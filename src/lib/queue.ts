@@ -118,7 +118,7 @@ const isModule = (parsed: unknown): parsed is { items: { includes: unknown[] } }
 
 /**
  * Reads a Sitecore CLI module file's includes as queue rows, with a note on anything skipped or approximated.
- * - scope: DescendantsOnly becomes "+ Everything below" that keeps what's there (the item itself is only created if missing).
+ * - scope: DescendantsOnly becomes "+ Everything below", which also brings the item itself (the API has no descendants-only scope).
  * - allowedPushOperations (default CreateUpdateAndDelete): CreateOnly keeps, CreateAndUpdate replaces the item,
  *   CreateUpdateAndDelete replaces everything below, or just the item when the scope has no "below" to replace.
  * - Skipped: Ignored scope, a database other than master, and includes without a path or with a value Sitecore doesn't list.
@@ -139,18 +139,17 @@ function parseModule(parsed: { items: { includes: unknown[] } }, fileName: strin
       skipped++;
       continue;
     }
-    const keepOnly = scopeName === 'descendantsonly';
-    if (keepOnly) descendantsOnly++;
+    if (scopeName === 'descendantsonly') descendantsOnly++;
     if (Array.isArray(inc.rules) && inc.rules.length) ruled++;
     // withScope drops a merge the scope doesn't allow (replacing everything below, for all but + Everything below).
-    rows.push(withScope({ itemPath: path, scope, mergeStrategy: keepOnly ? 'KeepExistingItem' : push }, scope));
+    rows.push(withScope({ itemPath: path, scope, mergeStrategy: push }, scope));
   }
   const trees = mergeTrees([], rows);
   const notes = [
     skipped && `Skipped ${skipped} (ignored, not in master or not valid).`,
     ruled && `${ruled} had rules, so ${times(ruled, 'its whole tree was', 'their whole trees were')} added.`,
     descendantsOnly &&
-      `${descendantsOnly} ${times(descendantsOnly, 'was', 'were')} descendants only, so ${times(descendantsOnly, 'it was', 'they were')} added as + Everything below with Keep what's there (the item itself is only created if missing).`,
+      `${descendantsOnly} ${times(descendantsOnly, 'was', 'were')} descendants only, so ${times(descendantsOnly, 'it was', 'they were')} added as + Everything below, which also brings the item itself.`,
   ].filter(Boolean);
   if (trees.length === 0) throw new Error(['No items to load from', `${fileName}.`, ...notes].join(' '));
   return { trees, note: [`Loaded ${trees.length} ${times(trees.length, 'item', 'items')} from ${fileName}.`, ...notes].join(' ') };

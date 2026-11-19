@@ -154,11 +154,11 @@ describe('SelectionQueue', () => {
       expect(onChange).toHaveBeenCalledWith([
         { itemPath: '/sitecore/templates/Project', scope: 'ItemAndDescendants', mergeStrategy: 'OverrideExistingItem' },
         newTree('/sitecore/content/Acme'),
-        { itemPath: '/sitecore/media library/Acme', scope: 'ItemAndDescendants', mergeStrategy: 'KeepExistingItem' },
+        newTree('/sitecore/media library/Acme'),
       ]),
     );
     expect(await screen.findByRole('status')).toHaveTextContent(
-      "Loaded 3 items from Project.module.json. Skipped 2 (ignored, not in master or not valid). 1 had rules, so its whole tree was added. 1 was descendants only, so it was added as + Everything below with Keep what's there (the item itself is only created if missing).",
+      'Loaded 3 items from Project.module.json. Skipped 2 (ignored, not in master or not valid). 1 had rules, so its whole tree was added. 1 was descendants only, so it was added as + Everything below, which also brings the item itself.',
     );
   });
 
