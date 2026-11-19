@@ -1,10 +1,11 @@
 import { Segmented } from '@/components/transfer/Segmented';
+import { download, localDate } from '@/components/transfer/download';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Icon } from '@/lib/icon';
-import { SCOPES, labelOf, mergeTrees, mergesFor, nameOf, newTree, parseQueueJson, withScope } from '@/lib/queue';
+import { SCOPES, labelOf, mergeTrees, mergesFor, nameOf, newTree, parseQueueFile, queueJson, withScope } from '@/lib/queue';
 import type { DataTree, MergeStrategy, Scope } from '@/lib/transfer';
 import { mdiClose } from '@mdi/js';
 import { useRef, useState } from 'react';
@@ -16,6 +17,8 @@ const BTN = 'h-9 rounded-lg px-3 pointer-coarse:h-11';
 export function SelectionQueue({ trees, onChange, disabled }: Props) {
   const [path, setPath] = useState('');
   const [error, setError] = useState<string | null>(null);
+  // What loading a module file skipped or approximated.
+  const [note, setNote] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
   const add = (incoming: DataTree[]) => {
@@ -37,8 +40,11 @@ export function SelectionQueue({ trees, onChange, disabled }: Props) {
     e.target.value = '';
     if (!file) return;
     setError(null);
+    setNote(null);
     try {
-      add(parseQueueJson(await file.text()));
+      const { trees: incoming, note: loaded } = parseQueueFile(await file.text(), file.name);
+      add(incoming);
+      setNote(loaded ?? null);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }
@@ -58,6 +64,7 @@ export function SelectionQueue({ trees, onChange, disabled }: Props) {
             <Button type="button" variant="outline" size="sm" className={BTN} disabled={disabled} onClick={() => fileRef.current?.click()}>
               Import list
             </Button>
+            {/* A queue file or a Sitecore CLI *.module.json. */}
             <input
               ref={fileRef}
               type="file"
@@ -71,9 +78,22 @@ export function SelectionQueue({ trees, onChange, disabled }: Props) {
               type="button"
               variant="outline"
               size="sm"
+              className={BTN}
+              disabled={disabled || trees.length === 0}
+              onClick={() => download(new Blob([queueJson(trees)], { type: 'application/json' }), `content-transfer-list-${localDate()}.json`)}
+            >
+              Save list
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
               className={`${BTN} text-muted-foreground`}
               disabled={disabled || trees.length === 0}
-              onClick={() => onChange([])}
+              onClick={() => {
+                setNote(null);
+                onChange([]);
+              }}
             >
               Clear all
             </Button>
@@ -100,6 +120,11 @@ export function SelectionQueue({ trees, onChange, disabled }: Props) {
           <Alert variant="danger">
             <AlertDescription>{error}</AlertDescription>
           </Alert>
+        )}
+        {note && (
+          <p role="status" className="text-muted-foreground px-1 text-sm break-words">
+            {note}
+          </p>
         )}
         {trees.length === 0 ? (
           <p className="text-muted-foreground px-1 py-2 text-sm">Pick items from the tree or paste a path.</p>
