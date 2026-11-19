@@ -580,6 +580,34 @@ describe('MigrationService live transfer: waits, skipped items, retries and impo
       expect(count('verify')).toBe(2);
     });
 
+    it('retries the export flow status poll and its download', async () => {
+      const { count } = mockRoutes({
+        status: (call: number) => (call === 1 ? fail(503) : sets({ ChunkSetId: 'set-a', ChunkCount: 1 })),
+        download: (call: number) => (call === 1 ? fail(502) : { ok: true, status: 200, blob: () => Promise.resolve(new Blob(['zip'])) }),
+      });
+      const service = new MigrationService(config, callbacks);
+      vi.spyOn(service as any, 'triggerBrowserDownload').mockImplementation(() => {});
+
+      expect(await service.runPackageDownloadFlow()).toBe(true);
+
+      expect(count('status')).toBe(2);
+      expect(count('download')).toBe(2);
+      expect(logged('warning').some(m => m.startsWith('Status check answered HTTP 503'))).toBe(true);
+      expect(logged('warning').some(m => m.startsWith('Download answered HTTP 502'))).toBe(true);
+    });
+
+    it('retries an install flow chunk upload, sending the same chunk again', async () => {
+      const { fn, count } = mockRoutes({ upload: (call: number) => (call === 1 ? fail(504) : ok({ success: true })) });
+
+      expect(await new MigrationService(config, callbacks).runPackageImportFlow(raif())).toBe(true);
+
+      expect(count('upload')).toBe(2);
+      const [first, again] = fn.mock.calls.filter(([u]) => u === '/api/migrate/upload').map(([, init]) => init as any);
+      expect(first.headers['x-chunk-index']).toBe('0');
+      expect(again).toEqual(first);
+      expect(logged('warning').some(m => m.startsWith('Upload 1 answered HTTP 504'))).toBe(true);
+    });
+
     it.each(['initiate', 'complete', 'consume'])('never retries %s', async (route) => {
       const { count } = mockRoutes({ [route]: fail(503) });
 

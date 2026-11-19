@@ -93,12 +93,13 @@ export class MigrationService {
 
   // POSTs `body` to one of the app's routes. Up to 3 attempts while Sitecore answers briefly busy; any other answer,
   // and the last one, goes back to the caller. Only for calls that are safe to repeat: never initiate, complete or consume.
-  private async postRetrying(url: string, body: object, what: string): Promise<Response> {
+  // `body` is sent as JSON, unless `headers` are given: then it is sent as it is (the upload's raw chunk).
+  private async postRetrying(url: string, body: object, what: string, headers?: Record<string, string>): Promise<Response> {
     for (let attempt = 1; ; attempt++) {
       const res = await fetch(url, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body)
+        headers: headers ?? { 'Content-Type': 'application/json' },
+        body: headers ? (body as BodyInit) : JSON.stringify(body)
       });
       if (res.ok || !RETRY_STATUSES.includes(res.status) || attempt > RETRY_WAITS_MS.length) return res;
       const wait = RETRY_WAITS_MS[attempt - 1];
@@ -643,18 +644,14 @@ export class MigrationService {
 
     while (!isCompleted && pollCount < maxPolls) {
       pollCount++;
-      const statusRes = await fetch('/api/migrate/status', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          sourceHost: this.config.sourceHost,
-          sourceClientId: this.config.sourceClientId,
-          sourceClientSecret: this.config.sourceClientSecret,
-          sourceAuthority: this.config.sourceAuthority,
-          sourceAudience: this.config.sourceAudience,
-          transferId: this.config.transferId
-        })
-      });
+      const statusRes = await this.postRetrying('/api/migrate/status', {
+        sourceHost: this.config.sourceHost,
+        sourceClientId: this.config.sourceClientId,
+        sourceClientSecret: this.config.sourceClientSecret,
+        sourceAuthority: this.config.sourceAuthority,
+        sourceAudience: this.config.sourceAudience,
+        transferId: this.config.transferId
+      }, 'Status check');
 
       if (!statusRes.ok) {
         const errText = await statusRes.text();
@@ -691,21 +688,18 @@ export class MigrationService {
     this.step(2, 'running');
     this.log('[Step 3/3] Requesting stitched package from backend...', 'info');
 
-    const downloadRes = await fetch('/api/migrate/download', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        sourceHost: this.config.sourceHost,
-        sourceClientId: this.config.sourceClientId,
-        sourceClientSecret: this.config.sourceClientSecret,
-        sourceAuthority: this.config.sourceAuthority,
-        sourceAudience: this.config.sourceAudience,
-        transferId: this.config.transferId,
-        chunksetId,
-        chunkCount,
-        dataTrees: this.config.dataTrees
-      })
-    });
+    // Only reads chunks from the source, so it is safe to repeat.
+    const downloadRes = await this.postRetrying('/api/migrate/download', {
+      sourceHost: this.config.sourceHost,
+      sourceClientId: this.config.sourceClientId,
+      sourceClientSecret: this.config.sourceClientSecret,
+      sourceAuthority: this.config.sourceAuthority,
+      sourceAudience: this.config.sourceAudience,
+      transferId: this.config.transferId,
+      chunksetId,
+      chunkCount,
+      dataTrees: this.config.dataTrees
+    }, 'Download');
 
     if (!downloadRes.ok) {
       const errText = await downloadRes.text();
@@ -743,19 +737,16 @@ export class MigrationService {
         const chunkBuffer = fileBuffer.slice(start, end);
 
         this.log(`⏳ [Upload ${i + 1}/${chunkCount}] Uploading chunk to target...`, 'info');
-        const uploadRes = await fetch('/api/migrate/upload', {
-          method: 'POST',
-          headers: {
-            'x-target-host': this.config.targetHost,
-            'x-target-client-id': this.config.targetClientId,
-            'x-target-client-secret': this.config.targetClientSecret,
-            'x-target-authority': this.config.targetAuthority,
-            'x-target-audience': this.config.targetAudience || '',
-            'x-transfer-id': this.config.transferId,
-            'x-chunkset-id': chunksetId,
-            'x-chunk-index': String(i)
-          },
-          body: new Uint8Array(chunkBuffer)
+        // Uploading the same chunk index again overwrites it, so the upload is safe to repeat.
+        const uploadRes = await this.postRetrying('/api/migrate/upload', new Uint8Array(chunkBuffer), `Upload ${i + 1}`, {
+          'x-target-host': this.config.targetHost,
+          'x-target-client-id': this.config.targetClientId,
+          'x-target-client-secret': this.config.targetClientSecret,
+          'x-target-authority': this.config.targetAuthority,
+          'x-target-audience': this.config.targetAudience || '',
+          'x-transfer-id': this.config.transferId,
+          'x-chunkset-id': chunksetId,
+          'x-chunk-index': String(i)
         });
 
         if (!uploadRes.ok) {
