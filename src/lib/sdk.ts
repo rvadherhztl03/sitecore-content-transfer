@@ -1,7 +1,8 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import type { ApplicationContext } from '@sitecore-marketplace-sdk/client';
 
-export type Env = { id: string; name: string; contextId: string; tenantName?: string };
+/** `liveContextId`: the Experience Edge (live) context, when the app was granted one; `contextId` is the preview one. */
+export type Env = { id: string; name: string; contextId: string; tenantName?: string; liveContextId?: string };
 
 export interface SdkClient {
   query(key: string, options?: { params?: unknown }): Promise<any>;
@@ -34,7 +35,8 @@ export function toEnvs(ctx: ApplicationContext | undefined): Env[] {
     const contextId = r.context?.[CONTEXT_KIND];
     // In XM Cloud every entry shares the product's resourceId, so the tenant identifies the environment.
     const name = r.tenantDisplayName ?? r.tenantName ?? r.resourceId;
-    return contextId ? [{ id: r.tenantId ?? contextId, name, contextId, tenantName: r.tenantName, r }] : [];
+    const live = r.context?.live ? { liveContextId: r.context.live } : {};
+    return contextId ? [{ id: r.tenantId ?? contextId, name, contextId, tenantName: r.tenantName, ...live, r }] : [];
   });
   // Same display name twice: add the tenant name, tenant id or resource id so the pickers can tell them apart.
   return envs.map(({ r, ...env }) =>
@@ -109,8 +111,15 @@ export async function call<T = any>(
 
 export type TreeNode = { id: string; name: string; path: string; hasChildren: boolean };
 
-export async function graphql(client: SdkClient, env: Env, query: string, variables: Record<string, unknown>): Promise<any> {
-  const { data } = await call(client, env, 'mutate', 'xmc.authoring.graphql', {
+// `key`: xmc.live.graphql queries Experience Edge instead (with the env's live context as `contextId`).
+export async function graphql(
+  client: SdkClient,
+  env: Env,
+  query: string,
+  variables: Record<string, unknown>,
+  key: 'xmc.authoring.graphql' | 'xmc.live.graphql' = 'xmc.authoring.graphql',
+): Promise<any> {
+  const { data } = await call(client, env, 'mutate', key, {
     body: { query, variables },
   });
   if (data?.errors?.length) throw new SdkError(data.errors[0].message);
