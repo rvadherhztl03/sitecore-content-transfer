@@ -2,6 +2,7 @@
 import { PanelFlow } from '@/components/transfer/PanelFlow';
 import { TIMING } from '@/lib/transfer';
 import { fakeClient, fieldDiffReply, isFieldDiff, isPreflight, isRelated, preflightReply, relatedReply, type FakeReply, type RelatedFake } from '@/test/fakeClient';
+import { entriesIn, historyReply, historyStore, isHistory, type HistoryStore } from '@/test/fakeHistory';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
@@ -29,11 +30,18 @@ const EVERYWHERE: Find = (_, path) => ({ id: path });
 // The default: like EVERYWHERE, except QA doesn't have the page yet, so there is nothing to back up.
 const NEW_ON_QA: Find = (ctx, path) => (ctx === `ctx-${QA}` && path === HOME ? undefined : { id: path });
 
-// Modelled on happyHandlers in src/lib/transfer.test.ts.
-function handlers(names: string[], overrides: Record<string, Handler>, find: Find = NEW_ON_QA, related: Record<string, RelatedFake[]> = {}): Record<string, Handler> {
+// Modelled on happyHandlers in src/lib/transfer.test.ts, plus the run history.
+function handlers(
+  names: string[],
+  overrides: Record<string, Handler>,
+  find: Find = NEW_ON_QA,
+  related: Record<string, RelatedFake[]> = {},
+  history: HistoryStore = historyStore(),
+): Record<string, Handler> {
   let statusCalls = 0;
   return {
     'application.context': () => context(...names),
+    'host.user': () => ({ data: { id: 'u1', name: 'Jane Doe', email: 'jane@acme.com' } }),
     [CT + 'createContentTransfer']: () => ({}),
     [CT + 'getContentTransferStatus']: () =>
       statusCalls++ === 0
@@ -48,7 +56,9 @@ function handlers(names: string[], overrides: Record<string, Handler>, find: Fin
     // The pre-flight check, and the page's children for "This page + child pages".
     'xmc.sites.listLanguages': () => ({ data: [{ name: 'en' }] }),
     'xmc.authoring.graphql': (p) =>
-      isPreflight(p)
+      isHistory(p)
+        ? historyReply(history)(p)
+        : isPreflight(p)
         ? preflightReply(find)(p)
         : isRelated(p)
           ? relatedReply(related)(p)
@@ -71,9 +81,10 @@ function setup({
   find,
   related,
 }: { names?: string[]; overrides?: Record<string, Handler>; page?: Page; find?: Find; related?: Record<string, RelatedFake[]> } = {}) {
-  const { client, calls } = fakeClient(handlers(names, overrides, find, related));
+  const history = historyStore(...names.map((n) => `ctx-${n}`));
+  const { client, calls } = fakeClient(handlers(names, overrides, find, related, history));
   const view = render(<PanelFlow client={client} {...page} />);
-  return { calls, ...view, show: (next: Page) => view.rerender(<PanelFlow client={client} {...next} />) };
+  return { calls, history, ...view, show: (next: Page) => view.rerender(<PanelFlow client={client} {...next} />) };
 }
 
 const click = (name: string | RegExp) => fireEvent.click(screen.getByRole('button', { name }));
@@ -357,7 +368,7 @@ describe('PanelFlow', () => {
       fireEvent.click(box);
       click('Start');
       expect(await screen.findByRole('heading', { name: 'Transfer complete' })).toBeInTheDocument();
-      const publishes = calls.filter((c: any) => c.key === 'xmc.authoring.graphql' && c.params.body.query.startsWith('mutation')) as any[];
+      const publishes = calls.filter((c: any) => c.key === 'xmc.authoring.graphql' && c.params.body.query.startsWith('mutation') && !isHistory(c.params)) as any[];
       expect(publishes).toHaveLength(1);
       expect(publishes[0].params.query.sitecoreContextId).toBe(`ctx-${QA}`);
       expect(publishes[0].params.body.query).toContain(`rootItemPaths: ["${HOME}"]`);
@@ -408,6 +419,36 @@ describe('PanelFlow', () => {
       ]);
       expect(ofKey(calls, 'saveChunk').map((c) => c.params.query.sitecoreContextId)).toEqual([`ctx-${QA}`, `ctx-${QA}`]);
       expect(ofKey(calls, 'consumeFile')[0].params.query).toMatchObject({ databaseName: 'master', sitecoreContextId: `ctx-${QA}` });
+    });
+
+    it("records the send in the target's history", async () => {
+      const { history } = await toReview();
+      click('Start');
+      expect(await screen.findByRole('heading', { name: 'Transfer complete' })).toBeInTheDocument();
+      await waitFor(() => expect(entriesIn(history, `ctx-${QA}`)).toHaveLength(1));
+      const [entry] = entriesIn(history, `ctx-${QA}`);
+      expect(entry).toEqual({
+        ...entry,
+        kind: 'transfer',
+        by: 'Jane Doe',
+        source: DEV,
+        target: QA,
+        items: [{ itemPath: HOME, scope: 'ItemAndDescendants', mergeStrategy: 'OverrideExistingTree' }],
+        result: 'success',
+        itemCount: 3,
+      });
+    });
+
+    it('with a backup first, a send that failed before the import records nothing', async () => {
+      Object.assign(URL, { createObjectURL: () => 'blob:b', revokeObjectURL: () => {} });
+      const { calls } = await toReview(DEV, QA, {
+        find: EVERYWHERE,
+        // The backup assembles nothing; the send fails assembling on the target, the step before its import.
+        overrides: { completeChunkSetTransfer: () => ({ status: 500 }) },
+      });
+      click('Start');
+      expect(await screen.findByRole('heading', { name: 'Transfer failed' })).toBeInTheDocument();
+      expect(calls.filter((c) => c.key === 'host.user')).toEqual([]);
     });
 
     it('child pages sends the page and each child page on its own', async () => {

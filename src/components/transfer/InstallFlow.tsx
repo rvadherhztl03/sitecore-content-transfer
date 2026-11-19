@@ -5,9 +5,10 @@ import { ProdConfirm, needsProdConfirm } from '@/components/transfer/ReviewStep'
 import { RunView } from '@/components/transfer/RunView';
 import { useRun } from '@/components/transfer/useRun';
 import { Button } from '@/components/ui/button';
+import { withHistory, type RunRecord } from '@/lib/history';
 import { Icon } from '@/lib/icon';
 import type { Env, SdkClient } from '@/lib/sdk';
-import { DATABASE, IMPORT_STEP, runImport } from '@/lib/transfer';
+import { DATABASE, IMPORT_STEP, runImport, type DataTree, type MergeStrategy, type Scope } from '@/lib/transfer';
 import { mdiArrowRight } from '@mdi/js';
 import { useState } from 'react';
 
@@ -39,14 +40,22 @@ export function InstallFlow({ client, envs, onHome }: Props) {
     if (!canStart) return;
     const tgt = target!;
     const { parts, items } = pkg!;
+    // A bare .raif has no item list, so there is no count to show.
+    const itemCount = items.length || undefined;
+    const record: RunRecord = {
+      kind: 'install',
+      targets: [tgt],
+      importAt: [IMPORT_STEP.import],
+      items: items.map((i): DataTree => ({ itemPath: i.path, scope: i.scope as Scope, mergeStrategy: i.mergeStrategy as MergeStrategy })),
+      itemCount,
+    };
     void runner.start(
       {
         labels: ['Upload package', `Assemble package on ${tgt.name}`, `Import into ${DATABASE}`, 'Verify'],
         targets: [tgt],
-        // A bare .raif has no item list, so there is no count to show.
-        info: { chunkCount: parts.reduce((n, p) => n + p.chunks.length, 0), itemCount: items.length || undefined },
+        info: { chunkCount: parts.reduce((n, p) => n + p.chunks.length, 0), itemCount },
       },
-      (cb, signal) => runImport(client, { target: tgt, database: DATABASE, parts }, cb, signal),
+      withHistory(client, record, (cb, signal) => runImport(client, { target: tgt, database: DATABASE, parts }, cb, signal)),
     );
   };
 

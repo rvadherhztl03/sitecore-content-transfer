@@ -3,6 +3,7 @@ import { fireEvent, render, screen, within } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import { App } from '@/components/transfer/App';
 import { fakeClient, type FakeReply } from '@/test/fakeClient';
+import { historyReply, historyStore } from '@/test/fakeHistory';
 
 const ONE_ENV = 'Grant this app access to another environment in Cloud Portal to transfer between environments.';
 const MISSING = 'Missing an environment? Grant this app access to it in Cloud Portal, then reopen the app.';
@@ -54,7 +55,7 @@ describe('App', () => {
     render(<App client={null} />);
     expect(screen.getByRole('heading', { name: 'What would you like to do?' })).toBeInTheDocument();
     expect(screen.getByRole('status', { name: 'Loading environments' })).toBeInTheDocument();
-    for (const name of ['Start a transfer', 'Create a package', 'Install a package']) expect(screen.getByRole('button', { name })).toBeDisabled();
+    for (const name of ['Start a transfer', 'Create a package', 'Install a package', 'View history']) expect(screen.getByRole('button', { name })).toBeDisabled();
     expect(screen.queryByText(/environments? connected/)).not.toBeInTheDocument();
     expect(screen.queryByText(ONE_ENV)).not.toBeInTheDocument();
   });
@@ -103,12 +104,24 @@ describe('App', () => {
     expect(await start()).toBeInTheDocument();
   });
 
+  it('opens Transfer history on the first environment, and Back returns Home', async () => {
+    const { client } = fakeClient({ 'application.context': () => context(3), 'xmc.authoring.graphql': historyReply(historyStore('ctx-dev')) });
+    render(<App client={client} />);
+    await start();
+    click('View history');
+    expect(await screen.findByRole('heading', { name: 'Transfer history' })).toBeInTheDocument();
+    expect(await screen.findByText('No runs recorded in Acme · Development yet.')).toBeInTheDocument();
+    click('Back');
+    expect(await start()).toBeInTheDocument();
+  });
+
   it('blocks the transfer with one environment but still offers export and install', async () => {
     setup(() => context(1));
     expect(await screen.findByText(ONE_ENV)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Start a transfer' })).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Create a package' })).toBeEnabled();
     expect(screen.getByRole('button', { name: 'Install a package' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'View history' })).toBeEnabled();
     expect(screen.getByText('1 environment connected')).toBeInTheDocument();
     expect(screen.getByText(MISSING)).toBeInTheDocument();
     click('Create a package');
@@ -120,7 +133,7 @@ describe('App', () => {
     expect(await screen.findByText(MISSING)).toBeInTheDocument();
     expect(screen.getByText(ONE_ENV)).toBeInTheDocument();
     expect(screen.queryByText(/environments? connected/)).not.toBeInTheDocument();
-    for (const name of ['Start a transfer', 'Create a package', 'Install a package']) expect(screen.getByRole('button', { name })).toBeDisabled();
+    for (const name of ['Start a transfer', 'Create a package', 'Install a package', 'View history']) expect(screen.getByRole('button', { name })).toBeDisabled();
   });
 
   it('shows a Retry alert when the context fails, and Retry reloads', async () => {
@@ -131,7 +144,7 @@ describe('App', () => {
     });
     expect(await screen.findByRole('alert')).toHaveTextContent('no context');
     expect(screen.queryByText(/environments? connected/)).not.toBeInTheDocument();
-    for (const name of ['Start a transfer', 'Create a package', 'Install a package']) expect(screen.getByRole('button', { name })).toBeDisabled();
+    for (const name of ['Start a transfer', 'Create a package', 'Install a package', 'View history']) expect(screen.getByRole('button', { name })).toBeDisabled();
     click('Retry');
     expect(await screen.findByText('3 environments connected')).toBeInTheDocument();
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();

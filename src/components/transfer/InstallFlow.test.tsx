@@ -6,6 +6,7 @@ import { InstallFlow } from '@/components/transfer/InstallFlow';
 import type { Env } from '@/lib/sdk';
 import { TIMING } from '@/lib/transfer';
 import { fakeClient, type FakeReply } from '@/test/fakeClient';
+import { entriesIn, historyReply, historyStore, type HistoryStore } from '@/test/fakeHistory';
 
 const DEV: Env = { id: 'dev', name: 'Acme · Development', contextId: 'ctx-dev', tenantName: 'acme-dev' };
 const QA: Env = { id: 'qa', name: 'Acme · QA', contextId: 'ctx-qa', tenantName: 'acme-qa' };
@@ -15,9 +16,11 @@ const NAME = 'p.zip';
 
 type Handler = (params: any) => FakeReply | Promise<FakeReply>;
 
-// Modelled on happyHandlers in src/lib/transfer.test.ts (only the calls an import makes).
-function handlers(overrides: Record<string, Handler> = {}): Record<string, Handler> {
+// Modelled on happyHandlers in src/lib/transfer.test.ts (only the calls an import makes), plus the run history.
+function handlers(overrides: Record<string, Handler> = {}, history: HistoryStore = historyStore()): Record<string, Handler> {
   return {
+    'host.user': () => ({ data: { id: 'u1', name: 'Jane Doe', email: 'jane@acme.com' } }),
+    'xmc.authoring.graphql': historyReply(history),
     [CT + 'saveChunk']: () => ({}),
     [CT + 'completeChunkSetTransfer']: (p) => ({ data: { ContentTransferFileName: 'f-' + p.path.chunksetId + '.raif' } }),
     [CT + 'consumeFile']: () => ({}),
@@ -28,10 +31,11 @@ function handlers(overrides: Record<string, Handler> = {}): Record<string, Handl
 }
 
 function setup({ envs = [DEV, QA, PROD], overrides = {} }: { envs?: Env[]; overrides?: Record<string, Handler> } = {}) {
-  const { client, calls } = fakeClient(handlers(overrides));
+  const history = historyStore('ctx-dev', 'ctx-qa', 'ctx-prod');
+  const { client, calls } = fakeClient(handlers(overrides, history));
   const onHome = vi.fn();
   const view = render(<InstallFlow client={client} envs={envs} onHome={onHome} />);
-  return { client, calls, onHome, ...view };
+  return { client, calls, onHome, history, ...view };
 }
 
 const META = [
@@ -160,9 +164,9 @@ describe('InstallFlow', () => {
 
     const heading = await screen.findByRole('heading', { level: 1, name: 'Package installed' });
     await waitFor(() => expect(heading).toHaveFocus());
-    // Every call, and no other environment, went to the chosen target.
+    // Every call, and no other environment, went to the chosen target (asking the host who is signed in goes to none).
     expect(calls.length).toBeGreaterThan(0);
-    for (const c of calls) expect(c.params.query.sitecoreContextId).toBe('ctx-qa');
+    for (const c of calls.filter((c) => c.key !== 'host.user')) expect(c.params.query.sitecoreContextId).toBe('ctx-qa');
     const saves = ofKey(calls, 'saveChunk');
     expect(saves.map((c) => c.params.query.isMedia)).toEqual([false, true]);
     expect(ofKey(calls, 'consumeFile')[0].params.query).toMatchObject({ databaseName: 'master', sitecoreContextId: 'ctx-qa' });
@@ -171,6 +175,44 @@ describe('InstallFlow', () => {
     expect(screen.getByText('Items').parentElement).toHaveTextContent('Items2');
     expect(screen.getByText('Chunks').parentElement).toHaveTextContent('Chunks2');
     expect(screen.getByText('Took')).toBeInTheDocument();
+  });
+
+  it("records the install in the target's history, with the package's items", async () => {
+    const { history } = setup();
+    await load();
+    pick(QA);
+    click('Install package');
+    await screen.findByText('Package installed');
+    await waitFor(() => expect(entriesIn(history, 'ctx-qa')).toHaveLength(1));
+    const [entry] = entriesIn(history, 'ctx-qa');
+    expect(entry).toEqual({
+      ...entry,
+      kind: 'install',
+      by: 'Jane Doe',
+      target: QA.name,
+      items: META.map((m) => ({ itemPath: m.ItemPath, scope: m.Scope, mergeStrategy: m.MergeStrategy })),
+      result: 'success',
+      itemCount: 2,
+    });
+    expect(entry).not.toHaveProperty('source');
+  });
+
+  it('records a failed import as failed, and one that failed before importing not at all', async () => {
+    const failed = setup({ overrides: { consumeFile: () => ({ status: 500 }) } });
+    await load();
+    pick(QA);
+    click('Install package');
+    await screen.findByRole('heading', { level: 1, name: 'Install failed' });
+    await waitFor(() => expect(entriesIn(failed.history, 'ctx-qa')).toHaveLength(1));
+    expect(entriesIn(failed.history, 'ctx-qa')[0].result).toBe('fail');
+    failed.unmount();
+
+    const early = setup({ overrides: { saveChunk: () => ({ status: 500 }) } });
+    await load();
+    pick(QA);
+    click('Install package');
+    await screen.findByRole('heading', { level: 1, name: 'Install failed' });
+    expect(early.calls.filter((c) => c.key === 'host.user')).toEqual([]);
   });
 
   it('leaves out the Items stat for a package without an item list', async () => {
