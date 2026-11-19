@@ -101,7 +101,7 @@ Installing a package waits for each chunk set's import by its items (`itemCount`
 
 ### Transfer history
 
-Each transfer, install and Pages-panel transfer is recorded on every target it got as far as importing into: one item per run under `/sitecore/system/Modules/Content Transfer/History` in that target's `master` (Sitecore's Folder template, created the first time; the run as JSON in `__Long description`; `__Sortorder` puts the newest first). Recording never holds up or fails a run; if it can't, the log says so. **Transfer history** on Home picks an environment and lists its runs, newest first: when, who (from the host's user), from where, how many items and the result, each expanding to its items. It reads the latest 1,000.
+Each transfer, install and Pages-panel transfer is recorded on every target it got as far as importing into: one item per run under `/sitecore/system/Modules/Content Transfer/History` in that target's `master` (Sitecore's Folder template, created the first time; the run as JSON in `__Long description`; `__Sortorder` puts the newest first). Recording happens in the background a few seconds after the run ends and never holds it up or fails it; the log then says "Saved this run to <target>'s history." or why it couldn't. **Transfer history** on Home picks an environment and lists its runs, newest first: when, who (from the host's user), from where, how many items and the result, each expanding to its items. It reads the latest 1,000; **Refresh** reloads the list (for a run saved after it loaded).
 
 ---
 

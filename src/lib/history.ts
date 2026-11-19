@@ -164,8 +164,9 @@ export function withHistory(client: SdkClient, record: RunRecord, exec: Exec): E
         void currentUser(client).then((by) =>
           Promise.all(
             reached.map(({ env, importAt }) =>
-              addEntry(client, env, { ...entry, by, target: env.name, result: ok || status.get(importAt + 1) === 'done' ? 'success' : 'fail' }).catch((e) =>
-                cb.onLog(`Couldn't record this run in ${env.name}'s history: ${message(e)}`, 'warning'),
+              addEntry(client, env, { ...entry, by, target: env.name, result: ok || status.get(importAt + 1) === 'done' ? 'success' : 'fail' }).then(
+                () => cb.onLog(`Saved this run to ${env.name}'s history.`, 'info'),
+                (e) => cb.onLog(`Couldn't record this run in ${env.name}'s history: ${message(e)}`, 'warning'),
               ),
             ),
           ),

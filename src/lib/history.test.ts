@@ -180,13 +180,18 @@ describe('withHistory', () => {
     expect(await withHistory(client, record, fakeRun(6))(callbacks().cb, new AbortController().signal)).toBe(true);
   });
 
-  it('logs one warning per target it could not record on, and the run still succeeds', async () => {
+  it('logs each target it saved the run on, and one warning per target it could not, and the run still succeeds', async () => {
     const store = historyStore('ctx-qa');
     const { client } = fakeClient({ [GQL]: historyReply(store), 'host.user': () => ({ data: USER }) });
     const { cb, logs } = callbacks();
     expect(await withHistory(client, record, fakeRun(6))(cb, new AbortController().signal)).toBe(true);
-    await vi.waitFor(() => expect(logs).toHaveLength(1));
-    expect(logs).toEqual([["Couldn't record this run in Prod's history: /sitecore/system/Modules wasn't found.", 'warning']]);
+    await vi.waitFor(() => expect(logs).toHaveLength(2));
+    expect(logs).toEqual(
+      expect.arrayContaining([
+        ["Saved this run to QA's history.", 'info'],
+        ["Couldn't record this run in Prod's history: /sitecore/system/Modules wasn't found.", 'warning'],
+      ]),
+    );
     expect(entriesIn(store, 'ctx-qa')).toHaveLength(1);
   });
 

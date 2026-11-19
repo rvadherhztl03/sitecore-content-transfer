@@ -88,6 +88,17 @@ describe('HistoryView', () => {
     expect(calls.at(-1)!.params.query.sitecoreContextId).toBe('ctx-dev');
   });
 
+  it('Refresh loads the list again, picking up a run saved after it loaded', async () => {
+    const store = historyStore('ctx-dev', 'ctx-qa');
+    const { client } = fakeClient({ [GQL]: historyReply(store) });
+    setup(historyReply(store));
+    expect(await screen.findByText(`No runs recorded in ${QA.name} yet.`)).toBeInTheDocument();
+    await addEntry(client, QA, NEWER);
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+    expect(within(await runs()).getAllByRole('group')).toHaveLength(1);
+    expect(screen.getByText('1 run')).toBeInTheDocument();
+  });
+
   it('shows a load error with Retry, which loads again', async () => {
     const store: HistoryStore = await seeded();
     let fail = true;

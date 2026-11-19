@@ -8,7 +8,7 @@ import { Icon } from '@/lib/icon';
 import { SCOPES, labelOf, mergesFor } from '@/lib/queue';
 import type { Env, SdkClient } from '@/lib/sdk';
 import { cn } from '@/lib/utils';
-import { mdiArrowRight, mdiChevronDown } from '@mdi/js';
+import { mdiArrowRight, mdiChevronDown, mdiRefresh } from '@mdi/js';
 import { useEffect, useState } from 'react';
 
 type Props = { client: SdkClient; envs: Env[]; onHome(): void };
@@ -91,7 +91,14 @@ export function HistoryView({ client, envs, onHome }: Props) {
             <section aria-labelledby="history-runs" className="flex min-w-0 flex-[2_1_460px] flex-col overflow-hidden rounded-[14px] border bg-white">
               <div className="flex items-center justify-between gap-3 border-b px-5 py-[18px]">
                 <h2 id="history-runs" className="text-base font-semibold break-words">{`Runs into ${env.name}`}</h2>
-                {!loading && !error && <span className="text-muted-foreground text-[13px]">{count}</span>}
+                <span className="flex shrink-0 items-center gap-3">
+                  {!loading && !error && <span className="text-muted-foreground text-[13px]">{count}</span>}
+                  {/* A run is saved in the background just after it ends, so it can land after this list loaded. */}
+                  <Button type="button" variant="outline" size="sm" className="pointer-coarse:h-11" disabled={loading} onClick={() => setAttempt((n) => n + 1)}>
+                    <Icon path={mdiRefresh} className="size-4" aria-hidden="true" />
+                    Refresh
+                  </Button>
+                </span>
               </div>
               {loading ? (
                 <div role="status" aria-label="Loading history" className="flex flex-col gap-3 p-5">
